@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -263,7 +265,7 @@ fun MyScreen(
 
                         Spacer(Modifier.height(16.dp))
 
-                        // 预置色板
+                        // 预置色板 (横向可滚动, 不挤压)
                         Text(
                             text = "主题色",
                             fontSize = 13.sp,
@@ -271,15 +273,15 @@ fun MyScreen(
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
                         Spacer(Modifier.height(8.dp))
-                        Row(
+                        LazyRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            ThemeColor.entries.filter { it != ThemeColor.CUSTOM }.forEach { tc ->
+                            items(ThemeColor.entries.filter { it != ThemeColor.CUSTOM }) { tc ->
                                 val selected = themeColor == tc
                                 Box(
                                     modifier = Modifier
-                                        .size(34.dp)
+                                        .size(36.dp)
                                         .clip(CircleShape)
                                         .background(Color(tc.seed))
                                         .clickable {

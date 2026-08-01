@@ -1,7 +1,7 @@
 package com.fengling.share.ui.main
 
 import android.webkit.WebView
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -127,10 +128,16 @@ fun MainScreen(
                         .fillMaxSize()
                         .padding(innerPadding),
                 ) {
-                    // tab 切换平滑动画
-                    Crossfade(
+                    // tab 切换滑动动画 (方向跟随 tab 顺序)
+                    AnimatedContent(
                         targetState = currentTab,
-                        animationSpec = tween(250),
+                        transitionSpec = {
+                            val direction = if (targetState > initialState) 1 else -1
+                            (slideInHorizontally(tween(280)) { it / 3 * direction } + fadeIn(tween(280)))
+                                .togetherWith(
+                                    slideOutHorizontally(tween(280)) { -it / 4 * direction } + fadeOut(tween(280))
+                                )
+                        },
                         label = "tabSwitch",
                     ) { tab ->
                         when (tab) {
