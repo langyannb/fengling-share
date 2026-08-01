@@ -1,6 +1,6 @@
 package com.fengling.share.ui.main
 
-import androidx.activity.compose.PredictiveBackHandler
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
@@ -50,8 +50,8 @@ fun MainScreen() {
         )
     }
 
-    // 预测性返回: 有覆盖层时返回关闭覆盖层
-    PredictiveBackHandler(enabled = currentAppId != null || webUrl != null) {
+    // 返回键: 有覆盖层时返回关闭覆盖层 (系统预测动画由 enableOnBackInvokedCallback 提供)
+    BackHandler(enabled = currentAppId != null || webUrl != null) {
         if (webUrl != null) {
             webUrl = null
         } else if (currentAppId != null) {

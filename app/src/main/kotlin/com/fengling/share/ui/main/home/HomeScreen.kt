@@ -12,19 +12,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.items as rowItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SearchBar
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -40,23 +42,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
-import com.fengling.share.ui.components.AppSubtitle
 import com.fengling.share.ui.components.AppText
-import com.fengling.share.ui.components.AppTitle
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
-import com.fengling.share.ui.components.SectionTitle
 import com.fengling.share.ui.theme.adaptiveListPadding
 import kotlinx.coroutines.launch
 
 /**
- * HomeScreen - 首页 (参考 legado-with-MD3 ui/main/home)
- * MD3 LargeTopAppBar + SearchBar + 分类 + 软件列表
+ * HomeScreen - 首页 (应用商店网格风格)
+ * 小标题栏 + 搜索框 + 分类 chips + 图标网格 (每行3列)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,7 +70,6 @@ fun HomeScreen(
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var selectedCategory by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
-    var searchActive by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -107,9 +107,9 @@ fun HomeScreen(
 
     androidx.compose.material3.Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("风铃分享库", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.largeTopAppBarColors(
+                colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
             )
@@ -123,43 +123,27 @@ fun HomeScreen(
                 .padding(innerPadding),
         ) {
             Column(Modifier.fillMaxSize()) {
-                // 搜索栏 (MD3 SearchBar)
-                SearchBar(
-                    query = query,
-                    onQueryChange = {
+                // 搜索框 (普通输入框, 不占大空间)
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = {
                         query = it
                         loadApps(selectedCategory, it)
                     },
-                    onSearch = { loadApps(selectedCategory, it) },
-                    active = searchActive,
-                    onActiveChange = { searchActive = it },
                     placeholder = { Text("搜索软件") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "搜索") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(24.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                ) {
-                    if (apps.isEmpty()) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            AppText("未找到相关软件", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    } else {
-                        apps.forEach { app ->
-                            AppListItem(app = app, onClick = { onAppClick(app.id) })
-                        }
-                    }
-                }
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                )
 
-                // 分类 (横向滚动)
+                // 分类 chips (横向滚动)
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 10.dp),
+                        .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp),
                 ) {
@@ -173,7 +157,7 @@ fun HomeScreen(
                             },
                         )
                     }
-                    items(categories) { cat ->
+                    rowItems(categories) { cat ->
                         CategoryChip(
                             name = cat.name,
                             selected = selectedCategory == cat.id,
@@ -185,7 +169,7 @@ fun HomeScreen(
                     }
                 }
 
-                // 列表区
+                // 网格列表区
                 when {
                     loading -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -202,16 +186,17 @@ fun HomeScreen(
                         EmptyMessage(text = "暂无软件")
                     }
                     else -> {
-                        LazyColumn(
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = adaptiveListPadding(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(
+                                start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp,
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
                         ) {
-                            item {
-                                SectionTitle(text = "共 ${apps.size} 款软件")
-                            }
-                            items(apps, key = { it.id }) { app ->
-                                AppListItem(app = app, onClick = { onAppClick(app.id) })
+                            gridItems(apps, key = { it.id }) { app ->
+                                AppGridItem(app = app, onClick = { onAppClick(app.id) })
                             }
                         }
                     }
@@ -251,84 +236,94 @@ private fun CategoryChip(name: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 软件列表项 */
+/** 应用商店网格项: 图标 + 名称 + 下载按钮 */
 @Composable
-private fun AppListItem(app: AppItem, onClick: () -> Unit) {
-    GlassCard(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 14.dp,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+private fun AppGridItem(app: AppItem, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp)),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(
+        // 图标 (方形圆角)
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.Center,
         ) {
-            // 图标 (圆角方块)
-            Box(
-                modifier = Modifier
-                    .width(52.dp)
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (app.icon.isNotEmpty()) {
-                    AsyncImage(
-                        model = app.icon,
-                        contentDescription = app.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    AppText(
-                        text = app.name.take(1),
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
+            if (app.icon.isNotEmpty()) {
+                AsyncImage(
+                    model = app.icon,
+                    contentDescription = app.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                GlassCard(
+                    onClick = onClick,
+                    cornerRadius = 20.dp,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AppText(
+                            text = app.name.take(1),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.headlineMedium,
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.width(12.dp))
-            // 信息
-            Column(Modifier.weight(1f)) {
-                AppTitle(text = app.name)
-                Spacer(Modifier.height(3.dp))
-                AppSubtitle(
-                    text = buildString {
-                        if (app.categoryName.isNotEmpty()) append(app.categoryName)
-                        if (app.version.isNotEmpty()) {
-                            if (isNotEmpty()) append(" · ")
-                            append("v${app.version}")
-                        }
-                    },
-                )
-                Spacer(Modifier.height(3.dp))
-                AppSubtitle(text = "${formatCount(app.downloadCount)} 次下载")
-            }
-            // 下载按钮
-            DownloadButton(app = app, onClick = onClick)
         }
-    }
-}
-
-/** 下载按钮 */
-@Composable
-private fun DownloadButton(app: AppItem, onClick: () -> Unit) {
-    GlassCard(
-        onClick = onClick,
-        cornerRadius = 8.dp,
-        containerColor = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-    ) {
-        Box(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
-            AppText(
-                text = "下载",
-                color = MaterialTheme.colorScheme.onPrimary,
-                fontWeight = FontWeight.Medium,
-                style = MaterialTheme.typography.labelLarge,
-            )
+        Spacer(Modifier.height(8.dp))
+        // 名称
+        Text(
+            text = app.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(4.dp))
+        // 下载量 + 下载按钮
+        Text(
+            text = "${formatCount(app.downloadCount)} 次下载",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(6.dp))
+        GlassCard(
+            onClick = onClick,
+            cornerRadius = 8.dp,
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.fillMaxWidth(0.8f),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                AppText(
+                    text = "下载",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
         }
     }
 }
