@@ -112,7 +112,37 @@ object ApiClient {
             forceUpdate = data.optInt("force_update", 0) == 1,
         )
     }
+
+    /** 关于页配置 (官方频道/链接) */
+    suspend fun getAboutConfig(): AboutConfig = withContext(Dispatchers.IO) {
+        val obj = request("about_config_get")
+        val d = obj.optJSONObject("data") ?: JSONObject()
+        AboutConfig(
+            qqGroup = d.optString("qq_group", ""),
+            qqKey = d.optString("qq_key", ""),
+            qqUrl = d.optString("qq_url", ""),
+            website = d.optString("website", ""),
+            github = d.optString("github", ""),
+            feedback = d.optString("feedback", ""),
+            donate = d.optString("donate", ""),
+            bannerText = d.optString("banner_text", "风铃分享库 · 官方频道"),
+            bannerSub = d.optString("banner_sub", "最新软件 · 更新通知 · 交流反馈"),
+        )
+    }
 }
+
+/** 关于页配置 (后端可配置) */
+data class AboutConfig(
+    val qqGroup: String = "",
+    val qqKey: String = "",
+    val qqUrl: String = "",
+    val website: String = "",
+    val github: String = "",
+    val feedback: String = "",
+    val donate: String = "",
+    val bannerText: String = "风铃分享库 · 官方频道",
+    val bannerSub: String = "最新软件 · 更新通知 · 交流反馈",
+)
 
 /** 版本信息 */
 data class VersionInfo(

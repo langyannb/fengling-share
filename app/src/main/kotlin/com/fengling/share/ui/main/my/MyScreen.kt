@@ -76,6 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fengling.share.data.AboutConfig
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.Settings
@@ -128,6 +129,14 @@ fun MyScreen(
 
     val currentVersion = AppVersion.CURRENT
     val updateVersion = checkResult.substringAfter("v")
+
+    // 关于页配置 (官方频道/链接, 后端可配)
+    var aboutConfig by remember { mutableStateOf(AboutConfig()) }
+    LaunchedEffect(Unit) {
+        try {
+            aboutConfig = ApiClient.getAboutConfig()
+        } catch (_: Exception) { }
+    }
 
     // OShin 滚动视差动画: 头部随滚动缩放/淡出
     var headerAlpha by remember { mutableStateOf(1f) }
@@ -502,7 +511,7 @@ fun MyScreen(
                         .padding(bottom = 6.dp)
                         .alpha(cardAlpha),
                 ) {
-                    // 频道横幅 (渐变)
+                    // 频道横幅
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -520,27 +529,43 @@ fun MyScreen(
                     ) {
                         Column {
                             Text(
-                                text = "风铃分享库 · 官方频道",
+                                text = aboutConfig.bannerText,
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MiuixTheme.colorScheme.onBackground,
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "最新软件 · 更新通知 · 交流反馈",
+                                text = aboutConfig.bannerSub,
                                 fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                             )
                         }
                     }
+                    // QQ 群 (mqqapi 跳转, 无 QQ 回退网页)
                     OShinSettingRow(
                         title = "加入官方QQ群",
-                        summary = "获取最新版本与专属福利",
+                        summary = if (aboutConfig.qqGroup.isNotEmpty()) "群号: ${aboutConfig.qqGroup}" else "获取最新版本与专属福利",
                         leftIcon = Icons.Filled.Person,
                         position = CouiPosition.Middle,
                         onClick = {
-                            // TODO: 替换为真实群号
-                            Toast.makeText(context, "QQ群功能即将上线", Toast.LENGTH_SHORT).show()
+                            if (aboutConfig.qqGroup.isNotEmpty()) {
+                                val qqIntent = Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse(
+                                        "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=${aboutConfig.qqGroup}&card_type=group&source=qrcode"
+                                    )
+                                )
+                                if (qqIntent.resolveActivity(context.packageManager) != null) {
+                                    context.startActivity(qqIntent)
+                                } else if (aboutConfig.qqUrl.isNotEmpty()) {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.qqUrl)))
+                                } else {
+                                    Toast.makeText(context, "请安装QQ后加入群聊", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                Toast.makeText(context, "官方群暂未配置", Toast.LENGTH_SHORT).show()
+                            }
                         },
                     )
                     OShinDivider()
@@ -550,7 +575,11 @@ fun MyScreen(
                         leftIcon = Icons.Filled.Email,
                         position = CouiPosition.Bottom,
                         onClick = {
-                            Toast.makeText(context, "反馈功能即将上线", Toast.LENGTH_SHORT).show()
+                            if (aboutConfig.feedback.isNotEmpty()) {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.feedback)))
+                            } else {
+                                Toast.makeText(context, "反馈通道暂未配置", Toast.LENGTH_SHORT).show()
+                            }
                         },
                     )
                 }
@@ -574,16 +603,57 @@ fun MyScreen(
                         title = "检查更新",
                         summary = if (checkingUpdate) "正在检查..." else if (checkResult.isNotEmpty()) checkResult else "点击检测最新版本",
                         leftIcon = Icons.Filled.Refresh,
-                        rightText = if (checkingUpdate) "..." else null,
                         position = CouiPosition.Top,
                         onClick = { if (!checkingUpdate) checkVersion() },
                     )
                     OShinDivider()
                     OShinSettingRow(
-                        title = "给个好评",
+                        title = "官方网站",
+                        summary = if (aboutConfig.website.isNotEmpty()) aboutConfig.website else "访问官网了解详情",
+                        leftIcon = Icons.Filled.Star,
+                        position = CouiPosition.Middle,
+                        onClick = {
+                            if (aboutConfig.website.isNotEmpty()) {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.website)))
+                            } else {
+                                Toast.makeText(context, "官网暂未配置", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
+                    OShinDivider()
+                    OShinSettingRow(
+                        title = "GitHub",
+                        summary = if (aboutConfig.github.isNotEmpty()) "开源项目 · 欢迎 Star" else "开源项目",
+                        leftIcon = Icons.Filled.Star,
+                        position = CouiPosition.Middle,
+                        onClick = {
+                            if (aboutConfig.github.isNotEmpty()) {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.github)))
+                            } else {
+                                Toast.makeText(context, "GitHub 暂未配置", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
+                    OShinDivider()
+                    OShinSettingRow(
+                        title = "捐赠支持",
                         summary = "喜欢就支持一下吧",
                         leftIcon = Icons.Filled.ThumbUp,
                         position = CouiPosition.Middle,
+                        onClick = {
+                            if (aboutConfig.donate.isNotEmpty()) {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.donate)))
+                            } else {
+                                Toast.makeText(context, "捐赠通道暂未配置", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
+                    OShinDivider()
+                    OShinSettingRow(
+                        title = "给个好评",
+                        summary = "在应用商店支持我们",
+                        leftIcon = Icons.Filled.ThumbUp,
+                        position = CouiPosition.Bottom,
                         onClick = {
                             try {
                                 context.startActivity(
@@ -595,16 +665,6 @@ fun MyScreen(
                             } catch (e: Exception) {
                                 Toast.makeText(context, "未找到应用商店", Toast.LENGTH_SHORT).show()
                             }
-                        },
-                    )
-                    OShinDivider()
-                    OShinSettingRow(
-                        title = "关于我们",
-                        summary = "版本 v$currentVersion",
-                        leftIcon = Icons.Filled.Info,
-                        position = CouiPosition.Bottom,
-                        onClick = {
-                            Toast.makeText(context, "风铃分享库 v$currentVersion", Toast.LENGTH_SHORT).show()
                         },
                     )
                 }
