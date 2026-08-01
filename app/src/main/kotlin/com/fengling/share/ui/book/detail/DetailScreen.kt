@@ -39,8 +39,6 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.PanLink
 import com.fengling.share.ui.components.EmptyMessage
-import com.fengling.share.ui.components.GlassCard
-import com.fengling.share.ui.components.rememberGlassBackdrop
 import com.fengling.share.ui.main.home.formatCount
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -68,9 +66,7 @@ fun DetailScreen(
     var error by remember { mutableStateOf("") }
     var clicking by remember { mutableStateOf(false) }
 
-    // 液态玻璃 backdrop (底部下载栏)
-    val (backdrop, captureModifier) = rememberGlassBackdrop()
-
+    // 底部下载栏用普通卡片, 不用 blur backdrop
     LaunchedEffect(appId) {
         try {
             app = ApiClient.getAppDetail(appId)
@@ -125,7 +121,6 @@ fun DetailScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
-                            .then(captureModifier)
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = 12.dp),
                     ) {
@@ -243,16 +238,18 @@ fun DetailScreen(
                         Spacer(Modifier.height(120.dp))
                     }
 
-                    // 底部液态玻璃下载栏
+                    // 底部下载栏 (半透明玻璃质感卡片, 避免 blur backdrop 黑边问题)
                     if (item.panLinks.isNotEmpty()) {
-                        GlassCard(
-                            backdrop = backdrop,
+                        Card(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             cornerRadius = 20.dp,
-                            blurRadius = 40f,
+                            colors = top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                                color = MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                                contentColor = MiuixTheme.colorScheme.onBackground,
+                            ),
                         ) {
                             Row(
                                 modifier = Modifier

@@ -20,14 +20,19 @@ class MainActivity : ComponentActivity() {
         Settings.init(applicationContext)
         enableEdgeToEdge()
         setContent {
+            // 观察 themeMode + themeColor, 任一变化都触发重组换肤
             var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
-            val currentThemeMode = themeMode
+            var themeColor by remember { mutableStateOf(Settings.getThemeColor()) }
 
-            AppTheme(themeMode = currentThemeMode) {
+            AppTheme(
+                themeMode = themeMode,
+                seedColor = themeColor.seed,
+            ) {
                 ProvideNavigationEventDispatcher {
                     MainScreen(
                         onThemeChanged = { newMode ->
                             themeMode = newMode
+                            themeColor = Settings.getThemeColor()
                         },
                     )
                 }

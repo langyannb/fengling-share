@@ -4,6 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,13 +24,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton as M3TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,15 +57,13 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * MyScreen - 设置页 (Miuix 风格)
- * 通用(预测返回) / 外观(主题: 底部弹窗 + 预置色板 + 自定义取色) / 关于(版本检测)
+ * 通用(预测返回) / 外观(主题: 点击下栏折叠展开, 含模式+色板+动态取色) / 关于(版本检测)
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyScreen(
     modifier: Modifier = Modifier,
@@ -71,8 +75,7 @@ fun MyScreen(
     var predictiveBack by remember { mutableStateOf(Settings.predictiveBackEnabled) }
     var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
     var themeColor by remember { mutableStateOf(Settings.getThemeColor()) }
-    var showThemeSheet by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState()
+    var themeExpanded by remember { mutableStateOf(false) }
     var checkingUpdate by remember { mutableStateOf(false) }
     var checkResult by remember { mutableStateOf("") }
     var showUpdateDialog by remember { mutableStateOf(false) }
@@ -151,58 +154,30 @@ fun MyScreen(
             }
             Spacer(Modifier.height(14.dp))
 
-            // ===== 外观 =====
+            // ===== 外观 (下栏折叠) =====
             SmallTitle(text = "外观")
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 cornerRadius = 14.dp,
             ) {
-                // 主题模式
+                // 主题行 (点击展开/收起)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showThemeSheet = true }
+                        .clickable { themeExpanded = !themeExpanded }
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "主题模式",
+                            text = "主题",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium,
                             color = MiuixTheme.colorScheme.onBackground,
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = themeMode.label,
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                    }
-                    Text(
-                        text = "›",
-                        fontSize = 20.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                }
-                // 主题色
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showThemeSheet = true }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "主题色",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = themeColor.label,
+                            text = "${themeMode.label} · ${themeColor.label}",
                             fontSize = 12.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
@@ -214,12 +189,182 @@ fun MyScreen(
                             .clip(CircleShape)
                             .background(Color(Settings.currentSeedColor())),
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "›",
-                        fontSize = 20.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        imageVector = if (themeExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = if (themeExpanded) "收起" else "展开",
+                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                        modifier = Modifier.size(20.dp),
                     )
+                }
+
+                // 下栏折叠内容 (展开时显示)
+                AnimatedVisibility(
+                    visible = themeExpanded,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(bottom = 16.dp),
+                    ) {
+                        // 模式三选
+                        Text(
+                            text = "模式",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            ThemeMode.entries.forEach { mode ->
+                                val selected = themeMode == mode
+                                Card(
+                                    onClick = {
+                                        themeMode = mode
+                                        Settings.themeMode = mode.value
+                                        onThemeChanged(mode)
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    cornerRadius = 10.dp,
+                                    colors = if (selected) {
+                                        top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                                            color = MiuixTheme.colorScheme.primary,
+                                            contentColor = MiuixTheme.colorScheme.onPrimary,
+                                        )
+                                    } else {
+                                        top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                            contentColor = MiuixTheme.colorScheme.onBackgroundVariant,
+                                        )
+                                    },
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = mode.label,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = if (selected) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onBackgroundVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+
+                        // 预置色板
+                        Text(
+                            text = "主题色",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            ThemeColor.entries.filter { it != ThemeColor.CUSTOM }.forEach { tc ->
+                                val selected = themeColor == tc
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(tc.seed))
+                                        .clickable {
+                                            themeColor = tc
+                                            Settings.themeColor = tc.value
+                                            onThemeChanged(themeMode)
+                                        }
+                                        .padding(4.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (selected) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Check,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+
+                        // 动态取色 (调色盘直接可见)
+                        Text(
+                            text = "动态取色",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        // 自定义选中态: 显示调色盘 + 应用按钮
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // 当前自定义色圆
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(Settings.customColor))
+                                    .clickable {
+                                        themeColor = ThemeColor.CUSTOM
+                                        Settings.themeColor = ThemeColor.CUSTOM.value
+                                        onThemeChanged(themeMode)
+                                    }
+                                    .padding(4.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (themeColor == ThemeColor.CUSTOM) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = "自定义",
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        // 调色盘始终可见 (拖拽即生效)
+                        ColorPalette(
+                            color = Color(Settings.customColor),
+                            onColorChanged = { newColor ->
+                                Settings.customColor = newColor.value.toLong()
+                                // 使用自定义色时实时更新
+                                if (themeColor != ThemeColor.CUSTOM) {
+                                    themeColor = ThemeColor.CUSTOM
+                                    Settings.themeColor = ThemeColor.CUSTOM.value
+                                }
+                                onThemeChanged(themeMode)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp),
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -254,6 +399,7 @@ fun MyScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clickable { if (!checkingUpdate) checkVersion() }
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -266,176 +412,29 @@ fun MyScreen(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = if (checkResult.isNotEmpty()) checkResult else "检测最新版本",
+                            text = if (checkingUpdate) "正在检查..." else if (checkResult.isNotEmpty()) checkResult else "点击检测最新版本",
                             fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            color = if (checkResult.contains("发现新版本")) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant,
                         )
                     }
-                    if (checkingUpdate) {
-                        Text("...", fontSize = 16.sp, color = MiuixTheme.colorScheme.primary)
-                    } else {
-                        TextButton(
-                            text = "检查",
-                            onClick = { checkVersion() },
+                    // Miuix 风格按钮
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.primary)
+                            .clickable { if (!checkingUpdate) checkVersion() }
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
+                    ) {
+                        Text(
+                            text = if (checkingUpdate) "..." else "检查",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onPrimary,
                         )
                     }
                 }
             }
             Spacer(Modifier.height(24.dp))
-        }
-    }
-
-    // ===== 主题设置底部弹窗 =====
-    if (showThemeSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showThemeSheet = false },
-            sheetState = sheetState,
-            containerColor = MiuixTheme.colorScheme.surface,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 32.dp),
-            ) {
-                // 标题
-                Text(
-                    text = "主题设置",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.height(18.dp))
-
-                // 主题模式
-                SmallTitle(text = "模式")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    ThemeMode.entries.forEach { mode ->
-                        val selected = themeMode == mode
-                        Card(
-                            onClick = {
-                                themeMode = mode
-                                Settings.themeMode = mode.value
-                                onThemeChanged(mode)
-                            },
-                            modifier = Modifier.weight(1f),
-                            cornerRadius = 14.dp,
-                            colors = if (selected) {
-                                top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
-                                    color = MiuixTheme.colorScheme.primary,
-                                    contentColor = MiuixTheme.colorScheme.onPrimary,
-                                )
-                            } else {
-                                top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
-                                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                                    contentColor = MiuixTheme.colorScheme.onBackgroundVariant,
-                                )
-                            },
-                        ) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 12.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = mode.label,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (selected) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onBackgroundVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(18.dp))
-
-                // 预置主题色
-                SmallTitle(text = "主题色")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    ThemeColor.entries.filter { it != ThemeColor.CUSTOM }.forEach { tc ->
-                        val selected = themeColor == tc
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color(tc.seed))
-                                .clickable {
-                                    themeColor = tc
-                                    Settings.themeColor = tc.value
-                                    onThemeChanged(themeMode)
-                                }
-                                .padding(4.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (selected) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White),
-                                )
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                // 自定义取色
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "自定义",
-                        fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(Settings.customColor))
-                            .clickable {
-                                themeColor = ThemeColor.CUSTOM
-                                Settings.themeColor = ThemeColor.CUSTOM.value
-                                onThemeChanged(themeMode)
-                            }
-                            .padding(4.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (themeColor == ThemeColor.CUSTOM) {
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White),
-                            )
-                        }
-                    }
-                }
-                if (themeColor == ThemeColor.CUSTOM) {
-                    Spacer(Modifier.height(10.dp))
-                    // Miuix 调色盘 (HSV + 透明度)
-                    ColorPalette(
-                        color = Color(Settings.customColor),
-                        onColorChanged = { newColor ->
-                            Settings.customColor = newColor.value.toLong()
-                            onThemeChanged(themeMode)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp),
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-            }
         }
     }
 
