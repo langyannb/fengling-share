@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -37,13 +36,13 @@ import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
+import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -94,27 +93,12 @@ fun ExploreScreen(
     Scaffold(
         topBar = {
             if (expandedCategory != null) {
-                TopAppBar(
+                AppTopBar(
                     title = categories.firstOrNull { it.id == expandedCategory }?.name ?: "分类",
-                    navigationIcon = {
-                        Box(
-                            modifier = Modifier
-                                .padding(start = 4.dp)
-                                .clip(CircleShape)
-                                .clickable { expandedCategory = null }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "返回",
-                                tint = MiuixTheme.colorScheme.primary,
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                    },
+                    onBack = { expandedCategory = null },
                 )
             } else {
-                TopAppBar(title = "分类")
+                AppTopBar(title = "分类")
             }
         },
     ) { innerPadding ->

@@ -45,6 +45,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Banner
 import com.fengling.share.data.Category
+import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
 import com.fengling.share.ui.components.rememberGlassBackdrop
@@ -115,11 +116,8 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            // Miuix 大标题栏 (自带紧凑折叠, 不占多余空间)
-            TopAppBar(
-                title = "风铃分享库",
-                largeTitle = "风铃分享库",
-            )
+            // 紧凑顶栏 (背景覆盖状态栏, 标题不占大空间)
+            AppTopBar(title = "风铃分享库")
         },
     ) { innerPadding ->
         PullToRefresh(

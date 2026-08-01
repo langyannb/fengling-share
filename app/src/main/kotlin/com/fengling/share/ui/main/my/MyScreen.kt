@@ -52,6 +52,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.ui.components.AppTopBar
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.ColorPalette
@@ -59,7 +60,6 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -107,7 +107,7 @@ fun MyScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = "设置")
+            AppTopBar(title = "设置")
         },
     ) { innerPadding ->
         Column(
