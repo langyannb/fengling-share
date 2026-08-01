@@ -15,6 +15,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,6 +42,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -178,7 +181,7 @@ fun WebViewScreen(
                 factory = { webView },
                 modifier = Modifier.fillMaxSize(),
             )
-            // 加载进度条 (平滑动画, 避免 onProgressChanged 跳变僵硬)
+            // 加载进度条 (顶部细条, 平滑动画)
             val animatedProgress by animateFloatAsState(
                 targetValue = progress / 100f,
                 animationSpec = tween(250),
@@ -187,7 +190,10 @@ fun WebViewScreen(
             if (animatedProgress < 1f) {
                 LinearProgressIndicator(
                     progress = { animatedProgress },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .align(Alignment.TopCenter),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 )

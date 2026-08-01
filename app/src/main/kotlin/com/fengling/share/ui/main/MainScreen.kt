@@ -1,6 +1,8 @@
 package com.fengling.share.ui.main
 
 import android.webkit.WebView
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,7 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -74,7 +76,7 @@ fun MainScreen(
         listOf(
             NavTab("home", "首页", Icons.Filled.Home),
             NavTab("explore", "分类", Icons.Filled.Category),
-            NavTab("my", "我的", Icons.Filled.Person),
+            NavTab("settings", "设置", Icons.Filled.Settings),
         )
     }
 
@@ -86,20 +88,20 @@ fun MainScreen(
             if (Settings.predictiveBackEnabled) {
                 slideInHorizontally(tween(300)) { it / 3 } + fadeIn(tween(300))
             } else {
-                fadeIn(tween(200))
+                EnterTransition.None
             }
         },
         exitTransition = {
-            fadeOut(tween(if (Settings.predictiveBackEnabled) 300 else 200))
+            if (Settings.predictiveBackEnabled) fadeOut(tween(300)) else ExitTransition.None
         },
         popEnterTransition = {
-            fadeIn(tween(if (Settings.predictiveBackEnabled) 300 else 200))
+            if (Settings.predictiveBackEnabled) fadeIn(tween(300)) else EnterTransition.None
         },
         popExitTransition = {
             if (Settings.predictiveBackEnabled) {
                 slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(300))
             } else {
-                fadeOut(tween(200))
+                ExitTransition.None
             }
         },
     ) {
