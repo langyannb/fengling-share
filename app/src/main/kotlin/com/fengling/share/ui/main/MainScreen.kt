@@ -39,6 +39,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
@@ -47,6 +48,7 @@ import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.MyScreen
+import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -58,10 +60,15 @@ object Routes {
     const val MAIN = "main"
     const val DETAIL = "detail/{appId}"
     const val WEBVIEW = "webview?url={url}&title={title}&password={password}"
+    const val UPDATE = "update?version={version}&url={url}&log={log}&mode={mode}&size={size}&date={date}"
 
     fun detail(appId: Int) = "detail/$appId"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
+    fun update(info: com.fengling.share.data.VersionInfo) =
+        "update?version=${android.net.Uri.encode(info.version)}&url=${android.net.Uri.encode(info.url)}" +
+            "&log=${android.net.Uri.encode(info.updateLog)}&mode=${android.net.Uri.encode(info.updateMode)}" +
+            "&size=${info.sizeMb}&date=${android.net.Uri.encode(info.releaseDate)}"
 }
 
 /**
@@ -152,6 +159,9 @@ fun MainScreen(
                                 onOpenWeb = { url, title ->
                                     navController.navigate(Routes.webview(url, title))
                                 },
+                                onOpenUpdate = { info ->
+                                    navController.navigate(Routes.update(info))
+                                },
                             )
                         }
                     }
@@ -205,6 +215,32 @@ fun MainScreen(
                 title = title,
                 password = password,
                 sharedWebView = sharedWebView,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 软件更新页 (OShin 同款: 下载并安装)
+        composable(
+            route = Routes.UPDATE,
+            arguments = listOf(
+                navArgument("version") { type = NavType.StringType; defaultValue = "" },
+                navArgument("url") { type = NavType.StringType; defaultValue = "" },
+                navArgument("log") { type = NavType.StringType; defaultValue = "" },
+                navArgument("mode") { type = NavType.StringType; defaultValue = "internal" },
+                navArgument("size") { type = NavType.FloatType; defaultValue = 0f },
+                navArgument("date") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { backStackEntry ->
+            val args = backStackEntry.arguments
+            UpdateScreen(
+                info = VersionInfo(
+                    version = args?.getString("version") ?: "",
+                    url = args?.getString("url") ?: "",
+                    updateLog = args?.getString("log") ?: "",
+                    updateMode = args?.getString("mode") ?: "internal",
+                    sizeMb = args?.getFloat("size") ?: 0f,
+                    releaseDate = args?.getString("date") ?: "",
+                ),
                 onBack = { navController.popBackStack() },
             )
         }

@@ -193,16 +193,16 @@ private fun ForceUpdateDialog(info: VersionInfo) {
         confirmButton = {
             TextButton(onClick = {
                 if (info.url.isNotEmpty()) {
-                    if (info.updateMode == "external") {
-                        // 外置: 系统浏览器
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.url)))
-                    } else {
-                        // 内置: 独立 WebView Activity
-                        context.startActivity(
-                            Intent(context, WebUpdateActivity::class.java)
-                                .putExtra("url", info.url)
-                        )
-                    }
+                    // OShin 同款: 跳转更新页直接下载安装
+                    context.startActivity(
+                        Intent(context, UpdateActivity::class.java)
+                            .putExtra("version", info.version)
+                            .putExtra("url", info.url)
+                            .putExtra("log", info.updateLog)
+                            .putExtra("mode", info.updateMode)
+                            .putExtra("size", info.sizeMb)
+                            .putExtra("date", info.releaseDate)
+                    )
                 }
             }) {
                 Text(

@@ -82,6 +82,7 @@ import com.fengling.share.data.AppVersion
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.CouiPosition
@@ -110,6 +111,7 @@ fun MyScreen(
     modifier: Modifier = Modifier,
     onThemeChanged: (ThemeMode) -> Unit = {},
     onOpenWeb: (String, String) -> Unit = { _, _ -> },
+    onOpenUpdate: (VersionInfo) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -872,7 +874,7 @@ fun MyScreen(
                 }
             },
             confirmButton = {
-                // MIUI 风格主按钮 (渐变填充)
+                // MIUI 风格主按钮 (渐变填充, OShin 同款: 跳转更新页下载安装)
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(20.dp))
@@ -887,11 +889,17 @@ fun MyScreen(
                         .clickable {
                             showUpdateDialog = false
                             if (updateUrl.isNotEmpty()) {
-                                if (updateMode == "external") {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl)))
-                                } else {
-                                    onOpenWeb(updateUrl, "更新下载")
-                                }
+                                onOpenUpdate(
+                                    VersionInfo(
+                                        version = updateVersion,
+                                        url = updateUrl,
+                                        updateLog = updateLog,
+                                        updateMode = updateMode,
+                                        forceUpdate = forceUpdate,
+                                        sizeMb = updateSize,
+                                        releaseDate = updateDate,
+                                    )
+                                )
                             } else {
                                 Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
                             }
@@ -899,7 +907,7 @@ fun MyScreen(
                         .padding(horizontal = 20.dp, vertical = 9.dp),
                 ) {
                     Text(
-                        text = if (updateMode == "external") "去更新" else "立即更新",
+                        text = "立即更新",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onPrimary,
