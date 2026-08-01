@@ -1,6 +1,8 @@
 package com.fengling.share.ui.main.explore
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import coil.compose.AsyncImage
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -175,6 +179,8 @@ fun ExploreScreen(
                         CategoryCard(
                             name = cat.name,
                             appCount = apps.count { it.categoryId == cat.id },
+                            icon = cat.icon,
+                            color = cat.color,
                             onClick = {
                                 expandedCategory = cat.id
                                 categoryApps = emptyList()
@@ -188,9 +194,9 @@ fun ExploreScreen(
     }
 }
 
-/** 分类卡片 (Miuix Card + 彩色图标圆) */
+/** 分类卡片 (OShin 风格: 渐变图标圆 + 上传图标优先 + 计数徽章) */
 @Composable
-private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
+private fun CategoryCard(name: String, appCount: Int, icon: String, color: String, onClick: () -> Unit) {
     Card(
         onClick = onClick,
         modifier = Modifier
@@ -204,20 +210,35 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 彩色图标圆 (主题色容器)
+            // 渐变彩色图标圆 (上传图标优先, 无图时首字符)
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.primaryContainer),
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                parseColor(color).copy(alpha = 0.85f),
+                                parseColor(color).copy(alpha = 0.45f),
+                            )
+                        )
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Category,
-                    contentDescription = null,
-                    tint = MiuixTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                )
+                if (icon.isNotEmpty()) {
+                    AsyncImage(
+                        model = icon,
+                        contentDescription = name,
+                        modifier = Modifier.size(28.dp),
+                    )
+                } else {
+                    Text(
+                        text = name.take(1),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = androidx.compose.ui.graphics.Color.White,
+                    )
+                }
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -239,17 +260,30 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
                 modifier = Modifier
                     .size(26.dp)
                     .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                    .background(
+                        parseColor(color).copy(alpha = 0.15f)
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = appCount.coerceAtMost(99).toString(),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.primary,
+                    color = parseColor(color),
                 )
             }
         }
+    }
+}
+
+/** 解析 #RRGGBB 颜色 */
+private fun parseColor(hex: String): androidx.compose.ui.graphics.Color {
+    return try {
+        androidx.compose.ui.graphics.Color(
+            android.graphics.Color.parseColor(hex)
+        )
+    } catch (e: Exception) {
+        androidx.compose.ui.graphics.Color(0xFF4C6FFF)
     }
 }
 

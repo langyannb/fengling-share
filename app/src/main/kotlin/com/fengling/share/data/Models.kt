@@ -7,6 +7,7 @@ data class Category(
     val id: Int,
     val name: String,
     val color: String,
+    val icon: String, // 分类图标 URL (后端上传)
     val sortOrder: Int,
 ) {
     companion object {
@@ -14,6 +15,7 @@ data class Category(
             id = json.optInt("id", 0),
             name = json.optString("name", ""),
             color = json.optString("color", "#4C6FFF"),
+            icon = json.optString("icon", ""),
             sortOrder = json.optInt("sort_order", 0),
         )
     }
