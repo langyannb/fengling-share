@@ -305,7 +305,9 @@ private fun handleProtocolUrl(view: WebView, url: String): Boolean {
         try {
             val target = Uri.parse("https://$actionPart").getQueryParameter("url")
             if (!target.isNullOrBlank() && target.startsWith("http")) {
-                view.loadUrl(target)
+                // UC网盘App路由链接(www.uc.cn+clouddrive_params)在WebView里只会显示
+                // UC浏览器官网首页, 提取pwd_id重写为网页版分享详情页
+                view.loadUrl(rewriteUcShareUrl(target))
                 return true
             }
         } catch (_: Exception) { }
@@ -325,4 +327,34 @@ private fun handleProtocolUrl(view: WebView, url: String): Boolean {
         view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: Exception) { }
     return true
+}
+
+/**
+ * UC网盘 App 路由链接重写为网页版分享页
+ *
+ * UC网盘分享出去的链接是 uclink:// intent, 其中的 url 参数指向
+ * https://www.uc.cn/?entry=buwang_view_on_app&uc_flutter_route=/clouddrive/main&clouddrive_params={...}
+ * —— 这是给 UC App 内部使用的路由, 浏览器/WebView 打开只会落到 www.uc.cn 官网首页。
+ * 这里从 clouddrive_params(URL编码的JSON)提取 additionProps.pwd_id,
+ * 重写为网页版分享详情页 https://drive.uc.cn/s/{pwd_id}
+ */
+private fun rewriteUcShareUrl(target: String): String {
+    return try {
+        val uri = Uri.parse(target)
+        val host = uri.host?.lowercase() ?: ""
+        val cdp = uri.getQueryParameter("clouddrive_params") ?: ""
+        val flutterRoute = uri.getQueryParameter("uc_flutter_route") ?: ""
+        // 仅处理 UC App 路由场景 (www.uc.cn + clouddrive_params / flutter 路由)
+        if (host.contains("uc.cn") && (cdp.isNotEmpty() || flutterRoute.isNotEmpty())) {
+            // getQueryParameter 已解码一层, 再解码一次得到 JSON
+            val jsonStr = java.net.URLDecoder.decode(cdp, "UTF-8")
+            val obj = org.json.JSONObject(jsonStr)
+            val pwdId = obj.optJSONObject("additionProps")?.optString("pwd_id") ?: ""
+            if (pwdId.isNotEmpty()) "https://drive.uc.cn/s/$pwdId" else target
+        } else {
+            target
+        }
+    } catch (_: Exception) {
+        target
+    }
 }
