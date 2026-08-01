@@ -1,56 +1,79 @@
 package com.fengling.share.ui.main.my
 
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton as M3TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
@@ -60,18 +83,26 @@ import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.CouiPosition
+import com.fengling.share.ui.components.OShinCard
+import com.fengling.share.ui.components.OShinCardTitle
+import com.fengling.share.ui.components.OShinDivider
+import com.fengling.share.ui.components.OShinSettingRow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.ColorPalette
-import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import kotlin.math.abs
 
 /**
- * MyScreen - 设置页 (Miuix 风格)
- * 通用(预测返回) / 外观(主题: 点击下栏折叠展开, 含模式+色板+动态取色) / 关于(版本检测)
+ * MyScreen - OShin 风格关于页
+ * 滚动视差头部 + 卡片滚动淡入 + COUI 设置行 + 官方频道 + 检查更新悬浮按钮
  */
 @Composable
 fun MyScreen(
@@ -81,6 +112,7 @@ fun MyScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val scroll = rememberLazyListState()
 
     var predictiveBack by remember { mutableStateOf(Settings.predictiveBackEnabled) }
     var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
@@ -94,10 +126,28 @@ fun MyScreen(
     var updateLog by remember { mutableStateOf("") }
     var forceUpdate by remember { mutableStateOf(false) }
 
-    // 当前版本号 (独立版本文件 AppVersion, 非 build.gradle — 防改包绕过)
     val currentVersion = AppVersion.CURRENT
-    // 弹窗内显示的最新版本号 (从检查结果提取, 如 "发现新版本 v1.0.1" → "1.0.1")
     val updateVersion = checkResult.substringAfter("v")
+
+    // OShin 滚动视差动画: 头部随滚动缩放/淡出
+    var headerAlpha by remember { mutableStateOf(1f) }
+    var headerScale by remember { mutableStateOf(1f) }
+    var updateBtnAlpha by remember { mutableStateOf(1f) }
+    LaunchedEffect(scroll) {
+        snapshotFlow { Pair(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset) }
+            .onEach { (index, offset) ->
+                if (index == 0) {
+                    val f = offset.toFloat()
+                    headerAlpha = ((520f - f / 1.6f).coerceIn(0f, 520f) / 520f).coerceIn(0f, 1f)
+                    headerScale = 1f - f / 2000f
+                    updateBtnAlpha = (1f - f / 300f).coerceIn(0f, 1f)
+                } else {
+                    headerAlpha = 0f
+                    updateBtnAlpha = 0f
+                }
+            }
+            .collect()
+    }
 
     fun checkVersion() {
         scope.launch {
@@ -122,420 +172,518 @@ fun MyScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            // OShin 式关于页大标题
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MiuixTheme.colorScheme.surface)
-                    .statusBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-            ) {
-                Text(
-                    text = "关于",
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                )
-            }
-        },
-    ) { innerPadding ->
+    val isDark = isSystemInDarkTheme()
+    // OShin 渐变标题色
+    val titleGradient = if (isDark) {
+        listOf(Color(0xFFD0A279ED.toInt()), Color(0xFFD0E3BCB1.toInt()))
+    } else {
+        listOf(Color(0xFFD03A18AD.toInt()), Color(0xFFD0A56138.toInt()))
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        // 头部背景渐变 (滚动时淡出)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(420.dp)
+                .alpha(headerAlpha)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MiuixTheme.colorScheme.primary.copy(alpha = 0.18f),
+                            MiuixTheme.colorScheme.background,
+                        )
+                    )
+                ),
+        )
+
+        // 头部内容 (App 名 + 版本号, 滚动缩放淡出)
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp),
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(top = 60.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(8.dp))
-
-            // ===== OShin 式关于头部 (App 图标 + 名称 + 版本 + 标语) =====
-            Column(
+            // App 图标
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                // App 图标 (主题色圆角方块 + 风铃文字)
-                Box(
-                    modifier = Modifier
-                        .size(72.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    MiuixTheme.colorScheme.primary,
-                                    MiuixTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                )
+                    .size(76.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                MiuixTheme.colorScheme.primary,
+                                MiuixTheme.colorScheme.primary.copy(alpha = 0.65f),
                             )
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "风",
-                        fontSize = 36.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MiuixTheme.colorScheme.onPrimary,
+                        )
                     )
-                }
-                Spacer(Modifier.height(12.dp))
+                    .scale(headerScale)
+                    .alpha(headerAlpha),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
-                    text = "风铃分享库",
-                    fontSize = 22.sp,
+                    text = "风",
+                    fontSize = 38.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "v$currentVersion",
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "好软件，一起分享",
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.primary,
+                    color = MiuixTheme.colorScheme.onPrimary,
                 )
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "风铃分享库",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
+                style = TextStyle(
+                    brush = Brush.linearGradient(titleGradient),
+                ),
+                modifier = Modifier
+                    .scale(headerScale)
+                    .alpha(headerAlpha),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "v$currentVersion",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                modifier = Modifier
+                    .scale(headerScale)
+                    .alpha(headerAlpha),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "好软件，一起分享",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier
+                    .scale(headerScale)
+                    .alpha(headerAlpha),
+            )
+        }
 
-            // ===== 通用 =====
-            SmallTitle(text = "通用")
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 14.dp,
-            ) {
-                Row(
+        // 主内容列表
+        LazyColumn(
+            state = scroll,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 100.dp),
+        ) {
+            // 头部占位
+            item { Spacer(Modifier.height(280.dp)) }
+
+            // 卡片滚动淡入
+            item {
+                val cardAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 6.dp)
+                        .alpha(cardAlpha),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "预测性返回",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = if (predictiveBack) "开启: 返回时页面滑动过渡" else "关闭: 直接返回无动画",
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                    }
-                    Switch(
-                        checked = predictiveBack,
-                        onCheckedChange = {
-                            predictiveBack = it
-                            Settings.predictiveBackEnabled = it
+                    // ===== 通用 =====
+                    OShinCardTitle(title = "通用")
+                    OShinSettingRow(
+                        title = "预测性返回",
+                        summary = if (predictiveBack) "开启: 返回时页面滑动过渡" else "关闭: 直接返回无动画",
+                        leftIcon = Icons.Filled.Settings,
+                        position = CouiPosition.Top,
+                        onClick = {
+                            predictiveBack = !predictiveBack
+                            Settings.predictiveBackEnabled = predictiveBack
                         },
                     )
                 }
             }
-            Spacer(Modifier.height(14.dp))
 
-            // ===== 外观 (下栏折叠) =====
-            SmallTitle(text = "外观")
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 14.dp,
-            ) {
-                // 主题行 (点击展开/收起)
-                Row(
+            // 外观 (主题折叠)
+            item {
+                val cardAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { themeExpanded = !themeExpanded }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 6.dp)
+                        .alpha(cardAlpha),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "主题",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = "${themeMode.label} · ${themeColor.label}",
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                    }
-                    // 当前颜色圆点
-                    Box(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(Color(Settings.currentSeedColor())),
+                    OShinCardTitle(title = "外观")
+                    OShinSettingRow(
+                        title = "主题",
+                        summary = "${themeMode.label} · ${themeColor.label}",
+                        leftIcon = Icons.Filled.Palette,
+                        rightText = if (themeExpanded) "收起" else "展开",
+                        position = CouiPosition.Top,
+                        onClick = { themeExpanded = !themeExpanded },
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        imageVector = if (themeExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                        contentDescription = if (themeExpanded) "收起" else "展开",
-                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-
-                // 下栏折叠内容 (展开时显示)
-                AnimatedVisibility(
-                    visible = themeExpanded,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut(),
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .padding(bottom = 16.dp),
+                    // 下栏折叠内容
+                    AnimatedVisibility(
+                        visible = themeExpanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut(),
                     ) {
-                        // 模式三选
-                        Text(
-                            text = "模式",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .padding(bottom = 16.dp),
                         ) {
-                            ThemeMode.entries.forEach { mode ->
-                                val selected = themeMode == mode
-                                Card(
-                                    onClick = {
-                                        themeMode = mode
-                                        Settings.themeMode = mode.value
-                                        onThemeChanged(mode)
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    cornerRadius = 10.dp,
-                                    colors = if (selected) {
-                                        top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
-                                            color = MiuixTheme.colorScheme.primary,
-                                            contentColor = MiuixTheme.colorScheme.onPrimary,
-                                        )
-                                    } else {
-                                        top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
-                                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                                            contentColor = MiuixTheme.colorScheme.onBackgroundVariant,
-                                        )
-                                    },
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 10.dp),
-                                        contentAlignment = Alignment.Center,
+                            // 模式三选
+                            Text(
+                                text = "模式",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                ThemeMode.entries.forEach { mode ->
+                                    val selected = themeMode == mode
+                                    Card(
+                                        onClick = {
+                                            themeMode = mode
+                                            Settings.themeMode = mode.value
+                                            onThemeChanged(mode)
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        cornerRadius = 10.dp,
+                                        colors = if (selected) {
+                                            CardDefaults.defaultColors(
+                                                color = MiuixTheme.colorScheme.primary,
+                                                contentColor = MiuixTheme.colorScheme.onPrimary,
+                                            )
+                                        } else {
+                                            CardDefaults.defaultColors(
+                                                color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                                contentColor = MiuixTheme.colorScheme.onBackgroundVariant,
+                                            )
+                                        },
                                     ) {
-                                        Text(
-                                            text = mode.label,
-                                            fontSize = 13.sp,
-                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (selected) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onBackgroundVariant,
-                                        )
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = mode.label,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                                color = if (selected) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onBackgroundVariant,
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(16.dp))
 
-                        // 预置色板 (横向可滚动, 不挤压)
-                        Text(
-                            text = "主题色",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            items(ThemeColor.entries.filter { it != ThemeColor.CUSTOM }) { tc ->
-                                val selected = themeColor == tc
+                            // 预置色板
+                            Text(
+                                text = "主题色",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                ThemeColor.entries.filter { it != ThemeColor.CUSTOM }.forEach { tc ->
+                                    val selected = themeColor == tc
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(tc.seed))
+                                            .clickable {
+                                                themeColor = tc
+                                                Settings.themeColor = tc.value
+                                                onThemeChanged(themeMode)
+                                            }
+                                            .padding(3.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        if (selected) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Check,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(16.dp))
+
+                            // 动态取色
+                            Text(
+                                text = "动态取色",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(36.dp)
+                                        .size(32.dp)
                                         .clip(CircleShape)
-                                        .background(Color(tc.seed))
+                                        .background(Color(Settings.customColor))
                                         .clickable {
-                                            themeColor = tc
-                                            Settings.themeColor = tc.value
+                                            themeColor = ThemeColor.CUSTOM
+                                            Settings.themeColor = ThemeColor.CUSTOM.value
                                             onThemeChanged(themeMode)
                                         }
-                                        .padding(4.dp),
+                                        .padding(3.dp),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    if (selected) {
+                                    if (themeColor == ThemeColor.CUSTOM) {
                                         Icon(
                                             imageVector = Icons.Filled.Check,
                                             contentDescription = null,
                                             tint = Color.White,
-                                            modifier = Modifier.size(16.dp),
+                                            modifier = Modifier.size(14.dp),
                                         )
                                     }
                                 }
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = "自定义",
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
                             }
-                        }
-
-                        Spacer(Modifier.height(16.dp))
-
-                        // 动态取色 (调色盘直接可见)
-                        Text(
-                            text = "动态取色",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        // 自定义选中态: 显示调色盘 + 应用按钮
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // 当前自定义色圆
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(Settings.customColor))
-                                    .clickable {
+                            Spacer(Modifier.height(10.dp))
+                            ColorPalette(
+                                color = Color(Settings.customColor),
+                                onColorChanged = { newColor ->
+                                    Settings.customColor = newColor.value.toLong()
+                                    if (themeColor != ThemeColor.CUSTOM) {
                                         themeColor = ThemeColor.CUSTOM
                                         Settings.themeColor = ThemeColor.CUSTOM.value
-                                        onThemeChanged(themeMode)
                                     }
-                                    .padding(4.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (themeColor == ThemeColor.CUSTOM) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Check,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(16.dp),
+                                    onThemeChanged(themeMode)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ===== 官方频道 =====
+            item { OShinCardTitle(title = "官方频道") }
+            item {
+                val cardAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 6.dp)
+                        .alpha(cardAlpha),
+                ) {
+                    // 频道横幅 (渐变)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        MiuixTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                        MiuixTheme.colorScheme.primary.copy(alpha = 0.05f),
                                     )
-                                }
-                            }
-                            Spacer(Modifier.width(10.dp))
+                                )
+                            )
+                            .padding(16.dp),
+                    ) {
+                        Column {
                             Text(
-                                text = "自定义",
-                                fontSize = 13.sp,
+                                text = "风铃分享库 · 官方频道",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MiuixTheme.colorScheme.onBackground,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "最新软件 · 更新通知 · 交流反馈",
+                                fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                             )
                         }
-                        Spacer(Modifier.height(10.dp))
-                        // 调色盘始终可见 (拖拽即生效)
-                        ColorPalette(
-                            color = Color(Settings.customColor),
-                            onColorChanged = { newColor ->
-                                Settings.customColor = newColor.value.toLong()
-                                // 使用自定义色时实时更新
-                                if (themeColor != ThemeColor.CUSTOM) {
-                                    themeColor = ThemeColor.CUSTOM
-                                    Settings.themeColor = ThemeColor.CUSTOM.value
-                                }
-                                onThemeChanged(themeMode)
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp),
-                        )
                     }
+                    OShinSettingRow(
+                        title = "加入官方QQ群",
+                        summary = "获取最新版本与专属福利",
+                        leftIcon = Icons.Filled.Person,
+                        position = CouiPosition.Middle,
+                        onClick = {
+                            // TODO: 替换为真实群号
+                            Toast.makeText(context, "QQ群功能即将上线", Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                    OShinDivider()
+                    OShinSettingRow(
+                        title = "意见反馈",
+                        summary = "遇到问题告诉我们",
+                        leftIcon = Icons.Filled.Email,
+                        position = CouiPosition.Bottom,
+                        onClick = {
+                            Toast.makeText(context, "反馈功能即将上线", Toast.LENGTH_SHORT).show()
+                        },
+                    )
                 }
             }
-            Spacer(Modifier.height(14.dp))
 
-            // ===== 关于 =====
-            SmallTitle(text = "关于")
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 14.dp,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "当前版本",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = "v$currentVersion",
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                    }
+            // ===== 其他 =====
+            item { OShinCardTitle(title = "其他") }
+            item {
+                val cardAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
                 }
-                Row(
+                OShinCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { if (!checkingUpdate) checkVersion() }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 6.dp)
+                        .alpha(cardAlpha),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "检查更新",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = if (checkingUpdate) "正在检查..." else if (checkResult.isNotEmpty()) checkResult else "点击检测最新版本",
-                            fontSize = 12.sp,
-                            color = if (checkResult.contains("发现新版本")) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant,
-                        )
-                    }
-                    // Miuix 风格按钮
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(MiuixTheme.colorScheme.primary)
-                            .clickable { if (!checkingUpdate) checkVersion() }
-                            .padding(horizontal = 16.dp, vertical = 7.dp),
-                    ) {
-                        Text(
-                            text = if (checkingUpdate) "..." else "检查",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onPrimary,
-                        )
-                    }
+                    OShinSettingRow(
+                        title = "检查更新",
+                        summary = if (checkingUpdate) "正在检查..." else if (checkResult.isNotEmpty()) checkResult else "点击检测最新版本",
+                        leftIcon = Icons.Filled.Refresh,
+                        rightText = if (checkingUpdate) "..." else null,
+                        position = CouiPosition.Top,
+                        onClick = { if (!checkingUpdate) checkVersion() },
+                    )
+                    OShinDivider()
+                    OShinSettingRow(
+                        title = "给个好评",
+                        summary = "喜欢就支持一下吧",
+                        leftIcon = Icons.Filled.ThumbUp,
+                        position = CouiPosition.Middle,
+                        onClick = {
+                            try {
+                                context.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse("market://details?id=${context.packageName}")
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "未找到应用商店", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
+                    OShinDivider()
+                    OShinSettingRow(
+                        title = "关于我们",
+                        summary = "版本 v$currentVersion",
+                        leftIcon = Icons.Filled.Info,
+                        position = CouiPosition.Bottom,
+                        onClick = {
+                            Toast.makeText(context, "风铃分享库 v$currentVersion", Toast.LENGTH_SHORT).show()
+                        },
+                    )
                 }
             }
-            Spacer(Modifier.height(24.dp))
+
+            item {
+                Text(
+                    text = "Powered By 风铃分享库",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp),
+                )
+            }
+        }
+
+        // OShin 检查更新悬浮按钮 (渐变描边, 滚动淡出)
+        val interaction = remember { MutableInteractionSource() }
+        val isPressed by interaction.collectIsPressedAsState()
+        val btnScale by animateFloatAsState(
+            targetValue = if (isPressed) 0.95f else 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow,
+            ),
+            label = "updateBtn",
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 380.dp)
+                .navigationBarsPadding()
+                .alpha(updateBtnAlpha)
+                .scale(btnScale),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                    .clickable(
+                        interactionSource = interaction,
+                        indication = null,
+                    ) { if (!checkingUpdate) checkVersion() }
+                    .padding(horizontal = 32.dp, vertical = 12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Outlined.SystemUpdate,
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (checkingUpdate) "检查中..." else "检查更新",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 
-    // 发现新版本对话框 (美化: 图标+版本醒目+更新日志+内置/外置选择)
+    // 发现新版本对话框
     if (showUpdateDialog) {
-        // 强制更新: 拦截返回键 (用户必须更新, 弹窗不可关闭)
         if (forceUpdate) {
             BackHandler { /* 强制更新: 不允许返回 */ }
         }
         AlertDialog(
             onDismissRequest = {
-                // 强制更新: 不可关闭; 非强制: 可关闭
                 if (!forceUpdate) showUpdateDialog = false
             },
             title = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 更新图标
                     Box(
                         modifier = Modifier
                             .size(52.dp)
@@ -601,7 +749,6 @@ fun MyScreen(
                 }
             },
             confirmButton = {
-                // 按后端配置的更新方式: 内置=App内浏览器, 外置=系统浏览器
                 M3TextButton(onClick = {
                     showUpdateDialog = false
                     if (updateUrl.isNotEmpty()) {
@@ -622,7 +769,6 @@ fun MyScreen(
                 }
             },
             dismissButton = {
-                // 强制更新: 无取消按钮; 非强制: 稍后再说
                 if (!forceUpdate) {
                     M3TextButton(onClick = { showUpdateDialog = false }) {
                         Text("稍后再说", color = MiuixTheme.colorScheme.onBackgroundVariant)
