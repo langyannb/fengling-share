@@ -1,7 +1,6 @@
 package com.fengling.share.ui.main
 
 import android.webkit.WebView
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
@@ -9,23 +8,28 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -36,14 +40,18 @@ import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
+import com.fengling.share.ui.components.GlassCard
+import com.fengling.share.ui.components.rememberGlassBackdrop
 import com.fengling.share.ui.components.navigation.AppNavigationBar
 import com.fengling.share.ui.components.navigation.AppNavigationBarItem
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.MyScreen
+import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 底部导航 tab */
-private data class NavTab(val route: String, val label: String, val icon: ImageVector)
+private data class NavTab(val label: String, val icon: ImageVector)
 
 /** 导航路由 */
 object Routes {
@@ -57,30 +65,35 @@ object Routes {
 }
 
 /**
- * MainScreen - 主界面 (Navigation Compose 返回栈)
- * 结构: main(底部导航) → detail(详情) → webview(内置浏览器)
- * - 转场动画: 水平滑动 + 淡入淡出
- * - 预测性返回: Navigation 2.9 在 Android 13+ 自动启用系统手势动画
- * - WebView 实例复用: 浏览器页不重建, 返回栈 pop 保留状态
+ * MainScreen - 主界面 (OShin 风格重构)
+ * - HorizontalPager: tab 左右滑动切换 (平滑滑动动画)
+ * - 液态玻璃: 页面级 backdrop 捕获 + 玻璃底栏
+ * - Navigation 返回栈: main → detail → webview
+ * - WebView 实例复用
  */
 @Composable
 fun MainScreen(
     onThemeChanged: (ThemeMode) -> Unit = {},
 ) {
     val navController = rememberNavController()
-    var currentTab by rememberSaveable { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
 
-    // 共享 WebView 实例 (Activity 生命周期内复用, 退出浏览器再进不重新加载)
+    // 共享 WebView 实例 (Activity 生命周期内复用)
     val context = LocalContext.current
     val sharedWebView = remember { WebView(context.applicationContext) }
 
+    // 液态玻璃 backdrop (页面级捕获)
+    val (backdrop, captureModifier) = rememberGlassBackdrop()
+
     val tabs = remember {
         listOf(
-            NavTab("home", "首页", Icons.Outlined.Home),
-            NavTab("explore", "分类", Icons.Outlined.Category),
-            NavTab("settings", "设置", Icons.Outlined.Settings),
+            NavTab("首页", Icons.Outlined.Home),
+            NavTab("分类", Icons.Outlined.Category),
+            NavTab("关于", Icons.Outlined.Info),
         )
     }
+
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
 
     NavHost(
         navController = navController,
@@ -107,18 +120,27 @@ fun MainScreen(
             }
         },
     ) {
-        // 主界面 (底部导航 + tab 内容)
         composable(Routes.MAIN) {
             AppScaffold(
                 bottomBar = {
-                    AppNavigationBar {
-                        tabs.forEachIndexed { index, tab ->
-                            AppNavigationBarItem(
-                                selected = currentTab == index,
-                                onClick = { currentTab = index },
-                                icon = tab.icon,
-                                label = tab.label,
-                            )
+                    // 液态玻璃底栏 (模糊捕获背景)
+                    GlassCard(
+                        backdrop = backdrop,
+                        modifier = Modifier.fillMaxSize(),
+                        cornerRadius = 0.dp,
+                        blurRadius = 24f,
+                    ) {
+                        AppNavigationBar {
+                            tabs.forEachIndexed { index, tab ->
+                                AppNavigationBarItem(
+                                    selected = pagerState.currentPage == index,
+                                    onClick = {
+                                        scope.launch { pagerState.animateScrollToPage(index) }
+                                    },
+                                    icon = tab.icon,
+                                    label = tab.label,
+                                )
+                            }
                         }
                     }
                 },
@@ -126,21 +148,17 @@ fun MainScreen(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .padding(innerPadding),
+                        .padding(innerPadding)
+                        // 捕获背景供液态玻璃模糊
+                        .then(captureModifier)
+                        .background(MiuixTheme.colorScheme.background),
                 ) {
-                    // tab 切换滑动动画 (方向跟随 tab 顺序)
-                    AnimatedContent(
-                        targetState = currentTab,
-                        transitionSpec = {
-                            val direction = if (targetState > initialState) 1 else -1
-                            (slideInHorizontally(tween(280)) { it / 3 * direction } + fadeIn(tween(280)))
-                                .togetherWith(
-                                    slideOutHorizontally(tween(280)) { -it / 4 * direction } + fadeOut(tween(280))
-                                )
-                        },
-                        label = "tabSwitch",
-                    ) { tab ->
-                        when (tab) {
+                    // HorizontalPager: tab 左右滑动切换
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                    ) { page ->
+                        when (page) {
                             0 -> HomeScreen(
                                 onAppClick = { navController.navigate(Routes.detail(it)) },
                                 onOpenUrl = { url, title ->

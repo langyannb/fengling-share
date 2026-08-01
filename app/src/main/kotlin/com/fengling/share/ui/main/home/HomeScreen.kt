@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -35,11 +36,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
@@ -49,6 +52,7 @@ import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
 import com.fengling.share.ui.components.rememberGlassBackdrop
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -116,8 +120,21 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            // 紧凑顶栏 (背景覆盖状态栏, 标题不占大空间)
-            AppTopBar(title = "风铃分享库")
+            // OShin 式大标题 (28sp Bold, 页面头部紧凑)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MiuixTheme.colorScheme.surface)
+                    .statusBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+            ) {
+                Text(
+                    text = "风铃分享库",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.onBackground,
+                )
+            }
         },
     ) { innerPadding ->
         PullToRefresh(
@@ -437,10 +454,19 @@ private fun BannerCarousel(
             pageSpacing = 8.dp,
         ) { page ->
             val banner = banners[page]
+            // OShin 式缩放/透明度动画 (相邻页缩小变淡)
+            val pageOffset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+            val scale = lerp(1f, 0.88f, abs(pageOffset).coerceAtMost(1f))
+            val alpha = lerp(1f, 0.6f, abs(pageOffset).coerceAtMost(1f))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(140.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        this.alpha = alpha
+                    }
                     .clip(RoundedCornerShape(16.dp))
                     .clickable { onBannerClick(banner) },
             ) {
