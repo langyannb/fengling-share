@@ -105,7 +105,43 @@ fun WebViewScreen(
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean = false
+            ): Boolean {
+                val url = request.url.toString()
+                // UC 网盘等站点用 uclink:// 私有协议跳转, WebView 无法处理
+                // 拦截并提取 url 参数在 WebView 内继续加载; 提取失败则外部打开
+                if (url.startsWith("uclink://")) {
+                    val target = Uri.parse(url).getQueryParameter("url")
+                    if (!target.isNullOrBlank()) {
+                        view.loadUrl(target)
+                    } else {
+                        try {
+                            view.context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            )
+                        } catch (_: Exception) { }
+                    }
+                    return true
+                }
+                return false
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                if (url.startsWith("uclink://")) {
+                    val target = Uri.parse(url).getQueryParameter("url")
+                    if (!target.isNullOrBlank()) {
+                        view.loadUrl(target)
+                    } else {
+                        try {
+                            view.context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            )
+                        } catch (_: Exception) { }
+                    }
+                    return true
+                }
+                return false
+            }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
