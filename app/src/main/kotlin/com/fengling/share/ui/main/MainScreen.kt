@@ -162,6 +162,9 @@ fun MainScreen(
                 onOpenWeb = { url, title, password ->
                     navController.navigate(Routes.webview(url, title, password))
                 },
+                onOpenSubApp = { subId ->
+                    navController.navigate(Routes.detail(subId))
+                },
             )
         }
 

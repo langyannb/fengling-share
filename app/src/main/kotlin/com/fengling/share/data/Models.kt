@@ -51,6 +51,9 @@ data class AppItem(
     val rating: Double,
     val categoryName: String,
     val panLinks: List<PanLink> = emptyList(),
+    val packId: Int? = null,
+    val packItems: List<PackItem> = emptyList(),
+    val parentPack: PackItem? = null,
 ) {
     companion object {
         fun fromJson(json: JSONObject): AppItem = AppItem(
@@ -68,6 +71,52 @@ data class AppItem(
                 ?.let { arr ->
                     (0 until arr.length()).map { PanLink.fromJson(arr.getJSONObject(it)) }
                 } ?: emptyList(),
+            packId = if (json.isNull("pack_id")) null else json.optInt("pack_id", 0).takeIf { it > 0 },
+            packItems = json.optJSONArray("pack_items")
+                ?.let { arr ->
+                    (0 until arr.length()).map { PackItem.fromJson(arr.getJSONObject(it)) }
+                } ?: emptyList(),
+            parentPack = if (!json.isNull("parent_pack")) {
+                json.optJSONObject("parent_pack")?.let { PackItem.fromJson(it) }
+            } else null,
+        )
+    }
+}
+
+/** 整合包子项 (轻量) */
+data class PackItem(
+    val id: Int,
+    val name: String,
+    val icon: String,
+    val version: String,
+    val downloadCount: Int,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): PackItem = PackItem(
+            id = json.optInt("id", 0),
+            name = json.optString("name", ""),
+            icon = json.optString("icon", ""),
+            version = json.optString("version", ""),
+            downloadCount = json.optInt("download_count", 0),
+        )
+    }
+}
+
+/** 轮播图 */
+data class Banner(
+    val id: Int,
+    val image: String,
+    val title: String,
+    val appId: Int?,
+    val appName: String,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): Banner = Banner(
+            id = json.optInt("id", 0),
+            image = json.optString("image", ""),
+            title = json.optString("title", ""),
+            appId = if (json.isNull("app_id")) null else json.optInt("app_id", 0).takeIf { it > 0 },
+            appName = json.optString("app_name", ""),
         )
     }
 }

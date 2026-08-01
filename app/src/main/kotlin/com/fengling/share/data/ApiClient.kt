@@ -61,6 +61,13 @@ object ApiClient {
         }
     }
 
+    /** 轮播图 */
+    suspend fun getBanners(): List<Banner> = withContext(Dispatchers.IO) {
+        val obj = request("banners")
+        val arr = obj.optJSONArray("data") ?: return@withContext emptyList()
+        (0 until arr.length()).map { Banner.fromJson(arr.getJSONObject(it)) }
+    }
+
     /** 分类列表 */
     suspend fun getCategories(): List<Category> = withContext(Dispatchers.IO) {
         val obj = request("categories")

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
+import com.fengling.share.data.PackItem
 import com.fengling.share.data.PanLink
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.main.home.formatCount
@@ -58,6 +59,7 @@ fun DetailScreen(
     appId: Int,
     onBack: () -> Unit,
     onOpenWeb: (String, String, String) -> Unit,
+    onOpenSubApp: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -210,6 +212,28 @@ fun DetailScreen(
                             Spacer(Modifier.height(14.dp))
                         }
 
+                        // 整合包: 包含的软件
+                        if (item.packItems.isNotEmpty()) {
+                            SmallTitle(text = "包含软件")
+                            item.packItems.forEach { sub ->
+                                PackItemCard(
+                                    item = sub,
+                                    onClick = { onOpenSubApp(sub.id) },
+                                )
+                            }
+                            Spacer(Modifier.height(14.dp))
+                        }
+
+                        // 所属整合包
+                        if (item.parentPack != null) {
+                            SmallTitle(text = "所属整合包")
+                            PackItemCard(
+                                item = item.parentPack,
+                                onClick = { onOpenSubApp(item.parentPack!!.id) },
+                            )
+                            Spacer(Modifier.height(14.dp))
+                        }
+
                         // 网盘下载
                         if (item.panLinks.isNotEmpty()) {
                             SmallTitle(text = "选择下载方式")
@@ -347,6 +371,77 @@ private fun PanLinkCard(
             }
             Text(
                 text = "下载",
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/** 整合包子项卡片 */
+@Composable
+private fun PackItemCard(item: PackItem, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        cornerRadius = 14.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 图标
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (item.icon.isNotEmpty()) {
+                    AsyncImage(
+                        model = item.icon,
+                        contentDescription = item.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Text(
+                        text = item.name.take(1),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = item.name,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = buildString {
+                        if (item.version.isNotEmpty()) append("v${item.version}")
+                        if (item.downloadCount > 0) {
+                            if (isNotEmpty()) append(" · ")
+                            append("${item.downloadCount} 次下载")
+                        }
+                    },
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
+            }
+            Text(
+                text = "查看",
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.primary,
             )

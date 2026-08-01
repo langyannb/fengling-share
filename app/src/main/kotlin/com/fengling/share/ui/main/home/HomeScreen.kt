@@ -1,5 +1,7 @@
 package com.fengling.share.ui.main.home
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,10 +13,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,10 +43,12 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
+import com.fengling.share.data.Banner
 import com.fengling.share.data.Category
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
 import com.fengling.share.ui.components.rememberGlassBackdrop
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.InputField
@@ -62,6 +72,7 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
+    var banners by remember { mutableStateOf<List<Banner>>(emptyList()) }
     var selectedCategory by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
@@ -96,6 +107,7 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         try {
             categories = ApiClient.getCategories()
+            banners = ApiClient.getBanners()
         } catch (_: Exception) { }
         loadApps(0, "")
     }
@@ -150,6 +162,16 @@ fun HomeScreen(
                             AppListItem(app = app, onClick = { onAppClick(app.id) })
                         }
                     }
+                }
+
+                // 顶部轮播图
+                if (banners.isNotEmpty()) {
+                    BannerCarousel(
+                        banners = banners,
+                        onBannerClick = { banner ->
+                            banner.appId?.let { onAppClick(it) }
+                        },
+                    )
                 }
 
                 // 分类 chips (横向滚动)
@@ -346,5 +368,104 @@ fun formatCount(count: Int): String {
         count >= 10000 -> String.format("%.1fw", count / 10000.0)
         count >= 1000 -> String.format("%.1fk", count / 1000.0)
         else -> count.toString()
+    }
+}
+
+/** 顶部轮播图 (HorizontalPager + 自动轮播 + 指示器) */
+@Composable
+private fun BannerCarousel(
+    banners: List<Banner>,
+    onBannerClick: (Banner) -> Unit,
+) {
+    val pagerState = rememberPagerState(pageCount = { banners.size })
+    val scope = rememberCoroutineScope()
+
+    // 自动轮播 (4s 切换, 无限循环)
+    LaunchedEffect(banners.size) {
+        if (banners.size > 1) {
+            while (true) {
+                delay(4000)
+                val next = (pagerState.currentPage + 1) % banners.size
+                pagerState.animateScrollToPage(next)
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp),
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            pageSpacing = 8.dp,
+        ) { page ->
+            val banner = banners[page]
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onBannerClick(banner) },
+            ) {
+                AsyncImage(
+                    model = banner.image,
+                    contentDescription = banner.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+                // 渐变遮罩 + 标题
+                if (banner.title.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.55f))
+                                )
+                            ),
+                    )
+                    Text(
+                        text = banner.title,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        // 指示器
+        if (banners.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                repeat(banners.size) { index ->
+                    val selected = pagerState.currentPage == index
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .size(width = if (selected) 16.dp else 6.dp, height = 6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (selected) MiuixTheme.colorScheme.primary
+                                else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.3f)
+                            ),
+                    )
+                }
+            }
+        }
     }
 }
