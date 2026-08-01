@@ -43,6 +43,7 @@ import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
+import com.fengling.share.ui.components.BlurredTopBarBackground
 import com.fengling.share.ui.components.navigation.LiquidBottomBar
 import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
@@ -166,6 +167,12 @@ fun MainScreen(
                         }
                     }
                 }
+
+                // 顶栏模糊渐变 (OShin 同款: 切页时背景模糊)
+                BlurredTopBarBackground(
+                    backdrop = backdrop,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
 
                 // OShin 完整版液态玻璃底栏 (拖动切 tab + lens + 高光 + 图标缩放)
                 LiquidBottomBar(
