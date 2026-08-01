@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton as M3TextButton
@@ -48,8 +50,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fengling.share.BuildConfig
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.AppVersion
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
@@ -87,9 +89,12 @@ fun MyScreen(
     var updateUrl by remember { mutableStateOf("") }
     var updateMode by remember { mutableStateOf("internal") }
     var updateLog by remember { mutableStateOf("") }
+    var forceUpdate by remember { mutableStateOf(false) }
 
-    // 当前版本号 (BuildConfig, 与 build.gradle 同步)
-    val currentVersion = BuildConfig.VERSION_NAME
+    // 当前版本号 (独立版本文件 AppVersion, 非 build.gradle — 防改包绕过)
+    val currentVersion = AppVersion.CURRENT
+    // 弹窗内显示的最新版本号 (从检查结果提取, 如 "发现新版本 v1.0.1" → "1.0.1")
+    val updateVersion = checkResult.substringAfter("v")
 
     fun checkVersion() {
         scope.launch {
@@ -102,6 +107,7 @@ fun MyScreen(
                     updateUrl = info.url
                     updateMode = info.updateMode
                     updateLog = info.updateLog
+                    forceUpdate = info.forceUpdate
                     showUpdateDialog = true
                 } else {
                     checkResult = "已是最新版本"
@@ -448,56 +454,111 @@ fun MyScreen(
         }
     }
 
-    // 发现新版本对话框
+    // 发现新版本对话框 (美化: 图标+版本醒目+更新日志+内置/外置选择)
     if (showUpdateDialog) {
+        // 强制更新: 拦截返回键 (用户必须更新, 弹窗不可关闭)
+        if (forceUpdate) {
+            BackHandler { /* 强制更新: 不允许返回 */ }
+        }
         AlertDialog(
-            onDismissRequest = { showUpdateDialog = false },
-            title = { Text("发现新版本 v${checkResult.substringAfter("v")}") },
-            text = {
-                Column {
-                    Text("当前版本: v$currentVersion")
-                    if (updateLog.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "更新内容:\n$updateLog",
-                            fontSize = 13.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+            onDismissRequest = {
+                // 强制更新: 不可关闭; 非强制: 可关闭
+                if (!forceUpdate) showUpdateDialog = false
+            },
+            title = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // 更新图标
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.SystemUpdate,
+                            contentDescription = null,
+                            tint = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp),
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "选择更新方式:",
+                        text = "发现新版本",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MiuixTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "v${updateVersion}",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                    if (forceUpdate) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "本次为强制更新，请更新后使用",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.error,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "当前版本: v$currentVersion",
                         fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                     )
+                    if (updateLog.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "更新内容:",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = updateLog,
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    }
                 }
             },
             confirmButton = {
-                // 内置更新: App 内置浏览器打开
+                // 按后端配置的更新方式: 内置=App内浏览器, 外置=系统浏览器
                 M3TextButton(onClick = {
                     showUpdateDialog = false
                     if (updateUrl.isNotEmpty()) {
-                        onOpenWeb(updateUrl, "更新下载")
+                        if (updateMode == "external") {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl)))
+                        } else {
+                            onOpenWeb(updateUrl, "更新下载")
+                        }
                     } else {
                         Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
                     }
                 }) {
-                    Text("内置更新", color = MiuixTheme.colorScheme.primary)
+                    Text(
+                        text = if (updateMode == "external") "去更新" else "立即更新",
+                        color = MiuixTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             },
             dismissButton = {
-                // 外置更新: 系统浏览器打开
-                M3TextButton(onClick = {
-                    showUpdateDialog = false
-                    if (updateUrl.isNotEmpty()) {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl))
-                        )
-                    } else {
-                        Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
+                // 强制更新: 无取消按钮; 非强制: 稍后再说
+                if (!forceUpdate) {
+                    M3TextButton(onClick = { showUpdateDialog = false }) {
+                        Text("稍后再说", color = MiuixTheme.colorScheme.onBackgroundVariant)
                     }
-                }) {
-                    Text("外置更新", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             },
         )

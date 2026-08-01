@@ -100,7 +100,7 @@ object ApiClient {
         data.optString("url") to data.optString("password")
     }
 
-    /** 版本检测: 返回最新版本信息 (version/url/update_log/update_mode) */
+    /** 版本检测: 返回最新版本信息 (version/url/update_log/update_mode/force_update) */
     suspend fun checkVersion(): VersionInfo = withContext(Dispatchers.IO) {
         val obj = request("version")
         val data = obj.optJSONObject("data") ?: JSONObject()
@@ -109,6 +109,7 @@ object ApiClient {
             url = data.optString("url", ""),
             updateLog = data.optString("update_log", ""),
             updateMode = data.optString("update_mode", "internal"),
+            forceUpdate = data.optInt("force_update", 0) == 1,
         )
     }
 }
@@ -119,6 +120,7 @@ data class VersionInfo(
     val url: String,
     val updateLog: String,
     val updateMode: String = "internal", // internal=内置浏览器, external=外置浏览器
+    val forceUpdate: Boolean = false,    // true=强制更新
 )
 
 /** 语义化版本比较: 返回 true 表示 [latest] 比 [current] 新 */
