@@ -1,8 +1,11 @@
 package com.fengling.share.ui.main
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.Crossfade
+import android.webkit.WebView
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -13,11 +16,17 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
@@ -30,17 +39,32 @@ import com.fengling.share.ui.main.my.MyScreen
 /** 底部导航 tab */
 private data class NavTab(val route: String, val label: String, val icon: ImageVector)
 
+/** 导航路由 */
+object Routes {
+    const val MAIN = "main"
+    const val DETAIL = "detail/{appId}"
+    const val WEBVIEW = "webview?url={url}&title={title}"
+
+    fun detail(appId: Int) = "detail/$appId"
+    fun webview(url: String, title: String) =
+        "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}"
+}
+
 /**
- * MainScreen - 主界面 (参考 legado-with-MD3 MainScreen)
- * MD3 Scaffold + 底部导航 + 页面切换 + 覆盖层(详情/浏览器)
- * 预测性返回: 覆盖层打开时返回手势关闭覆盖层
+ * MainScreen - 主界面 (Navigation Compose 返回栈)
+ * 结构: main(底部导航) → detail(详情) → webview(内置浏览器)
+ * - 转场动画: 水平滑动 + 淡入淡出
+ * - 预测性返回: Navigation 2.9 在 Android 13+ 自动启用系统手势动画
+ * - WebView 实例复用: 浏览器页不重建, 返回栈 pop 保留状态
  */
 @Composable
 fun MainScreen() {
-    var currentTab by remember { mutableIntStateOf(0) }
-    var currentAppId by remember { mutableStateOf<Int?>(null) }
-    var webUrl by remember { mutableStateOf<String?>(null) }
-    var webTitle by remember { mutableStateOf("") }
+    val navController = rememberNavController()
+    var currentTab by rememberSaveable { mutableIntStateOf(0) }
+
+    // 共享 WebView 实例 (Activity 生命周期内复用, 退出浏览器再进不重新加载)
+    val context = LocalContext.current
+    val sharedWebView = remember { WebView(context.applicationContext) }
 
     val tabs = remember {
         listOf(
@@ -50,20 +74,27 @@ fun MainScreen() {
         )
     }
 
-    // 返回键: 有覆盖层时返回关闭覆盖层 (系统预测动画由 enableOnBackInvokedCallback 提供)
-    BackHandler(enabled = currentAppId != null || webUrl != null) {
-        if (webUrl != null) {
-            webUrl = null
-        } else if (currentAppId != null) {
-            currentAppId = null
-        }
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        AppScaffold(
-            bottomBar = {
-                // 覆盖层打开时隐藏底栏
-                if (currentAppId == null && webUrl == null) {
+    NavHost(
+        navController = navController,
+        startDestination = Routes.MAIN,
+        modifier = Modifier.fillMaxSize(),
+        enterTransition = {
+            slideInHorizontally(tween(300)) { it / 3 } + fadeIn(tween(300))
+        },
+        exitTransition = {
+            fadeOut(tween(300))
+        },
+        popEnterTransition = {
+            fadeIn(tween(300))
+        },
+        popExitTransition = {
+            slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(300))
+        },
+    ) {
+        // 主界面 (底部导航 + tab 内容)
+        composable(Routes.MAIN) {
+            AppScaffold(
+                bottomBar = {
                     AppNavigationBar {
                         tabs.forEachIndexed { index, tab ->
                             AppNavigationBarItem(
@@ -74,56 +105,53 @@ fun MainScreen() {
                             )
                         }
                     }
-                }
-            },
-        ) { innerPadding ->
-            Crossfade(
-                targetState = currentTab,
-                animationSpec = tween(200),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-            ) { tabIndex ->
-                when (tabIndex) {
-                    0 -> HomeScreen(onAppClick = { currentAppId = it })
-                    1 -> ExploreScreen(onAppClick = { currentAppId = it })
-                    else -> MyScreen()
+                },
+            ) { innerPadding ->
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                ) {
+                    when (currentTab) {
+                        0 -> HomeScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                        1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                        else -> MyScreen()
+                    }
                 }
             }
         }
 
-        // 详情覆盖层
-        currentAppId?.let { appId ->
-            Crossfade(
-                targetState = appId,
-                animationSpec = tween(200),
-                modifier = Modifier.fillMaxSize(),
-            ) { id ->
-                DetailScreen(
-                    appId = id,
-                    onBack = { currentAppId = null },
-                    onOpenWeb = { url, title ->
-                        currentAppId = null
-                        webUrl = url
-                        webTitle = title
-                    },
-                )
-            }
+        // 详情页
+        composable(
+            route = Routes.DETAIL,
+            arguments = listOf(navArgument("appId") { type = NavType.IntType }),
+        ) { backStackEntry ->
+            val appId = backStackEntry.arguments?.getInt("appId") ?: 0
+            DetailScreen(
+                appId = appId,
+                onBack = { navController.popBackStack() },
+                onOpenWeb = { url, title ->
+                    navController.navigate(Routes.webview(url, title))
+                },
+            )
         }
 
-        // 内置浏览器覆盖层
-        webUrl?.let { url ->
-            Crossfade(
-                targetState = url,
-                animationSpec = tween(200),
-                modifier = Modifier.fillMaxSize(),
-            ) { u ->
-                WebViewScreen(
-                    url = u,
-                    title = webTitle,
-                    onBack = { webUrl = null },
-                )
-            }
+        // 内置浏览器
+        composable(
+            route = Routes.WEBVIEW,
+            arguments = listOf(
+                navArgument("url") { type = NavType.StringType; defaultValue = "" },
+                navArgument("title") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { backStackEntry ->
+            val url = backStackEntry.arguments?.getString("url") ?: ""
+            val title = backStackEntry.arguments?.getString("title") ?: ""
+            WebViewScreen(
+                url = url,
+                title = title,
+                sharedWebView = sharedWebView,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }

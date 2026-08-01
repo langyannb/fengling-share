@@ -16,10 +16,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -31,6 +31,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,8 +44,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * WebViewScreen - 内置浏览器 (参考 legado-with-MD3 ui/browser)
- * MD3 TopAppBar + 右上角菜单(复制链接/浏览器打开/刷新) + 预测性返回
+ * WebViewScreen - 内置浏览器 (Navigation Compose 返回栈)
+ * - WebView 实例复用: sharedWebView 由上层持有, 退出再进不重新加载
+ * - 预测性返回: 内部历史回退由 BackHandler 承接, 无历史时 Navigation 返回
+ * - 右上角菜单: 复制链接 / 浏览器打开 / 刷新
+ *
+ * @param sharedWebView 复用的 WebView 实例 (Activity 生命周期内保持)
  */
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,23 +57,57 @@ import androidx.compose.ui.viewinterop.AndroidView
 fun WebViewScreen(
     url: String,
     title: String,
+    sharedWebView: WebView,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var pageTitle by remember { mutableStateOf(title) }
-    var currentUrl by remember { mutableStateOf(url) }
-    var progress by remember { mutableIntStateOf(0) }
-    var webView by remember { mutableStateOf<WebView?>(null) }
+    var progress by remember { mutableIntStateOf(100) }
     var menuExpanded by remember { mutableStateOf(false) }
 
-    // 预测性返回: WebView 有历史先回退历史, 否则关闭
-    BackHandler {
-        if (webView?.canGoBack() == true) {
-            webView?.goBack()
-        } else {
-            onBack()
+    val webView = sharedWebView
+
+    // 配置 WebView (只配置一次)
+    LaunchedEffect(webView) {
+        webView.settings.javaScriptEnabled = true
+        webView.settings.domStorageEnabled = true
+        webView.settings.loadWithOverviewMode = true
+        webView.settings.useWideViewPort = true
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean = false
         }
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, newProgress: Int) {
+                progress = newProgress
+            }
+
+            override fun onReceivedTitle(view: WebView, title: String?) {
+                if (!title.isNullOrBlank()) pageTitle = title
+            }
+        }
+    }
+
+    // URL 变化才加载 (新页面加载; 返回时复用 WebView 内部历史不重载)
+    LaunchedEffect(webView, url) {
+        if (webView.url == null || webView.url != url) {
+            webView.loadUrl(url)
+        }
+    }
+
+    // 页面离开时只停止加载, 不销毁 WebView (复用)
+    DisposableEffect(Unit) {
+        onDispose {
+            webView.stopLoading()
+        }
+    }
+
+    // 返回键: 优先回退 WebView 内部历史, 无历史时由 Navigation 返回栈关闭
+    BackHandler(enabled = webView.canGoBack()) {
+        webView.goBack()
     }
 
     Scaffold(
@@ -75,7 +115,9 @@ fun WebViewScreen(
             TopAppBar(
                 title = { Text(pageTitle, maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (webView.canGoBack()) webView.goBack() else onBack()
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -89,7 +131,6 @@ fun WebViewScreen(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },
                         ) {
-                            // 复制链接
                             DropdownMenuItem(
                                 text = { Text("复制链接") },
                                 leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
@@ -98,28 +139,26 @@ fun WebViewScreen(
                                     val clipboard =
                                         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     clipboard.setPrimaryClip(
-                                        ClipData.newPlainText("url", currentUrl)
+                                        ClipData.newPlainText("url", webView.url ?: "")
                                     )
                                 },
                             )
-                            // 浏览器打开
                             DropdownMenuItem(
                                 text = { Text("浏览器打开") },
                                 leadingIcon = { Icon(Icons.Filled.OpenInBrowser, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
                                     context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(webView.url ?: url))
                                     )
                                 },
                             )
-                            // 刷新
                             DropdownMenuItem(
                                 text = { Text("刷新") },
                                 leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
-                                    webView?.reload()
+                                    webView.reload()
                                 },
                             )
                         }
@@ -134,35 +173,8 @@ fun WebViewScreen(
                 .padding(innerPadding),
         ) {
             AndroidView(
+                factory = { webView },
                 modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.loadWithOverviewMode = true
-                        settings.useWideViewPort = true
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView,
-                                request: WebResourceRequest,
-                            ): Boolean = false
-                        }
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onProgressChanged(view: WebView, newProgress: Int) {
-                                progress = newProgress
-                            }
-                            override fun onReceivedTitle(view: WebView, title: String?) {
-                                if (!title.isNullOrBlank()) pageTitle = title
-                            }
-                        }
-                        webView = this
-                        loadUrl(url)
-                    }
-                },
-                update = { view ->
-                    // 同步当前 URL (用于复制/浏览器打开)
-                    currentUrl = view.url ?: currentUrl
-                },
             )
             // 加载进度条
             if (progress in 1..99) {

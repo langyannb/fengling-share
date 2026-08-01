@@ -57,6 +57,8 @@ dependencies {
     // Material 3 (标准 MD3 风格)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
+    // 导航 (返回栈 + 预测性返回动画)
+    implementation(libs.androidx.navigation.compose)
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
