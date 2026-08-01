@@ -1,7 +1,5 @@
 package com.fengling.share.ui
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,7 +25,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,9 +46,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun DetailScreen(
     appId: Int,
     onBack: () -> Unit,
+    onOpenWeb: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var app by remember { mutableStateOf<AppItem?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -219,9 +216,8 @@ fun DetailScreen(
                                         try {
                                             val (url, password) = ApiClient.clickLink(link.id)
                                             if (url.isNotEmpty()) {
-                                                context.startActivity(
-                                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                )
+                                                // 内置浏览器打开
+                                                onOpenWeb(url, displayLinkName(link))
                                             }
                                         } catch (_: Exception) { }
                                         clicking = false
@@ -296,4 +292,16 @@ private fun PanLinkCard(link: PanLink, enabled: Boolean, onClick: () -> Unit) {
             )
         }
     }
+}
+
+/** 网盘链接显示名 */
+private fun displayLinkName(link: PanLink): String {
+    val label = when (link.panType) {
+        "uc" -> "UC网盘"
+        "quark" -> "夸克网盘"
+        "baidu" -> "百度网盘"
+        "ali" -> "阿里云盘"
+        else -> "网盘下载"
+    }
+    return if (link.label.isNotEmpty()) link.label else label
 }
