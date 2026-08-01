@@ -141,7 +141,12 @@ fun MainScreen(
                         label = "tabSwitch",
                     ) { tab ->
                         when (tab) {
-                            0 -> HomeScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                            0 -> HomeScreen(
+                                onAppClick = { navController.navigate(Routes.detail(it)) },
+                                onOpenUrl = { url, title ->
+                                    navController.navigate(Routes.webview(url, title))
+                                },
+                            )
                             1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
                             else -> MyScreen(onThemeChanged = onThemeChanged)
                         }

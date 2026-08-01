@@ -67,6 +67,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun HomeScreen(
     onAppClick: (Int) -> Unit,
+    onOpenUrl: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -169,7 +170,11 @@ fun HomeScreen(
                     BannerCarousel(
                         banners = banners,
                         onBannerClick = { banner ->
-                            banner.appId?.let { onAppClick(it) }
+                            if (banner.url.isNotEmpty()) {
+                                onOpenUrl(banner.url, banner.title.ifEmpty { "轮播" })
+                            } else {
+                                banner.appId?.let { onAppClick(it) }
+                            }
                         },
                     )
                 }

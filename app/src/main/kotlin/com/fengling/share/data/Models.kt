@@ -109,6 +109,7 @@ data class Banner(
     val title: String,
     val appId: Int?,
     val appName: String,
+    val url: String = "",
 ) {
     companion object {
         fun fromJson(json: JSONObject): Banner = Banner(
@@ -117,6 +118,7 @@ data class Banner(
             title = json.optString("title", ""),
             appId = if (json.isNull("app_id")) null else json.optInt("app_id", 0).takeIf { it > 0 },
             appName = json.optString("app_name", ""),
+            url = json.optString("url", ""),
         )
     }
 }
