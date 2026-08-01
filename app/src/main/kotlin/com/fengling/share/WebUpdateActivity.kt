@@ -43,10 +43,23 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
     val webView = remember { WebView(context) }
     BackHandler { onBack() }
 
-    // 配置 WebView (一次性)
+    // 配置 WebView (一次性, 与主浏览器同配置)
     remember {
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
+        val settings = webView.settings
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.loadWithOverviewMode = true
+        settings.useWideViewPort = true
+        settings.databaseEnabled = true
+        settings.javaScriptCanOpenWindowsAutomatically = true
+        settings.setSupportMultipleWindows(true)
+        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        // UA 伪装 (UC网盘等站点检测 WebView UA 会拦截)
+        settings.userAgentString =
+            android.webkit.WebSettings.getDefaultUserAgent(context)
+                .replace("; wv", "")
+                .replace("Version/4.0", "")
+                .trim() + " Mobile"
         webView.webViewClient = WebViewClient()
         webView.loadUrl(url)
     }

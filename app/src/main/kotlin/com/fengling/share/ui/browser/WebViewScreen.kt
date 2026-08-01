@@ -84,10 +84,23 @@ fun WebViewScreen(
 
     // 配置 WebView (只配置一次)
     LaunchedEffect(webView) {
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.loadWithOverviewMode = true
-        webView.settings.useWideViewPort = true
+        val settings = webView.settings
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.loadWithOverviewMode = true
+        settings.useWideViewPort = true
+        settings.databaseEnabled = true
+        settings.javaScriptCanOpenWindowsAutomatically = true
+        settings.setSupportMultipleWindows(true)
+        settings.mediaPlaybackRequiresUserGesture = false
+        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        // UA 伪装: 去掉 WebView 标识, 伪装成手机 Chrome (UC网盘等站点检测 WebView UA 会拦截)
+        settings.userAgentString =
+            android.webkit.WebSettings.getDefaultUserAgent(context)
+                .replace("; wv", "")
+                .replace("Version/4.0", "")
+                .replace("Version/4.0 Mobile", "")
+                .trim() + " Mobile"
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
