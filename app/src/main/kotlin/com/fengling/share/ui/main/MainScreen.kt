@@ -11,6 +11,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -40,8 +41,6 @@ import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
-import com.fengling.share.ui.components.GlassCard
-import com.fengling.share.ui.components.rememberGlassBackdrop
 import com.fengling.share.ui.components.navigation.AppNavigationBar
 import com.fengling.share.ui.components.navigation.AppNavigationBarItem
 import com.fengling.share.ui.main.explore.ExploreScreen
@@ -82,9 +81,6 @@ fun MainScreen(
     val context = LocalContext.current
     val sharedWebView = remember { WebView(context.applicationContext) }
 
-    // 液态玻璃 backdrop (页面级捕获)
-    val (backdrop, captureModifier) = rememberGlassBackdrop()
-
     val tabs = remember {
         listOf(
             NavTab("首页", Icons.Outlined.Home),
@@ -123,24 +119,21 @@ fun MainScreen(
         composable(Routes.MAIN) {
             AppScaffold(
                 bottomBar = {
-                    // 液态玻璃底栏 (模糊捕获背景)
-                    GlassCard(
-                        backdrop = backdrop,
-                        modifier = Modifier.fillMaxSize(),
-                        cornerRadius = 0.dp,
-                        blurRadius = 24f,
+                    // 半透明玻璃感底栏 (Miuix NavigationBar, 稳妥不黑屏)
+                    AppNavigationBar(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.92f)),
                     ) {
-                        AppNavigationBar {
-                            tabs.forEachIndexed { index, tab ->
-                                AppNavigationBarItem(
-                                    selected = pagerState.currentPage == index,
-                                    onClick = {
-                                        scope.launch { pagerState.animateScrollToPage(index) }
-                                    },
-                                    icon = tab.icon,
-                                    label = tab.label,
-                                )
-                            }
+                        tabs.forEachIndexed { index, tab ->
+                            AppNavigationBarItem(
+                                selected = pagerState.currentPage == index,
+                                onClick = {
+                                    scope.launch { pagerState.animateScrollToPage(index) }
+                                },
+                                icon = tab.icon,
+                                label = tab.label,
+                            )
                         }
                     }
                 },
@@ -149,8 +142,6 @@ fun MainScreen(
                     Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                        // 捕获背景供液态玻璃模糊
-                        .then(captureModifier)
                         .background(MiuixTheme.colorScheme.background),
                 ) {
                     // HorizontalPager: tab 左右滑动切换
