@@ -1,5 +1,6 @@
 package com.fengling.share.ui.main.explore
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,12 +10,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -33,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.fengling.share.data.ApiClient
@@ -48,8 +54,8 @@ import com.fengling.share.ui.theme.adaptiveListPadding
 import kotlinx.coroutines.launch
 
 /**
- * ExploreScreen - 分类页 (参考 legado-with-MD3 ui/main/explore)
- * 分类列表 + 点分类展开该分类的软件
+ * ExploreScreen - 分类页 (高级卡片风格)
+ * 分类卡片(彩色图标+计数) → 分类内软件列表
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,7 +67,6 @@ fun ExploreScreen(
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    // 展开的分类 id; null = 分类列表视图
     var expandedCategory by remember { mutableStateOf<Int?>(null) }
     var categoryApps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var categoryLoading by remember { mutableStateOf(false) }
@@ -87,7 +92,6 @@ fun ExploreScreen(
     Scaffold(
         topBar = {
             if (expandedCategory != null) {
-                // 分类内视图: 返回栏
                 TopAppBar(
                     title = { Text(categories.firstOrNull { it.id == expandedCategory }?.name ?: "分类") },
                     navigationIcon = {
@@ -121,7 +125,6 @@ fun ExploreScreen(
                 }
             }
             expandedCategory != null -> {
-                // 分类内软件列表
                 val catId = expandedCategory!!
                 if (categoryLoading && categoryApps.isEmpty()) {
                     Box(
@@ -166,7 +169,7 @@ fun ExploreScreen(
                         .fillMaxSize()
                         .padding(innerPadding),
                     contentPadding = adaptiveListPadding(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     item {
                         SectionTitle(text = "全部分类")
@@ -188,13 +191,13 @@ fun ExploreScreen(
     }
 }
 
-/** 分类卡片 */
+/** 分类卡片 (高端: 彩色图标圆 + 名称 + 计数 + 箭头) */
 @Composable
 private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
     GlassCard(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 14.dp,
+        cornerRadius = 18.dp,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
@@ -203,23 +206,43 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 彩色图标圆
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Category,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            // 名称 + 计数
             Column(Modifier.weight(1f)) {
                 Text(
                     text = name,
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(3.dp))
                 Text(
                     text = "$appCount 款软件",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // 箭头
             Icon(
-                imageVector = Icons.Filled.ChevronRight,
+                imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -245,9 +268,7 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                 Spacer(Modifier.height(3.dp))
                 AppSubtitle(
                     text = buildString {
-                        if (app.version.isNotEmpty()) {
-                            append("v${app.version}")
-                        }
+                        if (app.version.isNotEmpty()) append("v${app.version}")
                         if (app.downloadCount > 0) {
                             if (isNotEmpty()) append(" · ")
                             append("${app.downloadCount} 次下载")
@@ -256,9 +277,16 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                 )
             }
             AppText(
-                text = "查看 ›",
+                text = "查看",
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

@@ -12,9 +12,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Category
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -74,9 +74,9 @@ fun MainScreen(
 
     val tabs = remember {
         listOf(
-            NavTab("home", "首页", Icons.Filled.Home),
-            NavTab("explore", "分类", Icons.Filled.Category),
-            NavTab("settings", "设置", Icons.Filled.Settings),
+            NavTab("home", "首页", Icons.Outlined.Home),
+            NavTab("explore", "分类", Icons.Outlined.Category),
+            NavTab("settings", "设置", Icons.Outlined.Settings),
         )
     }
 

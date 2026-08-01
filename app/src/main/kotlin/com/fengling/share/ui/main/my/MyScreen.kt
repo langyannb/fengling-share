@@ -20,10 +20,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Smartphone
-import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.outlined.Brightness6
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -128,9 +128,9 @@ fun MyScreen(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
                 SettingRow(
-                    icon = Icons.Filled.Smartphone,
+                    icon = Icons.Outlined.Smartphone,
                     title = "预测性返回",
-                    subtitle = "开启: 返回时页面滑动过渡\n关闭: 直接返回无动画 (系统手势预览由系统控制)",
+                    subtitle = "开启: 返回时页面滑动过渡\n关闭: 直接返回无动画",
                     trailing = {
                         Switch(
                             checked = predictiveBack,
@@ -152,7 +152,7 @@ fun MyScreen(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
                 SettingRow(
-                    icon = Icons.Filled.Brightness6,
+                    icon = Icons.Outlined.Brightness6,
                     title = "主题",
                     subtitle = themeMode.label,
                     onClick = { showThemeDialog = true },
@@ -169,12 +169,12 @@ fun MyScreen(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
                 SettingRow(
-                    icon = Icons.Filled.Info,
+                    icon = Icons.Outlined.Info,
                     title = "当前版本",
                     subtitle = "v$currentVersion",
                 )
                 SettingRow(
-                    icon = Icons.Filled.SystemUpdate,
+                    icon = Icons.Outlined.SystemUpdate,
                     title = "检查更新",
                     subtitle = if (checkResult.isNotEmpty()) checkResult else "检测最新版本",
                     trailing = {
