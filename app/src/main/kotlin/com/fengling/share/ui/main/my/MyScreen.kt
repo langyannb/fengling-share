@@ -47,9 +47,12 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -236,7 +239,6 @@ fun MyScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(520.dp)
-                .offset(y = 50.dp)
                 .alpha(bgAlpha),
             factory = { ctx -> BgEffectView(ctx, bgEffectMode) },
             update = { view ->
@@ -695,7 +697,7 @@ fun MyScreen(
                     OShinSettingRow(
                         title = "官方网站",
                         summary = if (aboutConfig.website.isNotEmpty()) aboutConfig.website else "访问官网了解详情",
-                        leftIcon = Icons.Filled.Star,
+                        leftIcon = Icons.Filled.Language,
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.website.isNotEmpty()) {
@@ -709,7 +711,7 @@ fun MyScreen(
                     OShinSettingRow(
                         title = "GitHub",
                         summary = if (aboutConfig.github.isNotEmpty()) "开源项目 · 欢迎 Star" else "开源项目",
-                        leftIcon = Icons.Filled.Star,
+                        leftIcon = Icons.Filled.Code,
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.github.isNotEmpty()) {
@@ -723,7 +725,7 @@ fun MyScreen(
                     OShinSettingRow(
                         title = "捐赠支持",
                         summary = "喜欢就支持一下吧",
-                        leftIcon = Icons.Filled.ThumbUp,
+                        leftIcon = Icons.Filled.Favorite,
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.donate.isNotEmpty()) {
