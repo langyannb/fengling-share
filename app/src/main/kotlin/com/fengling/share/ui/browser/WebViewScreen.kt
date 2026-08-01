@@ -11,6 +11,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -176,10 +178,15 @@ fun WebViewScreen(
                 factory = { webView },
                 modifier = Modifier.fillMaxSize(),
             )
-            // 加载进度条
-            if (progress in 1..99) {
+            // 加载进度条 (平滑动画, 避免 onProgressChanged 跳变僵硬)
+            val animatedProgress by animateFloatAsState(
+                targetValue = progress / 100f,
+                animationSpec = tween(250),
+                label = "webProgress",
+            )
+            if (animatedProgress < 1f) {
                 LinearProgressIndicator(
-                    progress = { progress / 100f },
+                    progress = { animatedProgress },
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,

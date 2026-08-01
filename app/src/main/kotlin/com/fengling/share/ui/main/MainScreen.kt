@@ -27,6 +27,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.fengling.share.data.Settings
+import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
@@ -58,7 +60,9 @@ object Routes {
  * - WebView 实例复用: 浏览器页不重建, 返回栈 pop 保留状态
  */
 @Composable
-fun MainScreen() {
+fun MainScreen(
+    onThemeChanged: (ThemeMode) -> Unit = {},
+) {
     val navController = rememberNavController()
     var currentTab by rememberSaveable { mutableIntStateOf(0) }
 
@@ -79,16 +83,24 @@ fun MainScreen() {
         startDestination = Routes.MAIN,
         modifier = Modifier.fillMaxSize(),
         enterTransition = {
-            slideInHorizontally(tween(300)) { it / 3 } + fadeIn(tween(300))
+            if (Settings.predictiveBackEnabled) {
+                slideInHorizontally(tween(300)) { it / 3 } + fadeIn(tween(300))
+            } else {
+                fadeIn(tween(200))
+            }
         },
         exitTransition = {
-            fadeOut(tween(300))
+            fadeOut(tween(if (Settings.predictiveBackEnabled) 300 else 200))
         },
         popEnterTransition = {
-            fadeIn(tween(300))
+            fadeIn(tween(if (Settings.predictiveBackEnabled) 300 else 200))
         },
         popExitTransition = {
-            slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(300))
+            if (Settings.predictiveBackEnabled) {
+                slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(300))
+            } else {
+                fadeOut(tween(200))
+            }
         },
     ) {
         // 主界面 (底部导航 + tab 内容)
@@ -115,7 +127,7 @@ fun MainScreen() {
                     when (currentTab) {
                         0 -> HomeScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
                         1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
-                        else -> MyScreen()
+                        else -> MyScreen(onThemeChanged = onThemeChanged)
                     }
                 }
             }

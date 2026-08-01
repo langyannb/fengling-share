@@ -92,6 +92,24 @@ object ApiClient {
         val data = obj.optJSONObject("data") ?: JSONObject()
         data.optString("url") to data.optString("password")
     }
+
+    /** 版本检测: 返回最新版本信息 (version/url/update_log) */
+    suspend fun checkVersion(): VersionInfo = withContext(Dispatchers.IO) {
+        val obj = request("version")
+        val data = obj.optJSONObject("data") ?: JSONObject()
+        VersionInfo(
+            version = data.optString("version", ""),
+            url = data.optString("url", ""),
+            updateLog = data.optString("update_log", ""),
+        )
+    }
 }
+
+/** 版本信息 */
+data class VersionInfo(
+    val version: String,
+    val url: String,
+    val updateLog: String,
+)
 
 class ApiException(message: String) : Exception(message)
