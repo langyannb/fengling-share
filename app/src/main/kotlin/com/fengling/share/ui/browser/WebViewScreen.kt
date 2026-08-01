@@ -105,43 +105,11 @@ fun WebViewScreen(
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean {
-                val url = request.url.toString()
-                // UC 网盘等站点用 uclink:// 私有协议跳转, WebView 无法处理
-                // 拦截并提取 url 参数在 WebView 内继续加载; 提取失败则外部打开
-                if (url.startsWith("uclink://")) {
-                    val target = Uri.parse(url).getQueryParameter("url")
-                    if (!target.isNullOrBlank()) {
-                        view.loadUrl(target)
-                    } else {
-                        try {
-                            view.context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            )
-                        } catch (_: Exception) { }
-                    }
-                    return true
-                }
-                return false
-            }
+            ): Boolean = handleProtocolUrl(view, request.url.toString())
 
             @Deprecated("Deprecated in Java")
-            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                if (url.startsWith("uclink://")) {
-                    val target = Uri.parse(url).getQueryParameter("url")
-                    if (!target.isNullOrBlank()) {
-                        view.loadUrl(target)
-                    } else {
-                        try {
-                            view.context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            )
-                        } catch (_: Exception) { }
-                    }
-                    return true
-                }
-                return false
-            }
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
+                handleProtocolUrl(view, url)
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
@@ -313,4 +281,48 @@ fun WebViewScreen(
             }
         }
     }
+}
+
+/**
+ * 处理协议跳转链接 (UC 网盘等站点使用 intent:// / uclink:// / ucfp: 等私有协议)
+ * 规则: 非 http(s) scheme 全部拦截 —— 先提取 url 参数在 WebView 内加载,
+ * 提取失败则 Intent.parseUri 打开, 再失败外部浏览器打开, 绝不留给 WebView 显示乱码
+ */
+private fun handleProtocolUrl(view: WebView, url: String): Boolean {
+    // 提取 scheme (intent:// 的 scheme 在 #Intent;scheme=xxx;end 里)
+    var scheme = try { Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
+    if (url.startsWith("intent://")) {
+        scheme = Regex("scheme=([^;]+)").find(url)?.groupValues?.get(1)?.lowercase() ?: "intent"
+    }
+    if (scheme == "http" || scheme == "https") return false
+
+    // 1) 提取 url 参数 (uclink:// 和 intent:// 的 action 部分都带 url= 参数)
+    val actionPart = url
+        .substringBefore("#Intent;")
+        .removePrefix("intent://")
+        .removePrefix("uclink://")
+    if (actionPart.isNotEmpty()) {
+        try {
+            val target = Uri.parse("https://$actionPart").getQueryParameter("url")
+            if (!target.isNullOrBlank() && target.startsWith("http")) {
+                view.loadUrl(target)
+                return true
+            }
+        } catch (_: Exception) { }
+    }
+
+    // 2) intent:// 用 Intent.parseUri 打开 (系统会路由到对应 App)
+    if (url.startsWith("intent://")) {
+        try {
+            val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+            view.context.startActivity(intent)
+            return true
+        } catch (_: Exception) { }
+    }
+
+    // 3) 外部浏览器打开
+    try {
+        view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (_: Exception) { }
+    return true
 }
