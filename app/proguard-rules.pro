@@ -1,21 +1,17 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# 风铃分享库 R8 规则
+# Compose 库自带 consumer rules, 无需额外配置
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Miuix (液态玻璃/组件库) - 保留全部, 防反射/渲染问题
+-keep class top.yukonga.miuix.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# kyant/backdrop 液态玻璃 (RuntimeShader/RenderEffect)
+-keep class com.kyant.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# BgEffectView 彩色动画背景 (RuntimeShader)
+-keep class com.fengling.share.ui.theme.** { *; }
+
+# 数据模型 (org.json 手动解析, 无反射, 但保留字段名保险)
+-keep class com.fengling.share.data.** { *; }
+
+# WebView/下载安装
+-keep class com.fengling.share.ApkDownloader { *; }
