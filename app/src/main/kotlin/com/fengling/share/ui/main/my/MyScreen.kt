@@ -628,18 +628,27 @@ fun MyScreen(
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.qqGroup.isNotEmpty()) {
+                                // 直接拉起 QQ 加群 (mqqapi), 失败再回退网页; 不依赖包可见性查询
+                                // (Android 11+ 包可见性可能导致查询返回 null)
                                 val qqIntent = Intent(
                                     Intent.ACTION_VIEW,
                                     Uri.parse(
                                         "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=${aboutConfig.qqGroup}&card_type=group&source=qrcode"
                                     )
                                 )
-                                if (qqIntent.resolveActivity(context.packageManager) != null) {
+                                try {
                                     context.startActivity(qqIntent)
-                                } else if (aboutConfig.qqUrl.isNotEmpty()) {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.qqUrl)))
-                                } else {
-                                    Toast.makeText(context, "请安装QQ后加入群聊", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    // QQ 未安装或 scheme 不可用 → 回退网页加群
+                                    if (aboutConfig.qqUrl.isNotEmpty()) {
+                                        try {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.qqUrl)))
+                                        } catch (_: Exception) {
+                                            Toast.makeText(context, "请安装QQ后加入群聊", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "请安装QQ后加入群聊", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             } else {
                                 Toast.makeText(context, "官方群暂未配置", Toast.LENGTH_SHORT).show()
