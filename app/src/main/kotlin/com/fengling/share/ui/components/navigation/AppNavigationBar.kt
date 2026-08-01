@@ -10,14 +10,17 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * AppNavigationBar - Miuix 底部导航栏
+ * color: 容器颜色 (默认 Unspecified = 主题默认; 传 Transparent 显示玻璃效果)
  */
 @Composable
 fun AppNavigationBar(
     modifier: Modifier = Modifier,
+    color: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Unspecified,
     content: @Composable RowScope.() -> Unit,
 ) {
     NavigationBar(
         modifier = modifier,
+        color = color,
         content = content,
     )
 }

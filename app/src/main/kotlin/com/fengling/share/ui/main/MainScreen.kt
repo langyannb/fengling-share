@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -41,8 +42,8 @@ import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
-import com.fengling.share.ui.components.navigation.AppNavigationBar
-import com.fengling.share.ui.components.navigation.AppNavigationBarItem
+import com.fengling.share.ui.components.navigation.LiquidBottomBar
+import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.MyScreen
@@ -81,6 +82,9 @@ fun MainScreen(
     val context = LocalContext.current
     val sharedWebView = remember { WebView(context.applicationContext) }
 
+    // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊)
+    val (backdrop, captureModifier) = rememberGlassBackdrop2()
+
     val tabs = remember {
         listOf(
             NavTab("首页", Icons.Outlined.Home),
@@ -117,32 +121,18 @@ fun MainScreen(
         },
     ) {
         composable(Routes.MAIN) {
-            AppScaffold(
-                bottomBar = {
-                    // 半透明玻璃感底栏 (Miuix NavigationBar, 稳妥不黑屏)
-                    AppNavigationBar(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.92f)),
-                    ) {
-                        tabs.forEachIndexed { index, tab ->
-                            AppNavigationBarItem(
-                                selected = pagerState.currentPage == index,
-                                onClick = {
-                                    scope.launch { pagerState.animateScrollToPage(index) }
-                                },
-                                icon = tab.icon,
-                                label = tab.label,
-                            )
-                        }
-                    }
-                },
-            ) { innerPadding ->
+            // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (不用 Scaffold bottomBar 槽位)
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MiuixTheme.colorScheme.background),
+            ) {
+                // 内容区 (捕获背景供玻璃模糊)
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .padding(innerPadding)
-                        .background(MiuixTheme.colorScheme.background),
+                        .then(captureModifier)
+                        .padding(bottom = 84.dp), // 给玻璃底栏留空间
                 ) {
                     // HorizontalPager: tab 左右滑动切换
                     HorizontalPager(
@@ -166,6 +156,17 @@ fun MainScreen(
                         }
                     }
                 }
+
+                // OShin 式液态玻璃底栏 (vibrancy+blur+lens 按压动画)
+                LiquidBottomBar(
+                    tabs = tabs.map { it.label to it.icon },
+                    currentPage = pagerState.currentPage,
+                    onTabSelected = { index ->
+                        scope.launch { pagerState.animateScrollToPage(index) }
+                    },
+                    backdrop = backdrop,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
             }
         }
 

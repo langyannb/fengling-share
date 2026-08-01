@@ -19,6 +19,8 @@ import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import com.kyant.backdrop.backdrops.layerBackdrop as kyantLayerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop as kyantRememberLayerBackdrop
 
 /**
  * 液态玻璃宿主: 创建 backdrop 并捕获背景内容
@@ -34,6 +36,15 @@ fun rememberGlassBackdrop(): Pair<Backdrop, Modifier> {
     val graphicsLayer = rememberGraphicsLayer()
     val backdrop = rememberLayerBackdrop(graphicsLayer) { }
     val captureModifier = Modifier.layerBackdrop(backdrop)
+    return backdrop to captureModifier
+}
+
+/** 创建 kyant/backdrop 液态玻璃 (OShin 同款: lens/vibrancy/highlight 全效果) */
+@Composable
+fun rememberGlassBackdrop2(): Pair<com.kyant.backdrop.Backdrop, Modifier> {
+    val graphicsLayer = rememberGraphicsLayer()
+    val backdrop = kyantRememberLayerBackdrop(graphicsLayer)
+    val captureModifier = Modifier.kyantLayerBackdrop(backdrop)
     return backdrop to captureModifier
 }
 
