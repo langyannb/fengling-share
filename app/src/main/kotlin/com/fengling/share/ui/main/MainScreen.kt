@@ -157,10 +157,10 @@ fun MainScreen(
                     }
                 }
 
-                // OShin 式液态玻璃底栏 (vibrancy+blur+lens 按压动画)
+                // OShin 完整版液态玻璃底栏 (拖动切 tab + lens + 高光 + 图标缩放)
                 LiquidBottomBar(
                     tabs = tabs.map { it.label to it.icon },
-                    currentPage = pagerState.currentPage,
+                    pagerState = pagerState,
                     onTabSelected = { index ->
                         scope.launch { pagerState.animateScrollToPage(index) }
                     },
