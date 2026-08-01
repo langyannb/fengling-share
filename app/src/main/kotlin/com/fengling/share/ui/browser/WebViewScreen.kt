@@ -1,15 +1,24 @@
-package com.fengling.share.ui
+package com.fengling.share.ui.browser
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -18,18 +27,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 内置浏览器: 网盘链接在 App 内打开
- * iOS 风格: 顶部栏显示网页标题, 返回按钮关闭
+ * WebViewScreen - 内置浏览器 (参考 legado-with-MD3 ui/browser)
+ * 网盘链接在 App 内打开, MD3 TopAppBar
+ * 返回键: WebView 有历史先回退历史, 否则关闭
  */
 @SuppressLint("SetJavaScriptEnabled")
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WebViewScreen(
     url: String,
@@ -39,19 +45,24 @@ fun WebViewScreen(
 ) {
     var pageTitle by remember { mutableStateOf(title) }
     var progress by remember { mutableIntStateOf(0) }
+    var webView by remember { mutableStateOf<WebView?>(null) }
+
+    // 返回键: 优先回退 WebView 历史
+    BackHandler {
+        if (webView?.canGoBack() == true) {
+            webView?.goBack()
+        } else {
+            onBack()
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = pageTitle,
+                title = { Text(pageTitle, maxLines = 1) },
                 navigationIcon = {
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 4.dp)
-                            .clickable(onClick = onBack)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    ) {
-                        Text("‹ 返回", fontSize = 18.sp, color = MiuixTheme.colorScheme.primary)
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
             )
@@ -74,14 +85,7 @@ fun WebViewScreen(
                             override fun shouldOverrideUrlLoading(
                                 view: WebView,
                                 request: WebResourceRequest,
-                            ): Boolean {
-                                // 站内链接继续在 WebView 打开
-                                return false
-                            }
-
-                            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                                super.onPageStarted(view, url, favicon)
-                            }
+                            ): Boolean = false
                         }
                         webChromeClient = object : WebChromeClient() {
                             override fun onProgressChanged(view: WebView, newProgress: Int) {
@@ -91,23 +95,19 @@ fun WebViewScreen(
                                 if (!title.isNullOrBlank()) pageTitle = title
                             }
                         }
+                        webView = this
                         loadUrl(url)
                     }
                 },
             )
             // 加载进度条
-            if (progress < 100) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(top = 2.dp),
-                ) {
-                    androidx.compose.material3.LinearProgressIndicator(
-                        progress = { progress / 100f },
-                        modifier = Modifier.fillMaxSize(),
-                        color = MiuixTheme.colorScheme.primary,
-                    )
-                }
+            if (progress in 1..99) {
+                LinearProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
             }
         }
     }

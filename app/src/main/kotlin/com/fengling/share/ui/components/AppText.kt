@@ -8,10 +8,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.sp
+
 /**
- * AppText - 主题驱动文本 (参考 legado AppText)
- * 默认使用 MaterialTheme 的 onSurface 色与字体
+ * AppText - 主题驱动文本 (参考 legado-with-MD3 AppText)
+ * 默认 MaterialTheme onSurface 色 + bodyMedium
  */
 @Composable
 fun AppText(
@@ -35,7 +35,7 @@ fun AppText(
     )
 }
 
-/** 标题 (titleSmall, 列表项主标题用) */
+/** 标题 (titleSmall, 列表项主标题) */
 @Composable
 fun AppTitle(
     text: String,

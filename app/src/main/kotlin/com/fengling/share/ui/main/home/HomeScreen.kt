@@ -1,4 +1,4 @@
-package com.fengling.share.ui
+package com.fengling.share.ui.main.home
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,7 +16,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SearchBar
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,19 +48,17 @@ import com.fengling.share.data.Category
 import com.fengling.share.ui.components.AppSubtitle
 import com.fengling.share.ui.components.AppText
 import com.fengling.share.ui.components.AppTitle
+import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
-import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeEffect
-import dev.chrisbanes.haze.hazeSource
+import com.fengling.share.ui.components.SectionTitle
+import com.fengling.share.ui.theme.adaptiveListPadding
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.InputField
-import top.yukonga.miuix.kmp.basic.PullToRefresh
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SearchBar
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.TopAppBar
 
-/** 首页: 大标题 + 搜索 + 分类 + GlassCard 软件列表 (legado 风格) */
+/**
+ * HomeScreen - 首页 (参考 legado-with-MD3 ui/main/home)
+ * MD3 LargeTopAppBar + SearchBar + 分类 + 软件列表
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onAppClick: (Int) -> Unit,
@@ -61,7 +69,7 @@ fun HomeScreen(
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var selectedCategory by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
-    var searchExpanded by remember { mutableStateOf(false) }
+    var searchActive by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -97,50 +105,39 @@ fun HomeScreen(
         loadApps(0, "")
     }
 
-    val hazeState = remember { HazeState() }
-
-    Scaffold(
+    androidx.compose.material3.Scaffold(
         topBar = {
-            // 毛玻璃顶栏 (haze)
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .hazeEffect(state = hazeState)
-            ) {
-                TopAppBar(
-                    title = "风铃分享库",
-                    largeTitle = "风铃分享库",
-                )
-            }
+            LargeTopAppBar(
+                title = { Text("风铃分享库", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.largeTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
         },
     ) { innerPadding ->
-        PullToRefresh(
+        PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = { refresh() },
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .hazeSource(state = hazeState),
+                .padding(innerPadding),
         ) {
             Column(Modifier.fillMaxSize()) {
-                // 搜索栏 (iOS 风格)
+                // 搜索栏 (MD3 SearchBar)
                 SearchBar(
-                    inputField = {
-                        InputField(
-                            query = query,
-                            onQueryChange = {
-                                query = it
-                                loadApps(selectedCategory, it)
-                            },
-                            onSearch = { loadApps(selectedCategory, it) },
-                            expanded = searchExpanded,
-                            onExpandedChange = { searchExpanded = it },
-                            label = "搜索软件",
-                        )
+                    query = query,
+                    onQueryChange = {
+                        query = it
+                        loadApps(selectedCategory, it)
                     },
-                    onExpandedChange = { searchExpanded = it },
-                    expanded = searchExpanded,
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    onSearch = { loadApps(selectedCategory, it) },
+                    active = searchActive,
+                    onActiveChange = { searchActive = it },
+                    placeholder = { Text("搜索软件") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "搜索") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                 ) {
                     if (apps.isEmpty()) {
                         Box(
@@ -158,13 +155,13 @@ fun HomeScreen(
                     }
                 }
 
-                // 分类 (横向滚动, 圆角胶囊)
+                // 分类 (横向滚动)
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
                 ) {
                     item {
                         CategoryChip(
@@ -192,29 +189,26 @@ fun HomeScreen(
                 when {
                     loading -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            AppText("加载中...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 2.dp,
+                            )
                         }
                     }
                     error.isNotEmpty() && apps.isEmpty() -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            AppText(error, color = MaterialTheme.colorScheme.error)
-                        }
+                        EmptyMessage(text = error)
                     }
                     apps.isEmpty() -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            AppText("暂无软件", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        EmptyMessage(text = "暂无软件")
                     }
                     else -> {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(
-                                start = 12.dp, end = 12.dp, top = 4.dp, bottom = 20.dp,
-                            ),
+                            contentPadding = adaptiveListPadding(),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             item {
-                                SmallTitle(text = "共 ${apps.size} 款软件")
+                                SectionTitle(text = "共 ${apps.size} 款软件")
                             }
                             items(apps, key = { it.id }) { app ->
                                 AppListItem(app = app, onClick = { onAppClick(app.id) })
@@ -257,7 +251,7 @@ private fun CategoryChip(name: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 软件列表项 (参考 legado SearchBookListItem) */
+/** 软件列表项 */
 @Composable
 private fun AppListItem(app: AppItem, onClick: () -> Unit) {
     GlassCard(
@@ -319,7 +313,7 @@ private fun AppListItem(app: AppItem, onClick: () -> Unit) {
     }
 }
 
-/** 下载按钮 (圆角小按钮) */
+/** 下载按钮 */
 @Composable
 private fun DownloadButton(app: AppItem, onClick: () -> Unit) {
     GlassCard(

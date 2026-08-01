@@ -1,6 +1,5 @@
-package com.fengling.share.ui
+package com.fengling.share.ui.book.detail
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,13 +43,17 @@ import com.fengling.share.data.PanLink
 import com.fengling.share.ui.components.AppSubtitle
 import com.fengling.share.ui.components.AppText
 import com.fengling.share.ui.components.AppTitle
+import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
+import com.fengling.share.ui.components.SectionTitle
+import com.fengling.share.ui.main.home.formatCount
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.TopAppBar
 
-/** 详情页: 覆盖层, GlassCard 风格 (参考 legado) */
+/**
+ * DetailScreen - 软件详情页 (参考 legado-with-MD3 ui/book 结构)
+ * MD3 TopAppBar + 信息卡 + 网盘下载 (内置浏览器)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
     appId: Int,
@@ -69,16 +81,10 @@ fun DetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = "软件详情",
+                title = { Text("软件详情") },
                 navigationIcon = {
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 4.dp)
-                            .clip(RoundedCornerShape(50))
-                            .clickable(onClick = onBack)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    ) {
-                        AppText("‹ 返回", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
             )
@@ -92,31 +98,14 @@ fun DetailScreen(
                         .padding(innerPadding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    AppText("加载中...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp,
+                    )
                 }
             }
             error.isNotEmpty() -> {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        AppText(error, color = MaterialTheme.colorScheme.error)
-                        Spacer(Modifier.height(12.dp))
-                        GlassCard(
-                            onClick = onBack,
-                            cornerRadius = 10.dp,
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ) {
-                            Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-                                AppText("返回", color = MaterialTheme.colorScheme.onPrimary)
-                            }
-                        }
-                    }
-                }
+                EmptyMessage(text = error)
             }
             app != null -> {
                 val item = app!!
@@ -125,8 +114,9 @@ fun DetailScreen(
                         .fillMaxSize()
                         .padding(innerPadding)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 16.dp),
                 ) {
+                    Spacer(Modifier.height(4.dp))
                     // 头部信息卡
                     GlassCard(
                         modifier = Modifier.fillMaxWidth(),
@@ -187,7 +177,7 @@ fun DetailScreen(
 
                     // 描述
                     if (item.description.isNotEmpty()) {
-                        SmallTitle(text = "软件介绍")
+                        SectionTitle(text = "软件介绍")
                         GlassCard(
                             modifier = Modifier.fillMaxWidth(),
                             cornerRadius = 14.dp,
@@ -205,7 +195,7 @@ fun DetailScreen(
 
                     // 网盘下载
                     if (item.panLinks.isNotEmpty()) {
-                        SmallTitle(text = "选择下载方式")
+                        SectionTitle(text = "选择下载方式")
                         item.panLinks.forEach { link ->
                             PanLinkCard(
                                 link = link,
@@ -226,7 +216,7 @@ fun DetailScreen(
                             Spacer(Modifier.height(8.dp))
                         }
                     } else {
-                        SmallTitle(text = "下载")
+                        SectionTitle(text = "下载")
                         GlassCard(
                             modifier = Modifier.fillMaxWidth(),
                             cornerRadius = 14.dp,
