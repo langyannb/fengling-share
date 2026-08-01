@@ -70,6 +70,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -237,7 +238,13 @@ fun MyScreen(
             modifier = Modifier
                 .padding(top = 55.dp)
                 .fillMaxWidth()
-                .height(520.dp),
+                .height(520.dp)
+                .graphicsLayer {
+                    // 滚动隐藏时整体消失 (图标+文字+背景框一起, 无边框残留)
+                    alpha = mainAlpha
+                    scaleX = mainScale
+                    scaleY = mainScale
+                },
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -253,9 +260,7 @@ fun MyScreen(
                                 MiuixTheme.colorScheme.primary.copy(alpha = 0.65f),
                             )
                         )
-                    )
-                    .scale(mainScale)
-                    .alpha(mainAlpha),
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -273,9 +278,6 @@ fun MyScreen(
                 style = TextStyle(
                     brush = Brush.linearGradient(titleGradient),
                 ),
-                modifier = Modifier
-                    .scale(mainScale)
-                    .alpha(mainAlpha),
             )
             Spacer(Modifier.height(6.dp))
             Text(
@@ -283,18 +285,12 @@ fun MyScreen(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
-                modifier = Modifier
-                    .scale(secScale)
-                    .alpha(secAlpha),
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "好软件，一起分享",
                 fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.primary,
-                modifier = Modifier
-                    .scale(secScale)
-                    .alpha(secAlpha),
             )
         }
 
@@ -729,7 +725,7 @@ fun MyScreen(
             }
         }
 
-        // OShin 检查更新悬浮按钮 (渐变描边, 滚动淡出)
+        // OShin 检查更新悬浮按钮 (右上角, 渐变描边, 滚动淡出)
         val interaction = remember { MutableInteractionSource() }
         val isPressed by interaction.collectIsPressedAsState()
         val btnScale by animateFloatAsState(
@@ -743,11 +739,12 @@ fun MyScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 380.dp)
+                .padding(horizontal = 16.dp)
+                .padding(top = 430.dp)
                 .navigationBarsPadding()
                 .alpha(updateBtnAlpha)
                 .scale(btnScale),
-            contentAlignment = Alignment.TopCenter,
+            contentAlignment = Alignment.TopEnd,
         ) {
             Box(
                 modifier = Modifier

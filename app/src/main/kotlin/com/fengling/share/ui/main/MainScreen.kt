@@ -146,6 +146,7 @@ fun MainScreen(
                     HorizontalPager(
                         state = pagerState,
                         modifier = Modifier.fillMaxSize(),
+                        beyondViewportPageCount = 2,
                     ) { page ->
                         when (page) {
                             0 -> HomeScreen(

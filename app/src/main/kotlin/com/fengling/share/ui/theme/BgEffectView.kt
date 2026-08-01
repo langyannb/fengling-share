@@ -40,6 +40,16 @@ class BgEffectView(context: Context?, mode: Int) : LinearLayout(context) {
             }
         })
     }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        // 尺寸变化时刷新 (切页回来 View 尺寸恢复, 避免白屏)
+        mBgEffectPainter?.let { painter ->
+            if (w > 0 && h > 0) {
+                painter.setResolution(floatArrayOf(w.toFloat(), h.toFloat()))
+            }
+        }
+    }
     fun updateMode(mode: Int) {
         if (mode != colorMode) {
             colorMode = mode
