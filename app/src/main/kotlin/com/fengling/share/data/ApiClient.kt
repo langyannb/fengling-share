@@ -100,7 +100,7 @@ object ApiClient {
         data.optString("url") to data.optString("password")
     }
 
-    /** 版本检测: 返回最新版本信息 (version/url/update_log/update_mode/force_update) */
+    /** 版本检测: 返回最新版本信息 */
     suspend fun checkVersion(): VersionInfo = withContext(Dispatchers.IO) {
         val obj = request("version")
         val data = obj.optJSONObject("data") ?: JSONObject()
@@ -110,6 +110,8 @@ object ApiClient {
             updateLog = data.optString("update_log", ""),
             updateMode = data.optString("update_mode", "internal"),
             forceUpdate = data.optInt("force_update", 0) == 1,
+            sizeMb = data.optDouble("size_mb", 0.0).toFloat(),
+            releaseDate = data.optString("release_date", ""),
         )
     }
 
@@ -131,6 +133,17 @@ object ApiClient {
     }
 }
 
+/** 版本信息 */
+data class VersionInfo(
+    val version: String,
+    val url: String,
+    val updateLog: String,
+    val updateMode: String = "internal", // internal=内置浏览器, external=外置浏览器
+    val forceUpdate: Boolean = false,    // true=强制更新
+    val sizeMb: Float = 0f,              // APK 大小 (MB)
+    val releaseDate: String = "",        // 发布日期
+)
+
 /** 关于页配置 (后端可配置) */
 data class AboutConfig(
     val qqGroup: String = "",
@@ -142,15 +155,6 @@ data class AboutConfig(
     val donate: String = "",
     val bannerText: String = "风铃分享库 · 官方频道",
     val bannerSub: String = "最新软件 · 更新通知 · 交流反馈",
-)
-
-/** 版本信息 */
-data class VersionInfo(
-    val version: String,
-    val url: String,
-    val updateLog: String,
-    val updateMode: String = "internal", // internal=内置浏览器, external=外置浏览器
-    val forceUpdate: Boolean = false,    // true=强制更新
 )
 
 /** 语义化版本比较: 返回 true 表示 [latest] 比 [current] 新 */

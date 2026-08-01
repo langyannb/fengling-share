@@ -10,12 +10,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -150,6 +152,26 @@ private fun ForceUpdateDialog(info: VersionInfo) {
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
+                if (info.sizeMb > 0f || info.releaseDate.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    androidx.compose.foundation.layout.Row {
+                        if (info.sizeMb > 0f) {
+                            Text(
+                                text = String.format("%.1f MB", info.sizeMb),
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                        }
+                        if (info.releaseDate.isNotEmpty()) {
+                            if (info.sizeMb > 0f) Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = "发布于 ${info.releaseDate}",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                        }
+                    }
+                }
                 if (info.updateLog.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
                     Text(

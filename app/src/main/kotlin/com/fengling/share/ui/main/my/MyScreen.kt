@@ -126,6 +126,8 @@ fun MyScreen(
     var updateMode by remember { mutableStateOf("internal") }
     var updateLog by remember { mutableStateOf("") }
     var forceUpdate by remember { mutableStateOf(false) }
+    var updateSize by remember { mutableStateOf(0f) }
+    var updateDate by remember { mutableStateOf("") }
 
     val currentVersion = AppVersion.CURRENT
     val updateVersion = checkResult.substringAfter("v")
@@ -170,6 +172,8 @@ fun MyScreen(
                     updateMode = info.updateMode
                     updateLog = info.updateLog
                     forceUpdate = info.forceUpdate
+                    updateSize = info.sizeMb
+                    updateDate = info.releaseDate
                     showUpdateDialog = true
                 } else {
                     checkResult = "已是最新版本"
@@ -785,46 +789,120 @@ fun MyScreen(
             },
             text = {
                 Column {
-                    Text(
-                        text = "当前版本: v$currentVersion",
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                    if (updateLog.isNotEmpty()) {
-                        Spacer(Modifier.height(10.dp))
+                    // 版本信息行 (MIUI 风格)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "更新内容:",
+                            text = "当前版本",
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = updateLog,
-                            fontSize = 13.sp,
-                            lineHeight = 20.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "v$currentVersion",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Text(
+                            text = "新版本",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "v$updateVersion",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.primary,
+                        )
                     }
+                    if (updateSize > 0f || updateDate.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (updateSize > 0f) {
+                                Text(
+                                    text = String.format("%.1f MB", updateSize),
+                                    fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
+                            }
+                            if (updateDate.isNotEmpty()) {
+                                if (updateSize > 0f) Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = "发布于 $updateDate",
+                                    fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
+                            }
+                        }
+                    }
+                    if (updateLog.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f))
+                                .padding(12.dp),
+                        ) {
+                            Column {
+                                Text(
+                                    text = "更新日志",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MiuixTheme.colorScheme.onBackground,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = updateLog,
+                                    fontSize = 13.sp,
+                                    lineHeight = 20.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (updateMode == "external") "更新将使用外部浏览器打开" else "更新将使用内置浏览器打开",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
                 }
             },
             confirmButton = {
-                M3TextButton(onClick = {
-                    showUpdateDialog = false
-                    if (updateUrl.isNotEmpty()) {
-                        if (updateMode == "external") {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl)))
-                        } else {
-                            onOpenWeb(updateUrl, "更新下载")
+                // MIUI 风格主按钮 (渐变填充)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    MiuixTheme.colorScheme.primary,
+                                    MiuixTheme.colorScheme.primary.copy(alpha = 0.75f),
+                                )
+                            )
+                        )
+                        .clickable {
+                            showUpdateDialog = false
+                            if (updateUrl.isNotEmpty()) {
+                                if (updateMode == "external") {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl)))
+                                } else {
+                                    onOpenWeb(updateUrl, "更新下载")
+                                }
+                            } else {
+                                Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
+                            }
                         }
-                    } else {
-                        Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
-                    }
-                }) {
+                        .padding(horizontal = 20.dp, vertical = 9.dp),
+                ) {
                     Text(
                         text = if (updateMode == "external") "去更新" else "立即更新",
-                        color = MiuixTheme.colorScheme.primary,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onPrimary,
                     )
                 }
             },
