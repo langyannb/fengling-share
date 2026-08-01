@@ -27,15 +27,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
@@ -90,6 +91,7 @@ import com.fengling.share.ui.components.OShinCard
 import com.fengling.share.ui.components.OShinCardTitle
 import com.fengling.share.ui.components.OShinDivider
 import com.fengling.share.ui.components.OShinSettingRow
+import com.fengling.share.ui.theme.BgEffectView
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -151,8 +153,9 @@ fun MyScreen(
             .onEach { (index, offset) ->
                 if (index == 0) {
                     val f = offset.toFloat()
-                    headerAlpha = ((520f - f / 1.6f).coerceIn(0f, 520f) / 520f).coerceIn(0f, 1f)
-                    headerScale = 1f - f / 2000f
+                    // 更快淡出: 200dp 内完全消失 (图标区约 200dp 高)
+                    headerAlpha = ((200f - f) / 200f).coerceIn(0f, 1f)
+                    headerScale = 1f - f / 1500f
                     updateBtnAlpha = (1f - f / 300f).coerceIn(0f, 1f)
                 } else {
                     headerAlpha = 0f
@@ -194,22 +197,22 @@ fun MyScreen(
     } else {
         listOf(Color(0xFFD03A18AD.toInt()), Color(0xFFD0A56138.toInt()))
     }
+    // BgEffectView 模式: 1=浅色, 2=深色
+    val bgEffectMode = if (isDark) 2 else 1
 
     Box(Modifier.fillMaxSize()) {
-        // 头部背景渐变 (滚动时淡出)
-        Box(
+        // OShin 同款动态彩色背景 (RuntimeShader 动画, 滚动淡出)
+        AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(420.dp)
-                .alpha(headerAlpha)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MiuixTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            MiuixTheme.colorScheme.background,
-                        )
-                    )
-                ),
+                .height(520.dp)
+                .offset(y = 50.dp)
+                .alpha(headerAlpha),
+            factory = { ctx -> BgEffectView(ctx, bgEffectMode) },
+            update = { view ->
+                view.updateMode(bgEffectMode)
+                view.alpha = headerAlpha
+            },
         )
 
         // 头部内容 (App 名 + 版本号, 滚动缩放淡出)
