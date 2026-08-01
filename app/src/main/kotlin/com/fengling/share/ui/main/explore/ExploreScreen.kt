@@ -1,34 +1,22 @@
 package com.fengling.share.ui.main.explore
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Category
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,23 +29,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
-import com.fengling.share.ui.components.AppSubtitle
-import com.fengling.share.ui.components.AppText
-import com.fengling.share.ui.components.AppTitle
 import com.fengling.share.ui.components.EmptyMessage
-import com.fengling.share.ui.components.GlassCard
-import com.fengling.share.ui.components.SectionTitle
-import com.fengling.share.ui.theme.adaptiveListPadding
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * ExploreScreen - 分类页 (高级卡片风格)
- * 分类卡片(彩色图标+计数) → 分类内软件列表
+ * ExploreScreen - 分类页 (Miuix 风格)
+ * 分类卡片 → 分类内软件列表
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExploreScreen(
     onAppClick: (Int) -> Unit,
@@ -93,20 +81,25 @@ fun ExploreScreen(
         topBar = {
             if (expandedCategory != null) {
                 TopAppBar(
-                    title = { Text(categories.firstOrNull { it.id == expandedCategory }?.name ?: "分类") },
+                    title = categories.firstOrNull { it.id == expandedCategory }?.name ?: "分类",
                     navigationIcon = {
-                        IconButton(onClick = { expandedCategory = null }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .clip(CircleShape)
+                                .clickable { expandedCategory = null }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = "‹ 返回",
+                                fontSize = 20.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
                         }
                     },
                 )
             } else {
-                TopAppBar(
-                    title = { Text("分类", fontWeight = FontWeight.Bold) },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
-                )
+                TopAppBar(title = "分类")
             }
         },
     ) { innerPadding ->
@@ -118,10 +111,7 @@ fun ExploreScreen(
                         .padding(innerPadding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 2.dp,
-                    )
+                    Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             }
             expandedCategory != null -> {
@@ -133,10 +123,7 @@ fun ExploreScreen(
                             .padding(innerPadding),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator(
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 2.dp,
-                        )
+                        Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
                     }
                 } else if (categoryApps.isEmpty()) {
                     EmptyMessage(text = "该分类暂无软件")
@@ -145,11 +132,13 @@ fun ExploreScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding),
-                        contentPadding = adaptiveListPadding(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(
+                            start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         item {
-                            SectionTitle(text = "共 ${categoryApps.size} 款软件")
+                            SmallTitle(text = "共 ${categoryApps.size} 款软件")
                         }
                         items(categoryApps, key = { it.id }) { app ->
                             CategoryAppItem(app = app, onClick = { onAppClick(app.id) })
@@ -168,11 +157,13 @@ fun ExploreScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding),
-                    contentPadding = adaptiveListPadding(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(
+                        start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     item {
-                        SectionTitle(text = "全部分类")
+                        SmallTitle(text = "全部分类")
                     }
                     items(categories) { cat ->
                         CategoryCard(
@@ -191,14 +182,15 @@ fun ExploreScreen(
     }
 }
 
-/** 分类卡片 (高端: 彩色图标圆 + 名称 + 计数 + 箭头) */
+/** 分类卡片 (Miuix Card) */
 @Composable
 private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
-    GlassCard(
+    Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        cornerRadius = 16.dp,
     ) {
         Row(
             modifier = Modifier
@@ -206,43 +198,24 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 彩色图标圆
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Category,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Spacer(Modifier.width(14.dp))
-            // 名称 + 计数
             Column(Modifier.weight(1f)) {
                 Text(
                     text = name,
-                    style = MaterialTheme.typography.titleMedium,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MiuixTheme.colorScheme.onBackground,
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = "$appCount 款软件",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             }
-            // 箭头
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+            Text(
+                text = "查看 ›",
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.primary,
             )
         }
     }
@@ -251,11 +224,12 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
 /** 分类内软件项 */
 @Composable
 private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
-    GlassCard(
+    Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
         cornerRadius = 14.dp,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
             modifier = Modifier
@@ -264,9 +238,15 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                AppTitle(text = app.name)
+                Text(
+                    text = app.name,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                )
                 Spacer(Modifier.height(3.dp))
-                AppSubtitle(
+                Text(
                     text = buildString {
                         if (app.version.isNotEmpty()) append("v${app.version}")
                         if (app.downloadCount > 0) {
@@ -274,19 +254,14 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                             append("${app.downloadCount} 次下载")
                         }
                     },
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             }
-            AppText(
+            Text(
                 text = "查看",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.width(2.dp))
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.primary,
             )
         }
     }

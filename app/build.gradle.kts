@@ -59,6 +59,13 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     // 导航 (返回栈 + 预测性返回动画)
     implementation(libs.androidx.navigation.compose)
+    // Miuix (小米设计语言)
+    implementation(libs.miuix.ui)
+    implementation(libs.miuix.icons)
+    // 液态玻璃 (miuix blur)
+    implementation(libs.miuix.blur)
+    // Miuix SearchBar 需要 NavigationEventDispatcherOwner
+    implementation(libs.navigationevent.compose)
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)

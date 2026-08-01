@@ -1,6 +1,5 @@
 package com.fengling.share.ui.main.home
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,26 +11,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items as gridItems
-import androidx.compose.foundation.lazy.items as rowItems
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,11 +27,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,16 +36,24 @@ import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
-import com.fengling.share.ui.components.AppText
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
+import com.fengling.share.ui.components.rememberGlassBackdrop
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.InputField
+import top.yukonga.miuix.kmp.basic.PullToRefresh
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SearchBar
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * HomeScreen - 首页 (高级网格风格, 轮廓图标)
- * 渐变头部 + 搜索胶囊 + 分类 chips + 3列精致网格
+ * HomeScreen - 首页 (Miuix 现代化列表风格)
+ * Miuix TopAppBar(紧凑大标题) + SearchBar + 分类 chips + 列表
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onAppClick: (Int) -> Unit,
@@ -75,6 +64,7 @@ fun HomeScreen(
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var selectedCategory by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
+    var searchExpanded by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -111,9 +101,15 @@ fun HomeScreen(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            // Miuix 大标题栏 (自带紧凑折叠, 不占多余空间)
+            TopAppBar(
+                title = "风铃分享库",
+                largeTitle = "风铃分享库",
+            )
+        },
     ) { innerPadding ->
-        PullToRefreshBox(
+        PullToRefresh(
             isRefreshing = refreshing,
             onRefresh = { refresh() },
             modifier = Modifier
@@ -121,71 +117,48 @@ fun HomeScreen(
                 .padding(innerPadding),
         ) {
             Column(Modifier.fillMaxSize()) {
-                // 渐变头部
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    MaterialTheme.colorScheme.background,
-                                )
-                            )
-                        )
-                        .padding(top = 8.dp, bottom = 12.dp),
-                ) {
-                    Column(Modifier.padding(horizontal = 20.dp)) {
-                        Text(
-                            text = "风铃分享库",
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "精选软件 · 网盘直链 · 免费下载",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                        )
-                        Spacer(Modifier.height(14.dp))
-                        // 搜索胶囊
-                        TextField(
-                            value = query,
-                            onValueChange = {
+                // Miuix 搜索栏
+                SearchBar(
+                    inputField = {
+                        InputField(
+                            query = query,
+                            onQueryChange = {
                                 query = it
                                 loadApps(selectedCategory, it)
                             },
-                            placeholder = {
-                                Text("搜索软件", fontSize = 14.sp)
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Outlined.Search,
-                                    contentDescription = "搜索",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(28.dp),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
+                            onSearch = { loadApps(selectedCategory, it) },
+                            expanded = searchExpanded,
+                            onExpandedChange = { searchExpanded = it },
+                            label = "搜索软件",
                         )
+                    },
+                    onExpandedChange = { searchExpanded = it },
+                    expanded = searchExpanded,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                ) {
+                    if (apps.isEmpty()) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("未找到相关软件", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                        }
+                    } else {
+                        apps.forEach { app ->
+                            AppListItem(app = app, onClick = { onAppClick(app.id) })
+                        }
                     }
                 }
 
-                // 分类 chips
+                // 分类 chips (横向滚动)
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
                 ) {
                     item {
                         CategoryChip(
@@ -197,7 +170,7 @@ fun HomeScreen(
                             },
                         )
                     }
-                    rowItems(categories) { cat ->
+                    items(categories) { cat ->
                         CategoryChip(
                             name = cat.name,
                             selected = selectedCategory == cat.id,
@@ -209,14 +182,11 @@ fun HomeScreen(
                     }
                 }
 
-                // 网格区
+                // 列表区
                 when {
                     loading -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                color = MaterialTheme.colorScheme.primary,
-                                strokeWidth = 2.dp,
-                            )
+                            Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
                         }
                     }
                     error.isNotEmpty() && apps.isEmpty() -> {
@@ -226,17 +196,18 @@ fun HomeScreen(
                         EmptyMessage(text = "暂无软件")
                     }
                     else -> {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(3),
+                        LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(
-                                start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp,
+                                start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
                             ),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            gridItems(apps, key = { it.id }) { app ->
-                                AppGridItem(app = app, onClick = { onAppClick(app.id) })
+                            item {
+                                SmallTitle(text = "共 ${apps.size} 款软件")
+                            }
+                            items(apps, key = { it.id }) { app ->
+                                AppListItem(app = app, onClick = { onAppClick(app.id) })
                             }
                         }
                     }
@@ -246,116 +217,124 @@ fun HomeScreen(
     }
 }
 
-/** 分类胶囊 (选中主色, 未选中轮廓) */
+/** 分类胶囊 */
 @Composable
 private fun CategoryChip(name: String, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    val fg = if (selected) {
-        MaterialTheme.colorScheme.onPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    GlassCard(
+    Card(
         onClick = onClick,
-        cornerRadius = 20.dp,
-        containerColor = bg,
-        contentColor = fg,
         modifier = Modifier.padding(vertical = 4.dp),
+        cornerRadius = 20.dp,
+        colors = if (selected) {
+            top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                color = MiuixTheme.colorScheme.primary,
+                contentColor = MiuixTheme.colorScheme.onPrimary,
+            )
+        } else {
+            top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+        },
     ) {
         Box(Modifier.padding(horizontal = 16.dp, vertical = 7.dp)) {
-            AppText(
+            Text(
                 text = name,
-                color = fg,
+                fontSize = 14.sp,
+                color = if (selected) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onBackgroundVariant,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             )
         }
     }
 }
 
-/** 应用网格项: 图标 + 名称 + 下载按钮 */
+/** 软件列表项 (Miuix Card) */
 @Composable
-private fun AppGridItem(app: AppItem, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun AppListItem(app: AppItem, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        cornerRadius = 14.dp,
     ) {
-        // 图标 (大圆角方块)
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(24.dp)),
-            contentAlignment = Alignment.Center,
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (app.icon.isNotEmpty()) {
-                AsyncImage(
-                    model = app.icon,
-                    contentDescription = app.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    AppText(
+            // 图标 (圆角方块)
+            Box(
+                modifier = Modifier
+                    .width(48.dp)
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (app.icon.isNotEmpty()) {
+                    AsyncImage(
+                        model = app.icon,
+                        contentDescription = app.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Text(
                         text = app.name.take(1),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.headlineMedium,
+                        color = MiuixTheme.colorScheme.primary,
                     )
                 }
             }
-        }
-        Spacer(Modifier.height(8.dp))
-        // 名称
-        Text(
-            text = app.name,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(3.dp))
-        // 下载量
-        Text(
-            text = "${formatCount(app.downloadCount)} 次下载",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(6.dp))
-        GlassCard(
-            onClick = onClick,
-            cornerRadius = 10.dp,
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.fillMaxWidth(0.85f),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                AppText(
-                    text = "下载",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontWeight = FontWeight.Medium,
-                    style = MaterialTheme.typography.labelLarge,
+            Spacer(Modifier.width(12.dp))
+            // 信息
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = app.name,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = buildString {
+                        if (app.categoryName.isNotEmpty()) append(app.categoryName)
+                        if (app.version.isNotEmpty()) {
+                            if (isNotEmpty()) append(" · ")
+                            append("v${app.version}")
+                        }
+                    },
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "${formatCount(app.downloadCount)} 次下载",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
+            }
+            // 下载按钮
+            Card(
+                onClick = onClick,
+                cornerRadius = 10.dp,
+                colors = top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                    color = MiuixTheme.colorScheme.primary,
+                    contentColor = MiuixTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        text = "下载",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onPrimary,
+                    )
+                }
             }
         }
     }

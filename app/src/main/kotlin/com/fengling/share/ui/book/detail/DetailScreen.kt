@@ -1,9 +1,11 @@
 package com.fengling.share.ui.book.detail
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -11,18 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,25 +28,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.PanLink
-import com.fengling.share.ui.components.AppSubtitle
-import com.fengling.share.ui.components.AppText
-import com.fengling.share.ui.components.AppTitle
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassCard
-import com.fengling.share.ui.components.SectionTitle
+import com.fengling.share.ui.components.rememberGlassBackdrop
 import com.fengling.share.ui.main.home.formatCount
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * DetailScreen - 软件详情页 (参考 legado-with-MD3 ui/book 结构)
- * MD3 TopAppBar + 信息卡 + 网盘下载 (内置浏览器)
+ * DetailScreen - 软件详情 (Miuix + 液态玻璃)
+ * 头部信息 + 介绍 + 网盘下载列表 + 底部液态玻璃下载栏
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
     appId: Int,
@@ -67,9 +65,10 @@ fun DetailScreen(
     var error by remember { mutableStateOf("") }
     var clicking by remember { mutableStateOf(false) }
 
+    // 液态玻璃 backdrop (底部下载栏)
+    val (backdrop, captureModifier) = rememberGlassBackdrop()
+
     LaunchedEffect(appId) {
-        loading = true
-        error = ""
         try {
             app = ApiClient.getAppDetail(appId)
         } catch (e: Exception) {
@@ -81,10 +80,20 @@ fun DetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("软件详情") },
+                title = app?.name ?: "软件详情",
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onBack)
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = "‹",
+                            fontSize = 24.sp,
+                            color = MiuixTheme.colorScheme.primary,
+                        )
                     }
                 },
             )
@@ -98,10 +107,7 @@ fun DetailScreen(
                         .padding(innerPadding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 2.dp,
-                    )
+                    Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             }
             error.isNotEmpty() -> {
@@ -109,151 +115,214 @@ fun DetailScreen(
             }
             app != null -> {
                 val item = app!!
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
-                ) {
-                    Spacer(Modifier.height(4.dp))
-                    // 头部信息卡
-                    GlassCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        cornerRadius = 16.dp,
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                Box(Modifier.fillMaxSize()) {
+                    // 内容层 (被液态玻璃捕获)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                            .then(captureModifier)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp),
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        Spacer(Modifier.height(4.dp))
+
+                        // 头部信息卡
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            cornerRadius = 16.dp,
                         ) {
-                            Box(
+                            Row(
                                 modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(RoundedCornerShape(16.dp)),
-                                contentAlignment = Alignment.Center,
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (item.icon.isNotEmpty()) {
-                                    AsyncImage(
-                                        model = item.icon,
-                                        contentDescription = item.name,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop,
+                                Box(
+                                    modifier = Modifier
+                                        .size(64.dp)
+                                        .clip(RoundedCornerShape(16.dp)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (item.icon.isNotEmpty()) {
+                                        AsyncImage(
+                                            model = item.icon,
+                                            contentDescription = item.name,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop,
+                                        )
+                                    } else {
+                                        Text(
+                                            text = item.name.take(1),
+                                            fontSize = 24.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MiuixTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text(
+                                        text = item.name,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MiuixTheme.colorScheme.onBackground,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
-                                } else {
-                                    AppText(
-                                        text = item.name.take(1),
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.headlineMedium,
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = buildString {
+                                            if (item.categoryName.isNotEmpty()) append(item.categoryName)
+                                            if (item.version.isNotEmpty()) {
+                                                if (isNotEmpty()) append(" · ")
+                                                append("v${item.version}")
+                                            }
+                                        },
+                                        fontSize = 12.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = "${formatCount(item.downloadCount)} 次下载",
+                                        fontSize = 12.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
                                     )
                                 }
                             }
-                            Spacer(Modifier.width(16.dp))
-                            Column {
-                                AppTitle(
-                                    text = item.name,
-                                    style = MaterialTheme.typography.titleLarge,
+                        }
+
+                        Spacer(Modifier.height(14.dp))
+
+                        // 描述
+                        if (item.description.isNotEmpty()) {
+                            SmallTitle(text = "软件介绍")
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                cornerRadius = 14.dp,
+                            ) {
+                                Text(
+                                    text = item.description,
+                                    fontSize = 14.sp,
+                                    color = MiuixTheme.colorScheme.onBackground,
+                                    modifier = Modifier.padding(14.dp),
                                 )
-                                Spacer(Modifier.height(6.dp))
-                                AppSubtitle(
-                                    text = buildString {
-                                        if (item.categoryName.isNotEmpty()) append(item.categoryName)
-                                        if (item.version.isNotEmpty()) {
-                                            if (isNotEmpty()) append(" · ")
-                                            append("v${item.version}")
+                            }
+                            Spacer(Modifier.height(14.dp))
+                        }
+
+                        // 网盘下载
+                        if (item.panLinks.isNotEmpty()) {
+                            SmallTitle(text = "选择下载方式")
+                            item.panLinks.forEach { link ->
+                                PanLinkCard(
+                                    link = link,
+                                    enabled = !clicking,
+                                    onClick = {
+                                        scope.launch {
+                                            clicking = true
+                                            try {
+                                                val (url, password) = ApiClient.clickLink(link.id)
+                                                if (url.isNotEmpty()) {
+                                                    onOpenWeb(url, displayLinkName(link))
+                                                }
+                                            } catch (_: Exception) { }
+                                            clicking = false
                                         }
                                     },
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                AppSubtitle(text = "${formatCount(item.downloadCount)} 次下载")
+                            }
+                        } else {
+                            Spacer(Modifier.height(14.dp))
+                            EmptyMessage(text = "暂无下载链接")
+                        }
+                        Spacer(Modifier.height(120.dp))
+                    }
+
+                    // 底部液态玻璃下载栏
+                    if (item.panLinks.isNotEmpty()) {
+                        GlassCard(
+                            backdrop = backdrop,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            cornerRadius = 20.dp,
+                            blurRadius = 40f,
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.name,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MiuixTheme.colorScheme.onBackground,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = "${item.panLinks.size} 个下载源",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
+                                }
+                                Card(
+                                    onClick = {
+                                        scope.launch {
+                                            clicking = true
+                                            try {
+                                                val link = item.panLinks.first()
+                                                val (url, password) = ApiClient.clickLink(link.id)
+                                                if (url.isNotEmpty()) {
+                                                    onOpenWeb(url, displayLinkName(link))
+                                                }
+                                            } catch (_: Exception) { }
+                                            clicking = false
+                                        }
+                                    },
+                                    cornerRadius = 12.dp,
+                                    colors = top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
+                                        color = MiuixTheme.colorScheme.primary,
+                                        contentColor = MiuixTheme.colorScheme.onPrimary,
+                                    ),
+                                ) {
+                                    Box(Modifier.padding(horizontal = 22.dp, vertical = 10.dp)) {
+                                        Text(
+                                            text = if (clicking) "打开中..." else "立即下载",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MiuixTheme.colorScheme.onPrimary,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-
-                    Spacer(Modifier.height(14.dp))
-
-                    // 描述
-                    if (item.description.isNotEmpty()) {
-                        SectionTitle(text = "软件介绍")
-                        GlassCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            cornerRadius = 14.dp,
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        ) {
-                            AppText(
-                                text = item.description,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(14.dp),
-                            )
-                        }
-                        Spacer(Modifier.height(14.dp))
-                    }
-
-                    // 网盘下载
-                    if (item.panLinks.isNotEmpty()) {
-                        SectionTitle(text = "选择下载方式")
-                        item.panLinks.forEach { link ->
-                            PanLinkCard(
-                                link = link,
-                                enabled = !clicking,
-                                onClick = {
-                                    scope.launch {
-                                        clicking = true
-                                        try {
-                                            val (url, password) = ApiClient.clickLink(link.id)
-                                            if (url.isNotEmpty()) {
-                                                onOpenWeb(url, displayLinkName(link))
-                                            }
-                                        } catch (_: Exception) { }
-                                        clicking = false
-                                    }
-                                },
-                            )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                    } else {
-                        SectionTitle(text = "下载")
-                        GlassCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            cornerRadius = 14.dp,
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        ) {
-                            AppText(
-                                text = "该软件暂无下载链接",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(14.dp),
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
     }
 }
 
-/** 网盘下载卡片 */
+/** 网盘链接卡片 */
 @Composable
-private fun PanLinkCard(link: PanLink, enabled: Boolean, onClick: () -> Unit) {
-    val label = when (link.panType) {
-        "uc" -> "UC网盘"
-        "quark" -> "夸克网盘"
-        "baidu" -> "百度网盘"
-        "ali" -> "阿里云盘"
-        else -> "网盘下载"
-    }
-    val displayLabel = if (link.label.isNotEmpty()) link.label else label
-
-    GlassCard(
-        onClick = { if (enabled) onClick() },
-        modifier = Modifier.fillMaxWidth(),
+private fun PanLinkCard(
+    link: PanLink,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
         cornerRadius = 14.dp,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
             modifier = Modifier
@@ -262,19 +331,23 @@ private fun PanLinkCard(link: PanLink, enabled: Boolean, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                AppText(
-                    text = displayLabel,
+                Text(
+                    text = displayLinkName(link),
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onBackground,
                 )
-                if (link.password.isNotEmpty()) {
-                    Spacer(Modifier.height(2.dp))
-                    AppSubtitle(text = "提取码: ${link.password}")
-                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = if (link.password.isNotEmpty()) "提取码: ${link.password}" else "点击进入下载",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
             }
-            AppText(
-                text = if (enabled) "下载 ›" else "跳转中...",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
+            Text(
+                text = "下载",
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.primary,
             )
         }
     }
@@ -282,12 +355,13 @@ private fun PanLinkCard(link: PanLink, enabled: Boolean, onClick: () -> Unit) {
 
 /** 网盘链接显示名 */
 private fun displayLinkName(link: PanLink): String {
-    val label = when (link.panType) {
-        "uc" -> "UC网盘"
-        "quark" -> "夸克网盘"
-        "baidu" -> "百度网盘"
-        "ali" -> "阿里云盘"
-        else -> "网盘下载"
+    return when {
+        link.label.isNotEmpty() -> link.label
+        link.panType == "baidu" -> "百度网盘"
+        link.panType == "quark" -> "夸克网盘"
+        link.panType == "aliyun" -> "阿里云盘"
+        link.panType == "lanzou" -> "蓝奏云"
+        link.panType == "xunlei" -> "迅雷网盘"
+        else -> "网盘链接"
     }
-    return if (link.label.isNotEmpty()) link.label else label
 }

@@ -13,29 +13,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.outlined.Brightness6
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Smartphone
-import androidx.compose.material.icons.outlined.SystemUpdate
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,25 +24,30 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
-import com.fengling.share.ui.components.AppSubtitle
-import com.fengling.share.ui.components.AppText
-import com.fengling.share.ui.components.GlassCard
-import com.fengling.share.ui.components.SectionTitle
+import com.fengling.share.ui.components.EmptyMessage
 import kotlinx.coroutines.launch
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton as M3TextButton
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Switch
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * MyScreen - 设置页
+ * MyScreen - 设置页 (Miuix 风格)
  * 通用(预测返回) / 外观(主题) / 关于(版本检测)
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyScreen(
     modifier: Modifier = Modifier,
@@ -103,12 +88,7 @@ fun MyScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("设置", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+            TopAppBar(title = "设置")
         },
     ) { innerPadding ->
         Column(
@@ -116,81 +96,140 @@ fun MyScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 12.dp),
         ) {
             Spacer(Modifier.height(4.dp))
 
             // ===== 通用 =====
-            SectionTitle(text = "通用")
-            GlassCard(
+            SmallTitle(text = "通用")
+            Card(
                 modifier = Modifier.fillMaxWidth(),
                 cornerRadius = 14.dp,
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                SettingRow(
-                    icon = Icons.Outlined.Smartphone,
-                    title = "预测性返回",
-                    subtitle = "开启: 返回时页面滑动过渡\n关闭: 直接返回无动画",
-                    trailing = {
-                        Switch(
-                            checked = predictiveBack,
-                            onCheckedChange = {
-                                predictiveBack = it
-                                Settings.predictiveBackEnabled = it
-                            },
+                // 预测返回开关
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "预测性返回",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackground,
                         )
-                    },
-                )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = if (predictiveBack) "开启: 返回时页面滑动过渡" else "关闭: 直接返回无动画",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    }
+                    Switch(
+                        checked = predictiveBack,
+                        onCheckedChange = {
+                            predictiveBack = it
+                            Settings.predictiveBackEnabled = it
+                        },
+                    )
+                }
             }
             Spacer(Modifier.height(14.dp))
 
             // ===== 外观 =====
-            SectionTitle(text = "外观")
-            GlassCard(
+            SmallTitle(text = "外观")
+            Card(
                 modifier = Modifier.fillMaxWidth(),
                 cornerRadius = 14.dp,
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                SettingRow(
-                    icon = Icons.Outlined.Brightness6,
-                    title = "主题",
-                    subtitle = themeMode.label,
-                    onClick = { showThemeDialog = true },
-                    showArrow = true,
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showThemeDialog = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "主题",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = themeMode.label,
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    }
+                    Text(
+                        text = "›",
+                        fontSize = 20.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                }
             }
             Spacer(Modifier.height(14.dp))
 
             // ===== 关于 =====
-            SectionTitle(text = "关于")
-            GlassCard(
+            SmallTitle(text = "关于")
+            Card(
                 modifier = Modifier.fillMaxWidth(),
                 cornerRadius = 14.dp,
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                SettingRow(
-                    icon = Icons.Outlined.Info,
-                    title = "当前版本",
-                    subtitle = "v$currentVersion",
-                )
-                SettingRow(
-                    icon = Icons.Outlined.SystemUpdate,
-                    title = "检查更新",
-                    subtitle = if (checkResult.isNotEmpty()) checkResult else "检测最新版本",
-                    trailing = {
-                        if (checkingUpdate) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        } else {
-                            TextButton(onClick = { checkVersion() }) {
-                                Text("检查", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    },
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "当前版本",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "v$currentVersion",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "检查更新",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = if (checkResult.isNotEmpty()) checkResult else "检测最新版本",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    }
+                    if (checkingUpdate) {
+                        Text("...", fontSize = 16.sp, color = MiuixTheme.colorScheme.primary)
+                    } else {
+                        TextButton(
+                            text = "检查",
+                            onClick = { checkVersion() },
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -207,7 +246,6 @@ fun MyScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(CircleShape)
                                 .clickable {
                                     themeMode = mode
                                     Settings.themeMode = mode.value
@@ -217,24 +255,24 @@ fun MyScreen(
                                 .padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            RadioButton(
-                                selected = themeMode == mode,
-                                onClick = {
-                                    themeMode = mode
-                                    Settings.themeMode = mode.value
-                                    onThemeChanged(mode)
-                                    showThemeDialog = false
-                                },
+                            Text(
+                                text = if (themeMode == mode) "● " else "○ ",
+                                fontSize = 16.sp,
+                                color = MiuixTheme.colorScheme.primary,
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text(mode.label, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                text = mode.label,
+                                fontSize = 16.sp,
+                                color = MiuixTheme.colorScheme.onBackground,
+                            )
                         }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showThemeDialog = false }) {
-                    Text("取消")
+                M3TextButton(onClick = { showThemeDialog = false }) {
+                    Text("取消", color = MiuixTheme.colorScheme.primary)
                 }
             },
         )
@@ -247,7 +285,7 @@ fun MyScreen(
             title = { Text("发现新版本") },
             text = { Text(checkResult) },
             confirmButton = {
-                TextButton(onClick = {
+                M3TextButton(onClick = {
                     showUpdateDialog = false
                     if (updateUrl.isNotEmpty()) {
                         context.startActivity(
@@ -257,56 +295,14 @@ fun MyScreen(
                         Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
                     }
                 }) {
-                    Text("去更新")
+                    Text("去更新", color = MiuixTheme.colorScheme.primary)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showUpdateDialog = false }) {
-                    Text("取消")
+                M3TextButton(onClick = { showUpdateDialog = false }) {
+                    Text("取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             },
         )
-    }
-}
-
-/** 设置行 */
-@Composable
-private fun androidx.compose.foundation.layout.ColumnScope.SettingRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: (() -> Unit)? = null,
-    showArrow: Boolean = false,
-    trailing: @Composable (() -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(22.dp),
-        )
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            AppText(title, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(2.dp))
-            AppSubtitle(subtitle, maxLines = 2)
-        }
-        Spacer(Modifier.width(8.dp))
-        trailing?.invoke()
-        if (showArrow) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-        }
     }
 }
