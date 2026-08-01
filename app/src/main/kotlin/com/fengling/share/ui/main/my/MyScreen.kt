@@ -72,11 +72,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import com.fengling.share.data.AboutConfig
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppVersion
@@ -118,6 +120,7 @@ fun MyScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scroll = rememberLazyListState()
+    val density = LocalDensity.current
 
     var predictiveBack by remember { mutableStateOf(Settings.predictiveBackEnabled) }
     var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
@@ -144,21 +147,35 @@ fun MyScreen(
         } catch (_: Exception) { }
     }
 
-    // OShin 滚动视差动画: 头部随滚动缩放/淡出
-    var headerAlpha by remember { mutableStateOf(1f) }
-    var headerScale by remember { mutableStateOf(1f) }
+    // OShin 滚动视差动画 (精确公式: 背景/标题/版本各自独立衰减)
+    var bgAlpha by remember { mutableStateOf(1f) }
+    var mainAlpha by remember { mutableStateOf(1f) }
+    var mainScale by remember { mutableStateOf(1f) }
+    var secAlpha by remember { mutableStateOf(1f) }
+    var secScale by remember { mutableStateOf(1f) }
     var updateBtnAlpha by remember { mutableStateOf(1f) }
     LaunchedEffect(scroll) {
+        val bgHeight = with(density) { 332.dp.toPx() }
+        val sec = with(density) { 100.dp.toPx() }
+        val main = with(density) { 160.dp.toPx() }
+        val mainHeight = main - sec
         snapshotFlow { Pair(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset) }
             .onEach { (index, offset) ->
                 if (index == 0) {
                     val f = offset.toFloat()
-                    // 更快淡出: 200dp 内完全消失 (图标区约 200dp 高)
-                    headerAlpha = ((200f - f) / 200f).coerceIn(0f, 1f)
-                    headerScale = 1f - f / 1500f
+                    // OShin 公式
+                    bgAlpha = ((bgHeight - f / 1.6f).coerceIn(0f, bgHeight) / bgHeight).coerceIn(0f, 1f)
+                    val secValue = ((sec - f / 1.8f).coerceIn(0f, sec) / sec).coerceIn(0f, 1f)
+                    secAlpha = secValue
+                    secScale = lerp(0.9f, 1f, secValue)
+                    val mainValue = ((main - (f / 1.3f).coerceIn(sec, main)) / mainHeight).coerceIn(0f, 1f)
+                    mainAlpha = (mainValue * 1.5f).coerceIn(0f, 1f)
+                    mainScale = lerp(0.9f, 1f, mainValue)
                     updateBtnAlpha = (1f - f / 300f).coerceIn(0f, 1f)
                 } else {
-                    headerAlpha = 0f
+                    bgAlpha = 0f
+                    mainAlpha = 0f
+                    secAlpha = 0f
                     updateBtnAlpha = 0f
                 }
             }
@@ -201,26 +218,27 @@ fun MyScreen(
     val bgEffectMode = if (isDark) 2 else 1
 
     Box(Modifier.fillMaxSize()) {
-        // OShin 同款动态彩色背景 (RuntimeShader 动画, 滚动淡出)
+        // OShin 同款动态彩色背景 (RuntimeShader 动画, 滚动淡出 bgAlpha)
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(520.dp)
                 .offset(y = 50.dp)
-                .alpha(headerAlpha),
+                .alpha(bgAlpha),
             factory = { ctx -> BgEffectView(ctx, bgEffectMode) },
             update = { view ->
                 view.updateMode(bgEffectMode)
-                view.alpha = headerAlpha
+                view.alpha = bgAlpha
             },
         )
 
-        // 头部内容 (App 名 + 版本号, 滚动缩放淡出)
+        // 头部内容 (OShin 同款: 520dp 高垂直居中, 标题 mainAlpha + 版本 secAlpha)
         Column(
             modifier = Modifier
+                .padding(top = 55.dp)
                 .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(top = 60.dp),
+                .height(520.dp),
+            verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // App 图标
@@ -236,8 +254,8 @@ fun MyScreen(
                             )
                         )
                     )
-                    .scale(headerScale)
-                    .alpha(headerAlpha),
+                    .scale(mainScale)
+                    .alpha(mainAlpha),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -256,8 +274,8 @@ fun MyScreen(
                     brush = Brush.linearGradient(titleGradient),
                 ),
                 modifier = Modifier
-                    .scale(headerScale)
-                    .alpha(headerAlpha),
+                    .scale(mainScale)
+                    .alpha(mainAlpha),
             )
             Spacer(Modifier.height(6.dp))
             Text(
@@ -266,8 +284,8 @@ fun MyScreen(
                 fontWeight = FontWeight.Medium,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 modifier = Modifier
-                    .scale(headerScale)
-                    .alpha(headerAlpha),
+                    .scale(secScale)
+                    .alpha(secAlpha),
             )
             Spacer(Modifier.height(4.dp))
             Text(
@@ -275,8 +293,8 @@ fun MyScreen(
                 fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.primary,
                 modifier = Modifier
-                    .scale(headerScale)
-                    .alpha(headerAlpha),
+                    .scale(secScale)
+                    .alpha(secAlpha),
             )
         }
 
@@ -286,8 +304,8 @@ fun MyScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 100.dp),
         ) {
-            // 头部占位
-            item { Spacer(Modifier.height(280.dp)) }
+            // 头部占位 (OShin 同款 520dp)
+            item { Spacer(Modifier.height(520.dp)) }
 
             // 卡片滚动淡入
             item {
@@ -507,7 +525,16 @@ fun MyScreen(
             }
 
             // ===== 官方频道 =====
-            item { OShinCardTitle(title = "官方频道") }
+            item {
+                val titleAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCardTitle(
+                    title = "官方频道",
+                    modifier = Modifier.alpha(titleAlpha),
+                )
+            }
             item {
                 val cardAlpha by derivedStateOf {
                     if (scroll.firstVisibleItemIndex > 0) 1f
@@ -595,7 +622,16 @@ fun MyScreen(
             }
 
             // ===== 其他 =====
-            item { OShinCardTitle(title = "其他") }
+            item {
+                val titleAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCardTitle(
+                    title = "其他",
+                    modifier = Modifier.alpha(titleAlpha),
+                )
+            }
             item {
                 val cardAlpha by derivedStateOf {
                     if (scroll.firstVisibleItemIndex > 0) 1f
