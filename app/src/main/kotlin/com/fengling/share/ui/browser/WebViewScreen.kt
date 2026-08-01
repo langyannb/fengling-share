@@ -82,16 +82,19 @@ fun WebViewScreen(
 
     val webView = sharedWebView
 
-    // 配置 WebView (只配置一次)
-    LaunchedEffect(webView) {
+    // 配置 WebView (同步执行, 确保先于 loadUrl; 不用 LaunchedEffect 避免时序竞争导致
+    // WebViewClient 未设置 → 页面加载绕过 shouldOverrideUrlLoading 拦截)
+    remember(webView) {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
         settings.databaseEnabled = true
-        settings.javaScriptCanOpenWindowsAutomatically = true
-        settings.setSupportMultipleWindows(true)
+        settings.javaScriptCanOpenWindowsAutomatically = false
+        // 关闭多窗口: window.open 唤端(uclink://)作为主frame导航走 shouldOverrideUrlLoading,
+        // 由 handleProtocolUrl 正常跳转交给系统处理 (Intent.parseUri/ACTION_VIEW)
+        settings.setSupportMultipleWindows(false)
         settings.mediaPlaybackRequiresUserGesture = false
         settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         // UA 伪装: 去掉 WebView 标识, 伪装成手机 Chrome (UC网盘等站点检测 WebView UA 会拦截)
@@ -105,18 +108,11 @@ fun WebViewScreen(
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean {
-                // 拦截 UC 网盘唤端跳转: 提取真实分享地址跳系统浏览器(UC)打开, 不再落到 m.uc.cn 官网
-                val u = request.url.toString()
-                if (isUcCallUrl(view, u)) return true
-                return handleProtocolUrl(view, u)
-            }
+            ): Boolean = handleProtocolUrl(view, request.url.toString())
 
             @Deprecated("Deprecated in Java")
-            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                if (isUcCallUrl(view, url)) return true
-                return handleProtocolUrl(view, url)
-            }
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
+                handleProtocolUrl(view, url)
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
@@ -291,30 +287,16 @@ fun WebViewScreen(
 }
 
 /**
- * 处理协议跳转链接 (UC 网盘等站点使用 intent:// / uclink:// / ucfp: 等私有协议)
- * 规则: 非 http(s) scheme 全部拦截 —— 先提取 url 参数在 WebView 内加载,
- * 提取失败则 Intent.parseUri 打开, 再失败外部浏览器打开, 绝不留给 WebView 显示乱码
+ * 处理协议跳转链接: http(s) 放行给 WebView 正常加载;
+ * 非 http(s) scheme (intent:// / uclink:// 等) 正常跳转交给系统处理
+ * (Intent.parseUri 或 ACTION_VIEW, 系统会路由到注册了对应 scheme 的应用, 如 UC 浏览器),
+ * 不做任何拦截/重写。无法处理的 scheme 吞掉, 防止 WebView 显示乱码。
  */
 private fun handleProtocolUrl(view: WebView, url: String): Boolean {
-    // UC 剪贴板/唤端协议 (UCFP:xxx:https://m.uc.cn), 外部打开只会拉起UC浏览器, 直接吞掉
-    if (url.lowercase().startsWith("ucfp:")) return true
-    // 提取 scheme (intent:// 的 scheme 在 #Intent;scheme=xxx;end 里)
-    var scheme = try { Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
-    if (url.startsWith("intent://")) {
-        scheme = Regex("scheme=([^;]+)").find(url)?.groupValues?.get(1)?.lowercase() ?: "intent"
-    }
+    val scheme = try { Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
     if (scheme == "http" || scheme == "https") return false
 
-    // 1) 提取 url 参数 (uclink:// 和 intent:// 的 action 部分都带 url= 参数)
-    val target = extractUcUrlParam(url)
-    if (!target.isNullOrBlank()) {
-        // UC网盘App路由链接(www.uc.cn+clouddrive_params)在WebView里只会显示
-        // UC浏览器官网首页, 提取pwd_id重写为网页版分享详情页
-        view.loadUrl(rewriteUcShareUrl(target))
-        return true
-    }
-
-    // 2) intent:// 用 Intent.parseUri 打开 (系统会路由到对应 App)
+    // intent:// 用 Intent.parseUri 解析后正常启动 (系统路由到对应 App)
     if (url.startsWith("intent://")) {
         try {
             val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
@@ -323,108 +305,9 @@ private fun handleProtocolUrl(view: WebView, url: String): Boolean {
         } catch (_: Exception) { }
     }
 
-    // 3) 外部浏览器打开
+    // 其他 scheme (uclink:// ucfp: 等): ACTION_VIEW 正常跳转
     try {
         view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: Exception) { }
     return true
-}
-
-/**
- * UC 网盘唤端跳转处理: ucbrowser/newUlcall 是 UC 系页面"唤起UC浏览器/UC App"的接口,
- * 直接放行会跳到系统 UC 浏览器并打开 m.uc.cn 官网。这里拦截后从唤端参数里提取
- * 真实分享地址(drive.uc.cn/s/{pwd_id}), 用系统浏览器(UC)打开, 让用户能在 UC 环境查看分享。
- * 提取失败则吞掉(避免落到 m.uc.cn 官网)。
- */
-private fun isUcCallUrl(view: WebView, url: String): Boolean {
-    val lower = url.lowercase()
-    val isCall = lower.contains("/ucbrowser/newulcall") ||
-        lower.contains("/ucbrowser/ulcall") ||
-        lower.contains("/new_ul_call") ||
-        lower.startsWith("ucbrowser:")
-    if (!isCall) return false
-    // 从唤端参数提取真实分享地址, 跳系统浏览器(UC)打开
-    val shareUrl = extractShareFromCall(url)
-    if (shareUrl != null) {
-        try {
-            view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(shareUrl)))
-        } catch (_: Exception) { }
-    }
-    return true
-}
-
-/**
- * 从唤端 URL (newUlcall?ucLink=...&url=...) 提取真实分享地址:
- * 1) ucLink 参数 (uclink://...&url={landingPage} 格式) → 提取 url → 重写为分享页
- * 2) 唤端 URL 直接带 url 参数
- */
-private fun extractShareFromCall(url: String): String? {
-    return try {
-        val uri = Uri.parse(url)
-        // 1) ucLink 参数
-        val ucLink = uri.getQueryParameter("ucLink") ?: uri.getQueryParameter("uc_link") ?: ""
-        if (ucLink.isNotEmpty()) {
-            val target = extractUcUrlParam(ucLink)
-            if (!target.isNullOrBlank()) return rewriteUcShareUrl(target)
-        }
-        // 2) 直接 url 参数
-        val direct = uri.getQueryParameter("url") ?: ""
-        if (direct.startsWith("http")) return rewriteUcShareUrl(direct)
-        null
-    } catch (_: Exception) {
-        null
-    }
-}
-
-/**
- * 从 uclink:// / intent:// 链接提取 url 参数 (即 landingPage, 双重URL编码)
- * 例: uclink://www.uc.cn/xxx?action=open_url&url=https%3A%2F%2Fwww.uc.cn%2F...%23Intent;scheme=uclink;end
- * → https://www.uc.cn/?entry=buwang_view_on_app&uc_flutter_route=...&clouddrive_params={...}
- */
-private fun extractUcUrlParam(url: String): String? {
-    return try {
-        val actionPart = url
-            .substringBefore("#Intent;")
-            .removePrefix("intent://")
-            .removePrefix("uclink://")
-        if (actionPart.isEmpty()) return null
-        val target = Uri.parse("https://$actionPart").getQueryParameter("url")
-        if (!target.isNullOrBlank() && target.startsWith("http")) target else null
-    } catch (_: Exception) {
-        null
-    }
-}
-
-/**
- * UC网盘 App 路由链接重写为网页版分享页
- *
- * UC网盘分享出去的链接是 uclink:// intent, 其中的 url 参数指向
- * https://www.uc.cn/?entry=buwang_view_on_app&uc_flutter_route=/clouddrive/main&clouddrive_params={...}
- * —— 这是给 UC App 内部使用的路由, 浏览器/WebView 打开只会落到 www.uc.cn 官网首页。
- * 这里从 clouddrive_params(URL编码的JSON)提取 additionProps.pwd_id,
- * 重写为网页版分享详情页 https://drive.uc.cn/s/{pwd_id}
- */
-private fun rewriteUcShareUrl(target: String): String {
-    return try {
-        val uri = Uri.parse(target)
-        val host = uri.host?.lowercase() ?: ""
-        val cdp = uri.getQueryParameter("clouddrive_params") ?: ""
-        val flutterRoute = uri.getQueryParameter("uc_flutter_route") ?: ""
-        // 仅处理 UC App 路由场景 (www.uc.cn + clouddrive_params / flutter 路由)
-        if (host.contains("uc.cn") && (cdp.isNotEmpty() || flutterRoute.isNotEmpty())) {
-            // getQueryParameter 已解码一层, 再解码一次得到 JSON
-            val jsonStr = java.net.URLDecoder.decode(cdp, "UTF-8")
-            val obj = org.json.JSONObject(jsonStr)
-            val pwdId = obj.optJSONObject("additionProps")?.optString("pwd_id") ?: ""
-            if (pwdId.isNotEmpty()) "https://drive.uc.cn/s/$pwdId" else target
-        } else if (host.contains("uc.cn")) {
-            // 兜底: URL 直接带 pwd_id 参数 (无 clouddrive_params JSON)
-            val pwdId = uri.getQueryParameter("pwd_id") ?: ""
-            if (pwdId.isNotEmpty()) "https://drive.uc.cn/s/$pwdId" else target
-        } else {
-            target
-        }
-    } catch (_: Exception) {
-        target
-    }
 }
