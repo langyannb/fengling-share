@@ -10,6 +10,18 @@ enum class ThemeMode(val value: String, val label: String) {
     DARK("dark", "深色"),
 }
 
+/** 预置主题色板 */
+enum class ThemeColor(val value: String, val label: String, val seed: Long) {
+    BLUE("blue", "经典蓝", 0xFF4C8DFF),
+    GREEN("green", "清新绿", 0xFF00B96B),
+    ORANGE("orange", "活力橙", 0xFFFF8F1F),
+    PINK("pink", "少女粉", 0xFFFF4D6D),
+    PURPLE("purple", "高雅紫", 0xFF7C4DFF),
+    TEAL("teal", "海洋青", 0xFF00B8D4),
+    GOLD("gold", "奢华金", 0xFFFFB300),
+    CUSTOM("custom", "自定义", 0xFF4C8DFF),
+}
+
 /**
  * 应用设置存储 (SharedPreferences)
  * 设置项: 预测返回开关 / 主题模式 / 已缓存最新版本
@@ -35,6 +47,25 @@ object Settings {
 
     fun getThemeMode(): ThemeMode =
         ThemeMode.entries.firstOrNull { it.value == themeMode } ?: ThemeMode.SYSTEM
+
+    // ===== 主题色 =====
+    var themeColor: String
+        get() = prefs.getString("theme_color", ThemeColor.BLUE.value) ?: ThemeColor.BLUE.value
+        set(value) = prefs.edit().putString("theme_color", value).apply()
+
+    fun getThemeColor(): ThemeColor =
+        ThemeColor.entries.firstOrNull { it.value == themeColor } ?: ThemeColor.BLUE
+
+    /** 自定义主题色 (ARGB) */
+    var customColor: Long
+        get() = prefs.getLong("custom_color", ThemeColor.BLUE.seed)
+        set(value) = prefs.edit().putLong("custom_color", value).apply()
+
+    /** 当前生效的种子色 (预置或自定义) */
+    fun currentSeedColor(): Long {
+        val c = getThemeColor()
+        return if (c == ThemeColor.CUSTOM) customColor else c.seed
+    }
 
     // ===== 版本检测 =====
     var latestVersion: String

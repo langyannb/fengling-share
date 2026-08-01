@@ -4,15 +4,17 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.theme.colorScheme.fenglingLightColorScheme
 import com.fengling.share.ui.theme.colorScheme.fenglingDarkColorScheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 风铃分享库主题 - Miuix (小米设计语言)
+ * 风铃分享库主题 - Miuix (小米设计语言) + MD3 动态色板
  * 外层 MiuixTheme 提供 Miuix 组件风格 (TopAppBar/Card/SearchBar/Switch...)
  * 内层 MaterialTheme 提供 MD3 色板 (MaterialTheme.colorScheme 引用)
+ * 主题色: 预置 7 色板 + 自定义 (ColorPalette 选色)
  */
 @Composable
 fun AppTheme(
@@ -26,8 +28,10 @@ fun AppTheme(
         ThemeMode.DARK -> true
     }
 
-    val colorScheme = remember(darkTheme) {
-        if (darkTheme) fenglingDarkColorScheme() else fenglingLightColorScheme()
+    // 种子色变化时重建色板 (remember 依赖 seed)
+    val seed = Settings.currentSeedColor()
+    val colorScheme = remember(darkTheme, seed) {
+        if (darkTheme) fenglingDarkColorScheme(seed) else fenglingLightColorScheme(seed)
     }
 
     MiuixTheme {

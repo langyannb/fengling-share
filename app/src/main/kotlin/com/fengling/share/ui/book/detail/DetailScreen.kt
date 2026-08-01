@@ -16,6 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,7 +59,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun DetailScreen(
     appId: Int,
     onBack: () -> Unit,
-    onOpenWeb: (String, String) -> Unit,
+    onOpenWeb: (String, String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -89,10 +92,11 @@ fun DetailScreen(
                             .clickable(onClick = onBack)
                             .padding(horizontal = 8.dp, vertical = 6.dp),
                     ) {
-                        Text(
-                            text = "‹",
-                            fontSize = 24.sp,
-                            color = MiuixTheme.colorScheme.primary,
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "返回",
+                            tint = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
                         )
                     }
                 },
@@ -224,7 +228,7 @@ fun DetailScreen(
                                             try {
                                                 val (url, password) = ApiClient.clickLink(link.id)
                                                 if (url.isNotEmpty()) {
-                                                    onOpenWeb(url, displayLinkName(link))
+                                                    onOpenWeb(url, displayLinkName(link), password)
                                                 }
                                             } catch (_: Exception) { }
                                             clicking = false
@@ -280,7 +284,7 @@ fun DetailScreen(
                                                 val link = item.panLinks.first()
                                                 val (url, password) = ApiClient.clickLink(link.id)
                                                 if (url.isNotEmpty()) {
-                                                    onOpenWeb(url, displayLinkName(link))
+                                                    onOpenWeb(url, displayLinkName(link), password)
                                                 }
                                             } catch (_: Exception) { }
                                             clicking = false

@@ -1,5 +1,6 @@
 package com.fengling.share.ui.main.explore
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,12 +12,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +62,8 @@ fun ExploreScreen(
     var expandedCategory by remember { mutableStateOf<Int?>(null) }
     var categoryApps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var categoryLoading by remember { mutableStateOf(false) }
+    // 分类软件缓存 (key: categoryId, 切换分类不重新请求)
+    val categoryCache = remember { mutableMapOf<Int, List<AppItem>>() }
 
     LaunchedEffect(Unit) {
         try {
@@ -68,10 +74,18 @@ fun ExploreScreen(
     }
 
     fun loadCategoryApps(catId: Int) {
+        // 命中缓存直接返回, 不刷新
+        categoryCache[catId]?.let {
+            categoryApps = it
+            categoryLoading = false
+            return
+        }
         scope.launch {
             categoryLoading = true
             try {
-                categoryApps = ApiClient.getApps(catId)
+                val result = ApiClient.getApps(catId)
+                categoryCache[catId] = result
+                categoryApps = result
             } catch (_: Exception) { }
             categoryLoading = false
         }
@@ -90,10 +104,11 @@ fun ExploreScreen(
                                 .clickable { expandedCategory = null }
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
                         ) {
-                            Text(
-                                text = "‹ 返回",
-                                fontSize = 20.sp,
-                                color = MiuixTheme.colorScheme.primary,
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "返回",
+                                tint = MiuixTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp),
                             )
                         }
                     },
@@ -182,7 +197,7 @@ fun ExploreScreen(
     }
 }
 
-/** 分类卡片 (Miuix Card) */
+/** 分类卡片 (Miuix Card + 彩色图标圆) */
 @Composable
 private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
     Card(
@@ -198,6 +213,22 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 彩色图标圆 (主题色容器)
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Category,
+                    contentDescription = null,
+                    tint = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     text = name,
@@ -212,11 +243,21 @@ private fun CategoryCard(name: String, appCount: Int, onClick: () -> Unit) {
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             }
-            Text(
-                text = "查看 ›",
-                fontSize = 14.sp,
-                color = MiuixTheme.colorScheme.primary,
-            )
+            // 圆形计数徽章
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = appCount.coerceAtMost(99).toString(),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
         }
     }
 }

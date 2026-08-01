@@ -1,6 +1,7 @@
 package com.fengling.share.ui.main
 
 import android.webkit.WebView
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
@@ -47,11 +48,11 @@ private data class NavTab(val route: String, val label: String, val icon: ImageV
 object Routes {
     const val MAIN = "main"
     const val DETAIL = "detail/{appId}"
-    const val WEBVIEW = "webview?url={url}&title={title}"
+    const val WEBVIEW = "webview?url={url}&title={title}&password={password}"
 
     fun detail(appId: Int) = "detail/$appId"
-    fun webview(url: String, title: String) =
-        "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}"
+    fun webview(url: String, title: String, password: String = "") =
+        "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
 }
 
 /**
@@ -126,10 +127,17 @@ fun MainScreen(
                         .fillMaxSize()
                         .padding(innerPadding),
                 ) {
-                    when (currentTab) {
-                        0 -> HomeScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
-                        1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
-                        else -> MyScreen(onThemeChanged = onThemeChanged)
+                    // tab 切换平滑动画
+                    Crossfade(
+                        targetState = currentTab,
+                        animationSpec = tween(250),
+                        label = "tabSwitch",
+                    ) { tab ->
+                        when (tab) {
+                            0 -> HomeScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                            1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                            else -> MyScreen(onThemeChanged = onThemeChanged)
+                        }
                     }
                 }
             }
@@ -144,8 +152,8 @@ fun MainScreen(
             DetailScreen(
                 appId = appId,
                 onBack = { navController.popBackStack() },
-                onOpenWeb = { url, title ->
-                    navController.navigate(Routes.webview(url, title))
+                onOpenWeb = { url, title, password ->
+                    navController.navigate(Routes.webview(url, title, password))
                 },
             )
         }
@@ -156,13 +164,16 @@ fun MainScreen(
             arguments = listOf(
                 navArgument("url") { type = NavType.StringType; defaultValue = "" },
                 navArgument("title") { type = NavType.StringType; defaultValue = "" },
+                navArgument("password") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { backStackEntry ->
             val url = backStackEntry.arguments?.getString("url") ?: ""
             val title = backStackEntry.arguments?.getString("title") ?: ""
+            val password = backStackEntry.arguments?.getString("password") ?: ""
             WebViewScreen(
                 url = url,
                 title = title,
+                password = password,
                 sharedWebView = sharedWebView,
                 onBack = { navController.popBackStack() },
             )
