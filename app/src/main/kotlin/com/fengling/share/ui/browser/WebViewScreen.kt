@@ -105,15 +105,28 @@ fun WebViewScreen(
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean = handleProtocolUrl(view, request.url.toString())
+            ): Boolean {
+                // 拦截 UC 网盘唤端跳转 (ucbrowser/newUlcall → 拉起UC浏览器App打开m.uc.cn)
+                val u = request.url.toString()
+                if (isUcCallUrl(u)) return true
+                return handleProtocolUrl(view, u)
+            }
 
             @Deprecated("Deprecated in Java")
-            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
-                handleProtocolUrl(view, url)
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                if (isUcCallUrl(url)) return true
+                return handleProtocolUrl(view, url)
+            }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
                 canGoBack = view?.canGoBack() ?: false
+                // 注入空 ucapi JS桥: UC网盘分享页用 isUC() 检测 window.ucapi,
+                // 非UC环境会显示"打开App"唤端按钮并跳转UC浏览器; 注入后认为在UC环境, 隐藏唤端入口
+                view?.evaluateJavascript(
+                    "try{window.ucapi={invoke:function(m,a){return null;}}}catch(e){}",
+                    null,
+                )
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -289,6 +302,8 @@ fun WebViewScreen(
  * 提取失败则 Intent.parseUri 打开, 再失败外部浏览器打开, 绝不留给 WebView 显示乱码
  */
 private fun handleProtocolUrl(view: WebView, url: String): Boolean {
+    // UC 剪贴板/唤端协议 (UCFP:xxx:https://m.uc.cn), 外部打开只会拉起UC浏览器, 直接吞掉
+    if (url.lowercase().startsWith("ucfp:")) return true
     // 提取 scheme (intent:// 的 scheme 在 #Intent;scheme=xxx;end 里)
     var scheme = try { Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
     if (url.startsWith("intent://")) {
@@ -330,6 +345,18 @@ private fun handleProtocolUrl(view: WebView, url: String): Boolean {
 }
 
 /**
+ * UC 网盘唤端跳转检测: ucbrowser/newUlcall 这类跳转是 UC 系页面的"唤起UC浏览器/UC App"接口,
+ * WebView 里放行会导致跳转到系统 UC 浏览器并打开 m.uc.cn 官网。命中直接吞掉, 留在当前页面。
+ */
+private fun isUcCallUrl(url: String): Boolean {
+    val lower = url.lowercase()
+    return lower.contains("/ucbrowser/newulcall") ||
+        lower.contains("/ucbrowser/ulcall") ||
+        lower.contains("/new_ul_call") ||
+        lower.startsWith("ucbrowser:")
+}
+
+/**
  * UC网盘 App 路由链接重写为网页版分享页
  *
  * UC网盘分享出去的链接是 uclink:// intent, 其中的 url 参数指向
@@ -350,6 +377,10 @@ private fun rewriteUcShareUrl(target: String): String {
             val jsonStr = java.net.URLDecoder.decode(cdp, "UTF-8")
             val obj = org.json.JSONObject(jsonStr)
             val pwdId = obj.optJSONObject("additionProps")?.optString("pwd_id") ?: ""
+            if (pwdId.isNotEmpty()) "https://drive.uc.cn/s/$pwdId" else target
+        } else if (host.contains("uc.cn")) {
+            // 兜底: URL 直接带 pwd_id 参数 (无 clouddrive_params JSON)
+            val pwdId = uri.getQueryParameter("pwd_id") ?: ""
             if (pwdId.isNotEmpty()) "https://drive.uc.cn/s/$pwdId" else target
         } else {
             target
