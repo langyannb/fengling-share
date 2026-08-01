@@ -62,6 +62,8 @@ dependencies {
     implementation(libs.miuix.blur)
     // Miuix SearchBar 需要 NavigationEventDispatcherOwner (miuix 只以 runtime scope 传递)
     implementation(libs.navigationevent.compose)
+    // 毛玻璃 (legado-with-MD3 同款)
+    implementation(libs.haze)
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)

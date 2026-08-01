@@ -8,6 +8,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,6 +24,9 @@ import com.fengling.share.ui.HomeScreen
 import com.fengling.share.ui.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.WebViewScreen
 import com.fengling.share.ui.theme.FenglingTheme
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -70,18 +74,29 @@ fun AppRoot() {
     }
 
     Box(Modifier.fillMaxSize()) {
+        val hazeState = remember { HazeState() }
         Scaffold(
             bottomBar = {
                 // 覆盖层打开时隐藏底栏
                 if (currentAppId == null && webUrl == null) {
-                    FloatingNavigationBar(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        tabs.forEachIndexed { index, tab ->
-                            FloatingNavigationBarItem(
-                                selected = currentTab == index,
-                                onClick = { currentTab = index },
-                                icon = tab.icon,
-                                label = tab.label,
-                            )
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .hazeSource(state = hazeState)
+                    ) {
+                        FloatingNavigationBar(
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .hazeEffect(state = hazeState),
+                        ) {
+                            tabs.forEachIndexed { index, tab ->
+                                FloatingNavigationBarItem(
+                                    selected = currentTab == index,
+                                    onClick = { currentTab = index },
+                                    icon = tab.icon,
+                                    label = tab.label,
+                                )
+                            }
                         }
                     }
                 }

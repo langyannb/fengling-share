@@ -9,6 +9,7 @@ miuix = "0.9.3"
 okhttp = "4.12.0"
 coil = "2.7.0"
 navigationevent = "1.1.2"
+haze = "1.7.2"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -33,3 +34,4 @@ miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", ver
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 navigationevent-compose = { group = "androidx.navigationevent", name = "navigationevent-compose-android", version.ref = "navigationevent" }
+haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,21 +28,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.PanLink
+import com.fengling.share.ui.components.AppSubtitle
+import com.fengling.share.ui.components.AppText
+import com.fengling.share.ui.components.AppTitle
+import com.fengling.share.ui.components.GlassCard
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-/** 详情页: 覆盖层, Miuix iOS 风格 */
+/** 详情页: 覆盖层, GlassCard 风格 (参考 legado) */
 @Composable
 fun DetailScreen(
     appId: Int,
@@ -78,7 +78,7 @@ fun DetailScreen(
                             .clickable(onClick = onBack)
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     ) {
-                        Text("‹ 返回", fontSize = 18.sp, color = MiuixTheme.colorScheme.primary)
+                        AppText("‹ 返回", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
                     }
                 },
             )
@@ -92,7 +92,7 @@ fun DetailScreen(
                         .padding(innerPadding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                    AppText("加载中...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             error.isNotEmpty() -> {
@@ -103,10 +103,17 @@ fun DetailScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(error, color = MiuixTheme.colorScheme.error, fontSize = 14.sp)
+                        AppText(error, color = MaterialTheme.colorScheme.error)
                         Spacer(Modifier.height(12.dp))
-                        Button(onClick = onBack) {
-                            Text("返回", color = MiuixTheme.colorScheme.onPrimary)
+                        GlassCard(
+                            onClick = onBack,
+                            cornerRadius = 10.dp,
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ) {
+                            Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                                AppText("返回", color = MaterialTheme.colorScheme.onPrimary)
+                            }
                         }
                     }
                 }
@@ -120,10 +127,11 @@ fun DetailScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 12.dp),
                 ) {
-                    // 头部信息
-                    Card(
+                    // 头部信息卡
+                    GlassCard(
                         modifier = Modifier.fillMaxWidth(),
                         cornerRadius = 16.dp,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                     ) {
                         Row(
                             modifier = Modifier
@@ -133,7 +141,7 @@ fun DetailScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(68.dp)
+                                    .size(64.dp)
                                     .clip(RoundedCornerShape(16.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -145,24 +153,22 @@ fun DetailScreen(
                                         contentScale = ContentScale.Crop,
                                     )
                                 } else {
-                                    Text(
+                                    AppText(
                                         text = item.name.take(1),
-                                        fontSize = 30.sp,
+                                        color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Bold,
-                                        color = MiuixTheme.colorScheme.primary,
+                                        style = MaterialTheme.typography.headlineMedium,
                                     )
                                 }
                             }
                             Spacer(Modifier.width(16.dp))
                             Column {
-                                Text(
+                                AppTitle(
                                     text = item.name,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MiuixTheme.colorScheme.onBackground,
+                                    style = MaterialTheme.typography.titleLarge,
                                 )
                                 Spacer(Modifier.height(6.dp))
-                                Text(
+                                AppSubtitle(
                                     text = buildString {
                                         if (item.categoryName.isNotEmpty()) append(item.categoryName)
                                         if (item.version.isNotEmpty()) {
@@ -170,15 +176,9 @@ fun DetailScreen(
                                             append("v${item.version}")
                                         }
                                     },
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
                                 )
                                 Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = "${formatCount(item.downloadCount)} 次下载",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                )
+                                AppSubtitle(text = "${formatCount(item.downloadCount)} 次下载")
                             }
                         }
                     }
@@ -188,15 +188,15 @@ fun DetailScreen(
                     // 描述
                     if (item.description.isNotEmpty()) {
                         SmallTitle(text = "软件介绍")
-                        Card(
+                        GlassCard(
                             modifier = Modifier.fillMaxWidth(),
                             cornerRadius = 14.dp,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         ) {
-                            Text(
+                            AppText(
                                 text = item.description,
-                                fontSize = 14.sp,
-                                lineHeight = 22.sp,
-                                color = MiuixTheme.colorScheme.onBackground,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(14.dp),
                             )
                         }
@@ -216,7 +216,6 @@ fun DetailScreen(
                                         try {
                                             val (url, password) = ApiClient.clickLink(link.id)
                                             if (url.isNotEmpty()) {
-                                                // 内置浏览器打开
                                                 onOpenWeb(url, displayLinkName(link))
                                             }
                                         } catch (_: Exception) { }
@@ -228,11 +227,14 @@ fun DetailScreen(
                         }
                     } else {
                         SmallTitle(text = "下载")
-                        Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp) {
-                            Text(
+                        GlassCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            cornerRadius = 14.dp,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        ) {
+                            AppText(
                                 text = "该软件暂无下载链接",
-                                fontSize = 14.sp,
-                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(14.dp),
                             )
                         }
@@ -257,10 +259,11 @@ private fun PanLinkCard(link: PanLink, enabled: Boolean, onClick: () -> Unit) {
     }
     val displayLabel = if (link.label.isNotEmpty()) link.label else label
 
-    Card(
+    GlassCard(
         onClick = { if (enabled) onClick() },
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 14.dp,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
             modifier = Modifier
@@ -269,25 +272,18 @@ private fun PanLinkCard(link: PanLink, enabled: Boolean, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(
+                AppText(
                     text = displayLabel,
-                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.onBackground,
                 )
                 if (link.password.isNotEmpty()) {
                     Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = "提取码: ${link.password}",
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
+                    AppSubtitle(text = "提取码: ${link.password}")
                 }
             }
-            Text(
+            AppText(
                 text = if (enabled) "下载 ›" else "跳转中...",
-                fontSize = 14.sp,
-                color = MiuixTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
             )
         }
