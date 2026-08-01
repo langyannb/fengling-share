@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -92,8 +93,20 @@ object ApkDownloader {
         }
     }
 
-    /** 拉起安装 (FileProvider) */
+    /** 拉起安装 (FileProvider), 无权限时跳设置引导开启 */
     fun install(context: Context, file: File): Boolean {
+        // Android 8+ 需要"安装未知应用"权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            _error.value = "请先允许安装未知应用"
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${context.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            return false
+        }
         return try {
             val uri: Uri = FileProvider.getUriForFile(
                 context,
