@@ -22,6 +22,8 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -150,15 +152,17 @@ fun MainScreen(
                         when (page) {
                             0 -> HomeScreen(
                                 onAppClick = { navController.navigate(Routes.detail(it)) },
-                                onOpenUrl = { url, title ->
-                                    navController.navigate(Routes.webview(url, title))
+                                onOpenUrl = { url, _ ->
+                                    // 外置浏览器打开 (不用内置 WebView)
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
                                 },
                             )
                             1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
-                                onOpenWeb = { url, title ->
-                                    navController.navigate(Routes.webview(url, title))
+                                onOpenWeb = { url, _ ->
+                                    // 外置浏览器打开
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
                                 },
                                 onOpenUpdate = { info ->
                                     navController.navigate(Routes.update(info))
@@ -190,8 +194,9 @@ fun MainScreen(
             DetailScreen(
                 appId = appId,
                 onBack = { navController.popBackStack() },
-                onOpenWeb = { url, title, password ->
-                    navController.navigate(Routes.webview(url, title, password))
+                onOpenWeb = { url, _, _ ->
+                    // 外置浏览器打开 (不用内置 WebView)
+                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
                 },
                 onOpenSubApp = { subId ->
                     navController.navigate(Routes.detail(subId))

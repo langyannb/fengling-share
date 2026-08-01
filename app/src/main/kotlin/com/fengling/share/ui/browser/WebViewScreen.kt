@@ -305,7 +305,7 @@ private fun handleProtocolUrl(view: WebView, url: String): Boolean {
         } catch (_: Exception) { }
     }
 
-    // 其他 scheme (uclink:// ucfp: 等): ACTION_VIEW 正常跳转
+    // 其他 scheme (uclink:// 等): ACTION_VIEW 正常跳转
     try {
         view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: Exception) { }
