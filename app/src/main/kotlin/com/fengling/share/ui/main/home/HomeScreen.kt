@@ -315,14 +315,44 @@ private fun AppListItem(app: AppItem, onClick: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             // 信息
             Column(Modifier.weight(1f)) {
-                Text(
-                    text = app.name,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = app.name,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // 置顶/精选徽章
+                    if (app.isTop) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "顶",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MiuixTheme.colorScheme.primary)
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
+                    if (app.isFeatured) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "精",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MiuixTheme.colorScheme.errorContainer)
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
+                }
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = buildString {

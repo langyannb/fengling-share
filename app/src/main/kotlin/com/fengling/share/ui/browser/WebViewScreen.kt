@@ -77,6 +77,8 @@ fun WebViewScreen(
     var pageTitle by remember { mutableStateOf(title) }
     var progress by remember { mutableIntStateOf(100) }
     var menuExpanded by remember { mutableStateOf(false) }
+    // 返回栈状态跟踪 (解决 BackHandler enabled 陈旧问题)
+    var canGoBack by remember { mutableStateOf(sharedWebView.canGoBack()) }
 
     val webView = sharedWebView
 
@@ -91,10 +93,22 @@ fun WebViewScreen(
                 view: WebView,
                 request: WebResourceRequest,
             ): Boolean = false
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                // 页面跳转后更新返回栈状态
+                canGoBack = view?.canGoBack() ?: false
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                // 加载完成后更新 (goBack 后 canGoBack 可能变 false)
+                canGoBack = view?.canGoBack() ?: false
+            }
         }
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress = newProgress
+                // 进度变化时同步更新 (goBack 前后)
+                canGoBack = view.canGoBack()
             }
 
             override fun onReceivedTitle(view: WebView, title: String?) {
@@ -117,9 +131,13 @@ fun WebViewScreen(
         }
     }
 
-    // 返回键: 优先回退 WebView 内部历史, 无历史时由 Navigation 返回栈关闭
-    BackHandler(enabled = webView.canGoBack()) {
-        webView.goBack()
+    // 返回键: 始终启用, 内部判断 —— 有 WebView 历史先回退, 无历史才关闭
+    BackHandler {
+        if (canGoBack) {
+            webView.goBack()
+        } else {
+            onBack()
+        }
     }
 
     Scaffold(
@@ -127,7 +145,7 @@ fun WebViewScreen(
             AppTopBar(
                 title = pageTitle,
                 onBack = {
-                    if (webView.canGoBack()) webView.goBack() else onBack()
+                    if (canGoBack) webView.goBack() else onBack()
                 },
                 actions = {
                     // 右上角菜单

@@ -54,6 +54,8 @@ data class AppItem(
     val packId: Int? = null,
     val packItems: List<PackItem> = emptyList(),
     val parentPack: PackItem? = null,
+    val isTop: Boolean = false,
+    val isFeatured: Boolean = false,
 ) {
     companion object {
         fun fromJson(json: JSONObject): AppItem = AppItem(
@@ -79,6 +81,8 @@ data class AppItem(
             parentPack = if (!json.isNull("parent_pack")) {
                 json.optJSONObject("parent_pack")?.let { PackItem.fromJson(it) }
             } else null,
+            isTop = json.optInt("is_top", 0) == 1,
+            isFeatured = json.optInt("is_featured", 0) == 1,
         )
     }
 }
