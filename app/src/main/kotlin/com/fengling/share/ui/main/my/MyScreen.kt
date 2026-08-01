@@ -4,6 +4,11 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -44,6 +49,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -67,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -218,7 +225,12 @@ fun MyScreen(
     // BgEffectView 模式: 1=浅色, 2=深色
     val bgEffectMode = if (isDark) 2 else 1
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.background)
+            .clipToBounds(),
+    ) {
         // OShin 同款动态彩色背景 (RuntimeShader 动画, 滚动淡出 bgAlpha)
         AndroidView(
             modifier = Modifier
@@ -292,6 +304,38 @@ fun MyScreen(
                 fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.primary,
             )
+            Spacer(Modifier.height(30.dp))
+            // 向上滑动提示 (浮动动画, 滚动后淡出)
+            Box(
+                modifier = Modifier.alpha(mainAlpha),
+                contentAlignment = Alignment.Center,
+            ) {
+                val infinite = rememberInfiniteTransition()
+                val floatY by infinite.animateFloat(
+                    initialValue = 0f,
+                    targetValue = -10f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(900),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                )
+                Column(
+                    modifier = Modifier.offset(y = floatY.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Text(
+                        text = "向上滑动查看更多",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
+                    )
+                }
+            }
         }
 
         // 主内容列表
@@ -744,7 +788,7 @@ fun MyScreen(
                 .navigationBarsPadding()
                 .alpha(updateBtnAlpha)
                 .scale(btnScale),
-            contentAlignment = Alignment.TopEnd,
+            contentAlignment = Alignment.TopCenter,
         ) {
             Box(
                 modifier = Modifier
