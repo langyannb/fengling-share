@@ -100,7 +100,7 @@ object ApiClient {
         data.optString("url") to data.optString("password")
     }
 
-    /** 版本检测: 返回最新版本信息 (version/url/update_log) */
+    /** 版本检测: 返回最新版本信息 (version/url/update_log/update_mode) */
     suspend fun checkVersion(): VersionInfo = withContext(Dispatchers.IO) {
         val obj = request("version")
         val data = obj.optJSONObject("data") ?: JSONObject()
@@ -108,6 +108,7 @@ object ApiClient {
             version = data.optString("version", ""),
             url = data.optString("url", ""),
             updateLog = data.optString("update_log", ""),
+            updateMode = data.optString("update_mode", "internal"),
         )
     }
 }
@@ -117,6 +118,25 @@ data class VersionInfo(
     val version: String,
     val url: String,
     val updateLog: String,
+    val updateMode: String = "internal", // internal=内置浏览器, external=外置浏览器
 )
+
+/** 语义化版本比较: 返回 true 表示 [latest] 比 [current] 新 */
+fun isNewerVersion(latest: String, current: String): Boolean {
+    if (latest.isBlank() || current.isBlank()) return false
+    if (latest == current) return false
+    val parse: (String) -> List<Int> = { s ->
+        s.trim().split(".").mapNotNull { it.toIntOrNull() }
+    }
+    val l = parse(latest)
+    val c = parse(current)
+    val maxLen = maxOf(l.size, c.size)
+    for (i in 0 until maxLen) {
+        val lv = l.getOrElse(i) { 0 }
+        val cv = c.getOrElse(i) { 0 }
+        if (lv != cv) return lv > cv
+    }
+    return false
+}
 
 class ApiException(message: String) : Exception(message)

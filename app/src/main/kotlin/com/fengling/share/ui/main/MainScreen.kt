@@ -148,7 +148,12 @@ fun MainScreen(
                                 },
                             )
                             1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
-                            else -> MyScreen(onThemeChanged = onThemeChanged)
+                            else -> MyScreen(
+                                onThemeChanged = onThemeChanged,
+                                onOpenWeb = { url, title ->
+                                    navController.navigate(Routes.webview(url, title))
+                                },
+                            )
                         }
                     }
                 }

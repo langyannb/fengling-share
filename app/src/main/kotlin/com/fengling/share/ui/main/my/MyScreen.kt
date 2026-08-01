@@ -48,10 +48,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fengling.share.BuildConfig
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.AppTopBar
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -70,6 +72,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun MyScreen(
     modifier: Modifier = Modifier,
     onThemeChanged: (ThemeMode) -> Unit = {},
+    onOpenWeb: (String, String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -82,8 +85,11 @@ fun MyScreen(
     var checkResult by remember { mutableStateOf("") }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var updateUrl by remember { mutableStateOf("") }
+    var updateMode by remember { mutableStateOf("internal") }
+    var updateLog by remember { mutableStateOf("") }
 
-    val currentVersion = "1.0"
+    // 当前版本号 (BuildConfig, 与 build.gradle 同步)
+    val currentVersion = BuildConfig.VERSION_NAME
 
     fun checkVersion() {
         scope.launch {
@@ -91,9 +97,11 @@ fun MyScreen(
             checkResult = ""
             try {
                 val info = ApiClient.checkVersion()
-                if (info.version.isNotEmpty() && info.version != currentVersion) {
+                if (isNewerVersion(info.version, currentVersion)) {
                     checkResult = "发现新版本 v${info.version}"
                     updateUrl = info.url
+                    updateMode = info.updateMode
+                    updateLog = info.updateLog
                     showUpdateDialog = true
                 } else {
                     checkResult = "已是最新版本"
@@ -444,9 +452,41 @@ fun MyScreen(
     if (showUpdateDialog) {
         AlertDialog(
             onDismissRequest = { showUpdateDialog = false },
-            title = { Text("发现新版本") },
-            text = { Text(checkResult) },
+            title = { Text("发现新版本 v${checkResult.substringAfter("v")}") },
+            text = {
+                Column {
+                    Text("当前版本: v$currentVersion")
+                    if (updateLog.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "更新内容:\n$updateLog",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "选择更新方式:",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                }
+            },
             confirmButton = {
+                // 内置更新: App 内置浏览器打开
+                M3TextButton(onClick = {
+                    showUpdateDialog = false
+                    if (updateUrl.isNotEmpty()) {
+                        onOpenWeb(updateUrl, "更新下载")
+                    } else {
+                        Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
+                    }
+                }) {
+                    Text("内置更新", color = MiuixTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                // 外置更新: 系统浏览器打开
                 M3TextButton(onClick = {
                     showUpdateDialog = false
                     if (updateUrl.isNotEmpty()) {
@@ -457,12 +497,7 @@ fun MyScreen(
                         Toast.makeText(context, "下载链接暂未配置", Toast.LENGTH_SHORT).show()
                     }
                 }) {
-                    Text("去更新", color = MiuixTheme.colorScheme.primary)
-                }
-            },
-            dismissButton = {
-                M3TextButton(onClick = { showUpdateDialog = false }) {
-                    Text("取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                    Text("外置更新", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             },
         )

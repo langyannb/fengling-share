@@ -13,9 +13,14 @@ android {
         minSdk = 33
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 版本号集中管理 (BuildConfig.VERSION_NAME 供更新检查使用)
+    buildFeatures {
+        buildConfig = true
     }
 
     signingConfigs {
