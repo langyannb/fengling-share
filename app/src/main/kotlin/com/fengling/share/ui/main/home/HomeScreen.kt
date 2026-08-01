@@ -23,10 +23,17 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -79,6 +86,8 @@ fun HomeScreen(
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var banners by remember { mutableStateOf<List<Banner>>(emptyList()) }
+    // 分类缓存: 每个分类的 apps 缓存, 切换不重新加载
+    val appsCache = remember { mutableStateMapOf<Int, List<AppItem>>() }
     var selectedCategory by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
@@ -87,11 +96,21 @@ fun HomeScreen(
     var error by remember { mutableStateOf("") }
 
     fun loadApps(catId: Int, kw: String) {
+        // 命中缓存直接返回 (不重新加载)
+        val cacheKey = "$catId|$kw"
+        if (kw.isEmpty()) {
+            appsCache[catId]?.let {
+                apps = it
+                return
+            }
+        }
         scope.launch {
             loading = true
             error = ""
             try {
-                apps = ApiClient.getApps(catId, kw)
+                val result = ApiClient.getApps(catId, kw)
+                apps = result
+                if (kw.isEmpty()) appsCache[catId] = result
             } catch (e: Exception) {
                 error = e.message ?: "加载失败"
             }
@@ -104,13 +123,18 @@ fun HomeScreen(
             refreshing = true
             try {
                 categories = ApiClient.getCategories()
+                appsCache.clear() // 下拉刷新: 清缓存强制重新加载
                 apps = ApiClient.getApps(selectedCategory, query)
+                if (query.isEmpty()) appsCache[selectedCategory] = apps
             } catch (_: Exception) { }
             refreshing = false
         }
     }
 
     LaunchedEffect(Unit) {
+        if (appsCache[0]?.isNotEmpty() == true || banners.isNotEmpty()) {
+            return@LaunchedEffect
+        }
         try {
             categories = ApiClient.getCategories()
             banners = ApiClient.getBanners()
@@ -224,32 +248,46 @@ fun HomeScreen(
                     }
                 }
 
-                // 列表区
-                when {
-                    loading -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                        }
-                    }
-                    error.isNotEmpty() && apps.isEmpty() -> {
-                        EmptyMessage(text = error)
-                    }
-                    apps.isEmpty() -> {
-                        EmptyMessage(text = "暂无软件")
-                    }
-                    else -> {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(
-                                start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
-                            ),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            item {
-                                SmallTitle(text = "共 ${apps.size} 款软件")
+                // 列表区 (AnimatedContent 滑动切换, 方向跟随分类顺序)
+                val lastCat = remember { mutableIntStateOf(0) }
+                val animDirection = if (selectedCategory >= lastCat.intValue) 1 else -1
+                lastCat.intValue = selectedCategory
+                AnimatedContent(
+                    targetState = HomeListState(selectedCategory, apps, loading, error),
+                    transitionSpec = {
+                        (slideInHorizontally(initialOffsetX = { it * animDirection }) +
+                            fadeIn()) togetherWith
+                            (slideOutHorizontally(targetOffsetX = { -it * animDirection }) +
+                                fadeOut())
+                    },
+                    label = "homeList",
+                ) { state ->
+                    when {
+                        state.loading && state.apps.isEmpty() -> {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
                             }
-                            items(apps, key = { it.id }) { app ->
-                                AppListItem(app = app, onClick = { onAppClick(app.id) })
+                        }
+                        state.error.isNotEmpty() && state.apps.isEmpty() -> {
+                            EmptyMessage(text = state.error)
+                        }
+                        state.apps.isEmpty() -> {
+                            EmptyMessage(text = "暂无软件")
+                        }
+                        else -> {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(
+                                    start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                item {
+                                    SmallTitle(text = "共 ${state.apps.size} 款软件")
+                                }
+                                items(state.apps, key = { it.id }) { app ->
+                                    AppListItem(app = app, onClick = { onAppClick(app.id) })
+                                }
                             }
                         }
                     }
@@ -528,3 +566,11 @@ private fun BannerCarousel(
         }
     }
 }
+
+/** 首页列表状态 (AnimatedContent targetState) */
+private data class HomeListState(
+    val categoryId: Int,
+    val apps: List<AppItem>,
+    val loading: Boolean,
+    val error: String,
+)

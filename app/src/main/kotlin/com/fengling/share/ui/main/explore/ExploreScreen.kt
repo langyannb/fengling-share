@@ -63,11 +63,18 @@ fun ExploreScreen(
     var categoryLoading by remember { mutableStateOf(false) }
     // 分类软件缓存 (key: categoryId, 切换分类不重新请求)
     val categoryCache = remember { mutableMapOf<Int, List<AppItem>>() }
+    // 页面级缓存: categories + 全部 apps (切 tab 回来不重新加载)
+    var pageLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        if (pageLoaded) {
+            loading = false
+            return@LaunchedEffect
+        }
         try {
             categories = ApiClient.getCategories()
             apps = ApiClient.getApps()
+            pageLoaded = true
         } catch (_: Exception) { }
         loading = false
     }
