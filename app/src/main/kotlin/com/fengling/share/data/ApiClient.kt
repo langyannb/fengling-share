@@ -131,6 +131,33 @@ object ApiClient {
             bannerSub = d.optString("banner_sub", "最新软件 · 更新通知 · 交流反馈"),
         )
     }
+
+    /** 公告: 返回内容 + 显示模式 (daily=每日一次, every=每次打开) + 是否启用 */
+    suspend fun getNotice(): NoticeInfo = withContext(Dispatchers.IO) {
+        val obj = request("notice_get")
+        val d = obj.optJSONObject("data") ?: JSONObject()
+        NoticeInfo(
+            content = d.optString("content", ""),
+            mode = d.optString("mode", "daily"),
+            enabled = d.optInt("enabled", 0) == 1,
+        )
+    }
+
+    /** 投稿名单: 只返回头像/昵称/说明 + 投稿应用名 (后端不暴露 QQ 号) */
+    suspend fun getContributors(): List<Contributor> = withContext(Dispatchers.IO) {
+        val obj = request("contributors")
+        val arr = obj.optJSONArray("data") ?: return@withContext emptyList()
+        (0 until arr.length()).map { i ->
+            val j = arr.getJSONObject(i)
+            val names = j.optJSONArray("app_names")
+            Contributor(
+                avatar = j.optString("avatar", ""),
+                name = j.optString("name", ""),
+                bio = j.optString("bio", ""),
+                appNames = names?.let { n -> (0 until n.length()).map { n.optString(it) } } ?: emptyList(),
+            )
+        }
+    }
 }
 
 /** 版本信息 */
@@ -155,6 +182,21 @@ data class AboutConfig(
     val donate: String = "",
     val bannerText: String = "风铃分享库 · 官方频道",
     val bannerSub: String = "最新软件 · 更新通知 · 交流反馈",
+)
+
+/** 公告信息 */
+data class NoticeInfo(
+    val content: String = "",
+    val mode: String = "daily", // daily=每日显示一次, every=每次打开显示
+    val enabled: Boolean = false,
+)
+
+/** 投稿人 (关于页名单) */
+data class Contributor(
+    val avatar: String = "",
+    val name: String = "",   // 昵称 (App 端显示)
+    val bio: String = "",    // 投稿说明 (App 端显示)
+    val appNames: List<String> = emptyList(),
 )
 
 /** 语义化版本比较: 返回 true 表示 [latest] 比 [current] 新 */

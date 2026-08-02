@@ -79,4 +79,25 @@ object Settings {
     var updateCheckedAt: Long
         get() = prefs.getLong("update_checked_at", 0L)
         set(value) = prefs.edit().putLong("update_checked_at", value).apply()
+
+    // ===== 公告 =====
+    /** 用户勾选「今日不再提示」的日期 (yyyy-MM-dd), 当天不再弹公告 */
+    var noticeHiddenDate: String
+        get() = prefs.getString("notice_hidden_date", "") ?: ""
+        set(value) = prefs.edit().putString("notice_hidden_date", value).apply()
+
+    /** 勾选「今日不再提示」时的公告内容 — 公告改了即使当天也重新弹 */
+    var noticeHiddenContent: String
+        get() = prefs.getString("notice_hidden_content", "") ?: ""
+        set(value) = prefs.edit().putString("notice_hidden_content", value).apply()
+
+    /** 上次弹出公告的日期 (daily 模式: 每日只弹一次) */
+    var noticeShownDate: String
+        get() = prefs.getString("notice_shown_date", "") ?: ""
+        set(value) = prefs.edit().putString("notice_shown_date", value).apply()
+
+    /** 上次弹出公告的内容 — daily 模式公告改了也重新弹 */
+    var noticeShownContent: String
+        get() = prefs.getString("notice_shown_content", "") ?: ""
+        set(value) = prefs.edit().putString("notice_shown_content", value).apply()
 }

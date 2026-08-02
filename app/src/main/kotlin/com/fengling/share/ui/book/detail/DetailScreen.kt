@@ -1,5 +1,6 @@
 package com.fengling.share.ui.book.detail
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,12 +13,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -193,6 +200,16 @@ fun DetailScreen(
                                     modifier = Modifier.padding(14.dp),
                                 )
                             }
+                            Spacer(Modifier.height(14.dp))
+                        }
+
+                        // 应用截图 (应用市场风格, 横向滑动 + 点击放大)
+                        if (item.screenshots.isNotEmpty()) {
+                            SmallTitle(text = "应用截图")
+                            ScreenshotStrip(
+                                urls = item.screenshots,
+                                appName = item.name,
+                            )
                             Spacer(Modifier.height(14.dp))
                         }
 
@@ -443,5 +460,120 @@ private fun displayLinkName(link: PanLink): String {
         link.panType == "lanzou" -> "蓝奏云"
         link.panType == "xunlei" -> "迅雷网盘"
         else -> "网盘链接"
+    }
+}
+
+/**
+ * 应用截图横滑条 (应用市场风格)
+ * 每张 160dp 宽圆角卡, 点击全屏预览
+ */
+@Composable
+private fun ScreenshotStrip(urls: List<String>, appName: String) {
+    var previewIndex by remember { mutableStateOf(-1) } // -1 = 不预览
+    LazyRow(
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+    ) {
+        items(urls.size) { i ->
+            val url = urls[i]
+            Box(
+                modifier = Modifier
+                    .width(160.dp)
+                    .height(280.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { previewIndex = i },
+            ) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = "$appName 截图 ${i + 1}",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+        }
+    }
+    // 全屏预览
+    if (previewIndex >= 0 && previewIndex < urls.size) {
+        ScreenshotPreview(
+            urls = urls,
+            initialIndex = previewIndex,
+            appName = appName,
+            onDismiss = { previewIndex = -1 },
+        )
+    }
+}
+
+/**
+ * 截图全屏预览 (横向滑动切换 + 页码 + 右上角关闭)
+ */
+@Composable
+private fun ScreenshotPreview(
+    urls: List<String>,
+    initialIndex: Int,
+    appName: String,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        val pagerState = rememberPagerState(pageCount = { urls.size }, initialPage = initialIndex)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+        ) {
+            // 黑色底
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.92f)),
+            )
+            // 图片横向滑动
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                beyondViewportPageCount = 1,
+            ) { page ->
+                AsyncImage(
+                    model = urls[page],
+                    contentDescription = "$appName 截图 ${page + 1}",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            // 关闭按钮
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(14.dp)
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "关闭",
+                    tint = androidx.compose.ui.graphics.Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            // 页码
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 18.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    text = "${pagerState.currentPage + 1} / ${urls.size}",
+                    fontSize = 12.sp,
+                    color = androidx.compose.ui.graphics.Color.White,
+                )
+            }
+        }
     }
 }

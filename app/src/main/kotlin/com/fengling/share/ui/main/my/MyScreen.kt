@@ -38,6 +38,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,17 +84,21 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import coil.compose.AsyncImage
 import com.fengling.share.data.AboutConfig
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppVersion
+import com.fengling.share.data.Contributor
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
@@ -127,6 +133,7 @@ fun MyScreen(
     onThemeChanged: (ThemeMode) -> Unit = {},
     onOpenWeb: (String, String) -> Unit = { _, _ -> },
     onOpenUpdate: (VersionInfo) -> Unit = {},
+    onOpenContributors: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -155,6 +162,14 @@ fun MyScreen(
     LaunchedEffect(Unit) {
         try {
             aboutConfig = ApiClient.getAboutConfig()
+        } catch (_: Exception) { }
+    }
+
+    // 投稿名单 (头像 + 投稿应用, 后端不暴露 QQ 号)
+    var contributors by remember { mutableStateOf<List<Contributor>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        try {
+            contributors = ApiClient.getContributors()
         } catch (_: Exception) { }
     }
 
@@ -560,6 +575,154 @@ fun MyScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(140.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ===== 投稿名单 =====
+            item {
+                val titleAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCardTitle(
+                    title = "投稿名单",
+                    modifier = Modifier.alpha(titleAlpha),
+                )
+            }
+            item {
+                val cardAlpha by derivedStateOf {
+                    if (scroll.firstVisibleItemIndex > 0) 1f
+                    else (scroll.firstVisibleItemScrollOffset.toFloat() / 600f).coerceIn(0f, 1f)
+                }
+                OShinCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 6.dp)
+                        .alpha(cardAlpha),
+                ) {
+                    // 入口: 横向头像预览 (空时占位), 点击进入完整投稿名单页
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onOpenContributors() },
+                    ) {
+                        if (contributors.isNotEmpty()) {
+                            LazyRow(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 14.dp),
+                                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                                contentPadding = PaddingValues(horizontal = 18.dp),
+                            ) {
+                                items(contributors.size) { i ->
+                                    val c = contributors[i]
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(4.dp),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(52.dp)
+                                                .clip(CircleShape)
+                                                .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (c.avatar.isNotEmpty()) {
+                                                AsyncImage(
+                                                    model = c.avatar,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(52.dp),
+                                                    contentScale = ContentScale.Crop,
+                                                )
+                                            } else {
+                                                Text(
+                                                    text = "?",
+                                                    fontSize = 20.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                                )
+                                            }
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(
+                                            text = c.name.ifBlank { "投稿人" },
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // 空状态占位: 提示 + 查看入口
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 18.dp, vertical = 18.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Person,
+                                        contentDescription = null,
+                                        tint = MiuixTheme.colorScheme.primary,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = "感谢每一位投稿人",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MiuixTheme.colorScheme.onBackground,
+                                    )
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(
+                                        text = "点击查看投稿名单",
+                                        fontSize = 12.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Filled.ChevronRight,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        // 底部提示条
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp)
+                                .padding(bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = if (contributors.isNotEmpty()) "${contributors.size} 位投稿人 · 点击查看全部" else "查看全部投稿人",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.primary,
                             )
                         }
                     }

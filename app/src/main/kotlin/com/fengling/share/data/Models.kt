@@ -52,6 +52,7 @@ data class AppItem(
     val downloadCount: Int,
     val rating: Double,
     val categoryName: String,
+    val screenshots: List<String> = emptyList(), // 介绍图片 (应用市场风格)
     val panLinks: List<PanLink> = emptyList(),
     val packId: Int? = null,
     val packItems: List<PackItem> = emptyList(),
@@ -71,6 +72,9 @@ data class AppItem(
             downloadCount = json.optInt("download_count", 0),
             rating = json.optDouble("rating", 0.0),
             categoryName = json.optString("category_name", ""),
+            screenshots = json.optJSONArray("screenshots")
+                ?.let { arr -> (0 until arr.length()).map { arr.optString(it) } }
+                ?: emptyList(),
             panLinks = json.optJSONArray("pan_links")
                 ?.let { arr ->
                     (0 until arr.length()).map { PanLink.fromJson(arr.getJSONObject(it)) }
