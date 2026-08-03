@@ -454,7 +454,24 @@ private fun AppListItem(app: AppItem, onClick: () -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    // 置顶/精选徽章
+                    // 置顶/精选/新版本徽章
+                    if (app.isNew) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "新",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFFFF8F1F), Color(0xFFFF4D6D)),
+                                    )
+                                )
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
                     if (app.isTop) {
                         Spacer(Modifier.width(6.dp))
                         Text(
@@ -497,7 +514,16 @@ private fun AppListItem(app: AppItem, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "${formatCount(app.downloadCount)} 次下载",
+                    text = buildString {
+                        // 发布日期: 只显示月-日, 紧凑
+                        if (app.releaseDate.isNotEmpty() && app.releaseDate.length >= 10) {
+                            append("更新于 ")
+                            append(app.releaseDate.substring(5, 10))
+                            append(" · ")
+                        }
+                        append(formatCount(app.downloadCount))
+                        append(" 次下载")
+                    },
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )

@@ -150,14 +150,38 @@ fun DetailScreen(
                                 }
                                 Spacer(Modifier.width(16.dp))
                                 Column {
-                                    Text(
-                                        text = item.name,
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MiuixTheme.colorScheme.onBackground,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = item.name,
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MiuixTheme.colorScheme.onBackground,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        // 新版本徽标 (渐变)
+                                        if (item.isNew) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "新",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = androidx.compose.ui.graphics.Color.White,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(5.dp))
+                                                    .background(
+                                                        androidx.compose.ui.graphics.Brush.linearGradient(
+                                                            listOf(
+                                                                androidx.compose.ui.graphics.Color(0xFFFF8F1F),
+                                                                androidx.compose.ui.graphics.Color(0xFFFF4D6D),
+                                                            )
+                                                        )
+                                                    )
+                                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                                            )
+                                        }
+                                    }
                                     Spacer(Modifier.height(6.dp))
                                     Text(
                                         text = buildString {
@@ -165,6 +189,12 @@ fun DetailScreen(
                                             if (item.version.isNotEmpty()) {
                                                 if (isNotEmpty()) append(" · ")
                                                 append("v${item.version}")
+                                            }
+                                            // 发布日期 (完整年月日)
+                                            if (item.releaseDate.isNotEmpty()) {
+                                                if (isNotEmpty()) append(" · ")
+                                                append("更新于 ")
+                                                append(item.releaseDate)
                                             }
                                         },
                                         fontSize = 12.sp,

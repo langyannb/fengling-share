@@ -59,6 +59,8 @@ data class AppItem(
     val parentPack: PackItem? = null,
     val isTop: Boolean = false,
     val isFeatured: Boolean = false,
+    val isNew: Boolean = false,          // 新版本标志 (管理端勾选或版本变更自动置位)
+    val releaseDate: String = "",        // 发布日期 YYYY-MM-DD (管理端填, 空则后端返回 '')
 ) {
     companion object {
         fun fromJson(json: JSONObject): AppItem = AppItem(
@@ -89,6 +91,8 @@ data class AppItem(
             } else null,
             isTop = json.optInt("is_top", 0) == 1,
             isFeatured = json.optInt("is_featured", 0) == 1,
+            isNew = json.optInt("is_new", 0) == 1,
+            releaseDate = json.optString("release_date", ""),
         )
     }
 }

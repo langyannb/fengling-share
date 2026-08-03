@@ -352,17 +352,44 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    text = app.name,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = app.name,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // 新版本徽标 (渐变)
+                    if (app.isNew) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "新",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFFFF8F1F), Color(0xFFFF4D6D)),
+                                    )
+                                )
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
+                }
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = buildString {
+                        // 发布日期: 只显示月-日
+                        if (app.releaseDate.isNotEmpty() && app.releaseDate.length >= 10) {
+                            append("更新于 ")
+                            append(app.releaseDate.substring(5, 10))
+                            append(" · ")
+                        }
                         if (app.version.isNotEmpty()) append("v${app.version}")
                         if (app.downloadCount > 0) {
                             if (isNotEmpty()) append(" · ")
