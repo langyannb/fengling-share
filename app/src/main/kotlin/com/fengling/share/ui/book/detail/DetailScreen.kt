@@ -2,6 +2,7 @@ package com.fengling.share.ui.book.detail
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,8 @@ import com.fengling.share.data.PackItem
 import com.fengling.share.data.PanLink
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
+import com.fengling.share.ui.components.LoadingBox
+import com.fengling.share.ui.components.ScreenshotSaveDialog
 import com.fengling.share.ui.main.home.formatCount
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -94,14 +97,7 @@ fun DetailScreen(
     ) { innerPadding ->
         when {
             loading -> {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                }
+                LoadingBox(Modifier.fillMaxSize().padding(innerPadding))
             }
             error.isNotEmpty() -> {
                 EmptyMessage(text = error)
@@ -470,6 +466,7 @@ private fun displayLinkName(link: PanLink): String {
 @Composable
 private fun ScreenshotStrip(urls: List<String>, appName: String) {
     var previewIndex by remember { mutableStateOf(-1) } // -1 = 不预览
+    var saveUrl by remember { mutableStateOf<String?>(null) } // 长按保存的图片
     LazyRow(
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
     ) {
@@ -480,7 +477,11 @@ private fun ScreenshotStrip(urls: List<String>, appName: String) {
                     .width(160.dp)
                     .height(280.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .clickable { previewIndex = i },
+                    // 点击全屏预览, 长按保存弹窗
+                    .combinedClickable(
+                        onClick = { previewIndex = i },
+                        onLongClick = { saveUrl = url },
+                    ),
             ) {
                 AsyncImage(
                     model = url,
@@ -500,6 +501,14 @@ private fun ScreenshotStrip(urls: List<String>, appName: String) {
             onDismiss = { previewIndex = -1 },
         )
     }
+    // 长按保存弹窗
+    saveUrl?.let { u ->
+        ScreenshotSaveDialog(
+            url = u,
+            appName = appName,
+            onDismiss = { saveUrl = null },
+        )
+    }
 }
 
 /**
@@ -514,6 +523,7 @@ private fun ScreenshotPreview(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         val pagerState = rememberPagerState(pageCount = { urls.size }, initialPage = initialIndex)
+        var saveUrl by remember { mutableStateOf<String?>(null) }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -526,20 +536,28 @@ private fun ScreenshotPreview(
                     .clip(RoundedCornerShape(20.dp))
                     .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.92f)),
             )
-            // 图片横向滑动
+            // 图片横向滑动 (点击关闭, 长按保存)
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 beyondViewportPageCount = 1,
             ) { page ->
-                AsyncImage(
-                    model = urls[page],
-                    contentDescription = "$appName 截图 ${page + 1}",
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(12.dp),
-                    contentScale = ContentScale.Fit,
-                )
+                        .padding(12.dp)
+                        .combinedClickable(
+                            onClick = onDismiss,
+                            onLongClick = { saveUrl = urls[page] },
+                        ),
+                ) {
+                    AsyncImage(
+                        model = urls[page],
+                        contentDescription = "$appName 截图 ${page + 1}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
             // 关闭按钮
             Box(
@@ -574,6 +592,14 @@ private fun ScreenshotPreview(
                     color = androidx.compose.ui.graphics.Color.White,
                 )
             }
+        }
+        // 长按保存弹窗 (叠加在当前 Dialog 之上)
+        saveUrl?.let { u ->
+            ScreenshotSaveDialog(
+                url = u,
+                appName = appName,
+                onDismiss = { saveUrl = null },
+            )
         }
     }
 }

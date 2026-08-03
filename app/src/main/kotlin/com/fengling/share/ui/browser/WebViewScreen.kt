@@ -1,16 +1,25 @@
 package com.fengling.share.ui.browser
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Message
+import android.webkit.DownloadListener
+import android.webkit.GeolocationPermissions
+import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -45,11 +54,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import android.webkit.MimeTypeMap
+import android.app.DownloadManager
+import android.os.Environment
 import android.widget.Toast
 import com.fengling.share.ui.components.AppTopBar
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -58,11 +71,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * WebViewScreen - 内置浏览器 (Navigation Compose 返回栈)
- * - WebView 实例复用: sharedWebView 由上层持有, 退出再进不重新加载
+ * - WebView 全新实例: 每次进入创建, 离开销毁 (不残留历史栈/状态)
  * - 预测性返回: 内部历史回退由 BackHandler 承接, 无历史时 Navigation 返回
  * - 右上角菜单: 复制链接 / 浏览器打开 / 刷新
- *
- * @param sharedWebView 复用的 WebView 实例 (Activity 生命周期内保持)
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -70,7 +81,6 @@ fun WebViewScreen(
     url: String,
     title: String,
     password: String = "",
-    sharedWebView: WebView,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -78,32 +88,63 @@ fun WebViewScreen(
     var progress by remember { mutableIntStateOf(100) }
     var menuExpanded by remember { mutableStateOf(false) }
     // 返回栈状态跟踪 (解决 BackHandler enabled 陈旧问题)
-    var canGoBack by remember { mutableStateOf(sharedWebView.canGoBack()) }
+    // 每次进入都是全新 WebView 实例, 初始恒为 false
+    var canGoBack by remember { mutableStateOf(false) }
 
-    val webView = sharedWebView
+    // 每次进入创建全新 WebView 实例, 离开销毁:
+    // 复用实例会残留上一链接的内部历史栈 → 返回键 goBack 回到旧链接
+    val webView = remember { WebView(context) }
 
     // 配置 WebView (同步执行, 确保先于 loadUrl; 不用 LaunchedEffect 避免时序竞争导致
     // WebViewClient 未设置 → 页面加载绕过 shouldOverrideUrlLoading 拦截)
+    // 文件上传回调 (onShowFileChooser)
+    var filePathCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val fileChooserLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = filePathCallback
+        filePathCallback = null
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val data = result.data
+            val uris = if (data?.clipData != null) {
+                (0 until data.clipData!!.itemCount)
+                    .map { data.clipData!!.getItemAt(it).uri }
+                    .toTypedArray()
+            } else {
+                data?.data?.let { arrayOf(it) } ?: emptyArray()
+            }
+            callback?.onReceiveValue(uris)
+        } else {
+            callback?.onReceiveValue(null)
+        }
+    }
+
     remember(webView) {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        // 正常浏览器配置: 遵循页面 viewport meta
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
         settings.databaseEnabled = true
-        settings.javaScriptCanOpenWindowsAutomatically = false
-        // 关闭多窗口: window.open 唤端(uclink://)作为主frame导航走 shouldOverrideUrlLoading,
-        // 由 handleProtocolUrl 正常跳转交给系统处理 (Intent.parseUri/ACTION_VIEW)
-        settings.setSupportMultipleWindows(false)
+        settings.javaScriptCanOpenWindowsAutomatically = true
+        // 支持多窗口: window.open 弹新窗 → onCreateWindow 处理
+        // (http(s) 当前 WebView 打开; 自定义 scheme 如 uclink:// 交系统, 不拦截)
+        settings.setSupportMultipleWindows(true)
         settings.mediaPlaybackRequiresUserGesture = false
-        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        settings.allowFileAccess = true
+        // 禁用深色反色: ColorOS/系统深色模式会强制 WebView 反色页面 (algorithmic darkening),
+        // 深色背景页面被反色后内容不可见 (link3.cc 空白实测); 正常浏览器不强制反色
+        settings.setAlgorithmicDarkeningAllowed(false)
         // UA 伪装: 去掉 WebView 标识, 伪装成手机 Chrome (UC网盘等站点检测 WebView UA 会拦截)
         settings.userAgentString =
-            android.webkit.WebSettings.getDefaultUserAgent(context)
+            WebSettings.getDefaultUserAgent(context)
                 .replace("; wv", "")
                 .replace("Version/4.0", "")
                 .replace("Version/4.0 Mobile", "")
                 .trim() + " Mobile"
+
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
@@ -124,6 +165,7 @@ fun WebViewScreen(
                 canGoBack = view?.canGoBack() ?: false
             }
         }
+
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress = newProgress
@@ -134,20 +176,98 @@ fun WebViewScreen(
             override fun onReceivedTitle(view: WebView, title: String?) {
                 if (!title.isNullOrBlank()) pageTitle = title
             }
+
+            // window.open 新窗口: 自定义 scheme (uclink:// 等) 交给系统; http(s) 用新 WebView 承接 URL 后当前 WebView 打开
+            override fun onCreateWindow(
+                view: WebView,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message,
+            ): Boolean {
+                val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+                // 临时 WebView 承接目标 URL (onCreateWindow 无法直接拿到 url, 需经 shouldOverrideUrlLoading)
+                val temp = WebView(view.context)
+                temp.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(v: WebView?, request: WebResourceRequest?): Boolean {
+                        val u = request?.url?.toString() ?: return false
+                        if (handleProtocolUrl(view, u)) return true
+                        view.loadUrl(u)
+                        return true
+                    }
+                }
+                transport.webView = temp
+                resultMsg.sendToTarget()
+                return true
+            }
+
+            // 文件上传 (input[type=file]) → 系统文件选择器
+            override fun onShowFileChooser(
+                webView: WebView,
+                newCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams,
+            ): Boolean {
+                filePathCallback?.let { it.onReceiveValue(null) }
+                filePathCallback = newCallback
+                fileChooserLauncher.launch(fileChooserParams.createIntent())
+                return true
+            }
+
+            // 网页权限请求 (摄像头/麦克风等) → 直接授予 (内置浏览器不拦截)
+            override fun onPermissionRequest(request: PermissionRequest) {
+                runCatching { request.grant(request.resources) }
+            }
+
+            // 定位权限 → 直接授予
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?,
+                callback: GeolocationPermissions.Callback,
+            ) {
+                callback.invoke(origin, true, false)
+            }
         }
+
+        // 下载处理: 交给系统下载管理器 (不拦截, 完整浏览器行为)
+        webView.setDownloadListener(
+            DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+                try {
+                    val request = DownloadManager.Request(Uri.parse(url)).apply {
+                        setMimeType(mimetype ?: "application/octet-stream")
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(
+                            Environment.DIRECTORY_DOWNLOADS,
+                            downloadFileName(url, contentDisposition, mimetype),
+                        )
+                    }
+                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                    dm?.enqueue(request)
+                    Toast.makeText(context, "开始下载", Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                    // DownloadManager 失败时回退: 系统浏览器打开
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (_: Exception) { }
+                }
+            }
+        )
     }
 
-    // URL 变化才加载 (新页面加载; 返回时复用 WebView 内部历史不重载)
-    LaunchedEffect(webView, url) {
-        if (webView.url == null || webView.url != url) {
-            webView.loadUrl(url)
-        }
+    // 每次进入都强制重新加载 (新 WebView 实例, 天然无历史残留)
+    // ⚠️ 等 WebView attach 到窗口且有实际尺寸后才 loadUrl:
+    // SPA 页面 (link3.cc 等) 在 WebView 未布局时加载会 height:100% 链塌陷 → 内容空白
+    var webViewReady by remember { mutableStateOf(false) }
+    LaunchedEffect(webView, url, webViewReady) {
+        if (!webViewReady) return@LaunchedEffect
+        webView.stopLoading()
+        webView.clearHistory()
+        canGoBack = false
+        webView.loadUrl(url)
     }
 
-    // 页面离开时只停止加载, 不销毁 WebView (复用)
+    // 页面离开时: 停加载 + 销毁 WebView 实例 (每次进入都是全新实例, 不残留历史/状态)
     DisposableEffect(Unit) {
         onDispose {
             webView.stopLoading()
+            webView.destroy()
         }
     }
 
@@ -230,7 +350,12 @@ fun WebViewScreen(
         ) {
             AndroidView(
                 factory = { webView },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // WebView 有实际尺寸 (attach 完成) 后才触发加载, 避免 SPA 布局塌陷
+                    .onSizeChanged { size ->
+                        if (size.width > 0 && size.height > 0) webViewReady = true
+                    },
             )
             // 加载进度条 (顶部细条, 平滑动画)
             val animatedProgress by animateFloatAsState(
@@ -300,14 +425,36 @@ private fun handleProtocolUrl(view: WebView, url: String): Boolean {
     if (url.startsWith("intent://")) {
         try {
             val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-            view.context.startActivity(intent)
+            view.context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return true
         } catch (_: Exception) { }
     }
 
     // 其他 scheme (uclink:// 等): ACTION_VIEW 正常跳转
     try {
-        view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        view.context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     } catch (_: Exception) { }
     return true
+}
+
+/** 从下载 URL / Content-Disposition / MIME 推断文件名 (DownloadManager 落盘用) */
+private fun downloadFileName(url: String, contentDisposition: String?, mimeType: String?): String {
+    // Content-Disposition 里的 filename 优先 (支持 RFC 5987 filename*)
+    contentDisposition?.let { cd ->
+        val m = Regex("filename\\*?=(?:UTF-8''|\")?([^;\"]+)", RegexOption.IGNORE_CASE).find(cd)
+        m?.groupValues?.get(1)?.let {
+            val decoded = try { java.net.URLDecoder.decode(it, "UTF-8") } catch (_: Exception) { it }
+            if (decoded.isNotBlank() && !decoded.contains("/") && !decoded.contains("\\")) {
+                return decoded
+            }
+        }
+    }
+    // 再从 URL 路径尾段取文件名
+    val path = try { Uri.parse(url).lastPathSegment } catch (_: Exception) { null }
+    if (!path.isNullOrBlank() && !path.contains("/")) return path
+    // 兜底: 按时间戳 + MIME 扩展名
+    val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
+    return "download_${System.currentTimeMillis()}.$ext"
 }

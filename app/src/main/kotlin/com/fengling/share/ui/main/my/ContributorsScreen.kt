@@ -36,6 +36,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.Contributor
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
+import com.fengling.share.ui.components.LoadingBox
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -71,14 +72,7 @@ fun ContributorsScreen(
     ) { innerPadding ->
         when {
             loading -> {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                }
+                LoadingBox(Modifier.fillMaxSize().padding(innerPadding))
             }
             contributors.isEmpty() -> {
                 Box(Modifier.fillMaxSize().padding(innerPadding)) {

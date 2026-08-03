@@ -39,8 +39,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppVersion
+import com.fengling.share.data.CrashReporter
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
@@ -48,11 +50,15 @@ import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.main.MainScreen
 import com.fengling.share.ui.theme.AppTheme
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 崩溃日志: 最先注册处理器, 再上传上次崩溃的日志
+        CrashReporter.init(applicationContext)
+        lifecycleScope.launch { CrashReporter.uploadPending(applicationContext) }
         super.onCreate(savedInstanceState)
         Settings.init(applicationContext)
         enableEdgeToEdge()

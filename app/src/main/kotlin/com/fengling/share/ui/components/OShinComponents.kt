@@ -54,6 +54,10 @@ fun OShinSettingRow(
     leftIcon: ImageVector? = null,
     iconColor: Color = MiuixTheme.colorScheme.onBackground,
     position: CouiPosition = CouiPosition.Single,
+    // 彩色品牌图标插槽 (优先于 leftIcon; 用于 QQ/GitHub/官网等真实品牌彩色图标)
+    leading: (@Composable () -> Unit)? = null,
+    // 右侧自定义插槽 (优先于 rightText 和箭头; 用于 Switch 等控件)
+    trailing: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -89,7 +93,10 @@ fun OShinSettingRow(
             .scale(scale),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (leftIcon != null) {
+        if (leading != null) {
+            leading()
+            Box(Modifier.size(16.dp))
+        } else if (leftIcon != null) {
             Icon(
                 imageVector = leftIcon,
                 contentDescription = null,
@@ -117,23 +124,27 @@ fun OShinSettingRow(
                 )
             }
         }
-        if (rightText != null) {
-            Text(
-                text = rightText,
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                textAlign = TextAlign.End,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 130.dp),
+        if (trailing != null) {
+            trailing()
+        } else {
+            if (rightText != null) {
+                Text(
+                    text = rightText,
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 130.dp),
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                modifier = Modifier.size(18.dp),
             )
         }
-        Icon(
-            imageVector = Icons.Filled.ChevronRight,
-            contentDescription = null,
-            tint = MiuixTheme.colorScheme.onBackgroundVariant,
-            modifier = Modifier.size(18.dp),
-        )
     }
 }
 

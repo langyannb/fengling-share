@@ -1,16 +1,7 @@
 package com.fengling.share.ui.main
 
-import android.content.Intent
-import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -32,10 +23,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.Category
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
@@ -112,27 +103,44 @@ object Routes {
  * - HorizontalPager: tab 左右滑动切换 (平滑滑动动画)
  * - 液态玻璃: 页面级 backdrop 捕获 + 玻璃底栏
  * - Navigation 返回栈: main → detail → webview
- * - WebView 实例复用
+ * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
  */
+
+/**
+ * 智能打开链接: http(s) 走内置浏览器; mailto/tel/sms 等协议交系统 (打开邮箱/拨号等)
+ * @return true = 已处理 (交系统), false = 应走内置浏览器
+ */
+private fun openExternalUrl(context: android.content.Context, url: String): Boolean {
+    val scheme = try { android.net.Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
+    if (scheme == "http" || scheme == "https") return false
+    // mailto/tel/sms/其他 scheme → 交系统打开对应应用
+    try {
+        context.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        return true
+    } catch (_: Exception) {
+        return false
+    }
+}
+
 @Composable
 fun MainScreen(
     onThemeChanged: (ThemeMode) -> Unit = {},
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
-
-    // 共享 WebView 实例 (Activity 生命周期内复用)
     val context = LocalContext.current
-    val sharedWebView = remember { WebView(context.applicationContext) }
 
     // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊)
     val (backdrop, captureModifier) = rememberGlassBackdrop2()
 
     val tabs = remember {
         listOf(
-            NavTab("首页", Icons.Outlined.Home),
-            NavTab("分类", Icons.Outlined.Category),
-            NavTab("关于", Icons.Outlined.Info),
+            NavTab("首页", Icons.Filled.Home),
+            NavTab("分类", Icons.Filled.Category),
+            NavTab("关于", Icons.Filled.Info),
         )
     }
 
@@ -177,9 +185,11 @@ fun MainScreen(
             noMoreToday = noMoreToday,
             onNoMoreTodayChange = { noMoreToday = it },
             onLinkClick = { url ->
-                // 公告里的链接 → 内置浏览器打开
+                // 公告里的链接: mailto/tel 交系统, http(s) 内置浏览器
                 showNotice = false
-                navController.navigate(Routes.webview(url, "公告详情"))
+                if (!openExternalUrl(context, url)) {
+                    navController.navigate(Routes.webview(url, "公告详情"))
+                }
             },
             onDismiss = {
                 if (noMoreToday) {
@@ -196,26 +206,9 @@ fun MainScreen(
         navController = navController,
         startDestination = Routes.MAIN,
         modifier = Modifier.fillMaxSize(),
-        enterTransition = {
-            if (Settings.predictiveBackEnabled) {
-                slideInHorizontally(tween(300)) { it / 3 } + fadeIn(tween(300))
-            } else {
-                EnterTransition.None
-            }
-        },
-        exitTransition = {
-            if (Settings.predictiveBackEnabled) fadeOut(tween(300)) else ExitTransition.None
-        },
-        popEnterTransition = {
-            if (Settings.predictiveBackEnabled) fadeIn(tween(300)) else EnterTransition.None
-        },
-        popExitTransition = {
-            if (Settings.predictiveBackEnabled) {
-                slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(300))
-            } else {
-                ExitTransition.None
-            }
-        },
+        // 系统预测返回 (enableOnBackInvokedCallback=true + 系统手势导航):
+        // 不设置自定义转场, 用 Navigation Compose 默认 → 系统手势驱动滑动+缩放预测返回
+        // ⚠️ 显式设置 None 会禁用预测返回动画; 自定义 fadeOut 会叠出"变透明"效果
     ) {
         composable(Routes.MAIN) {
             // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (不用 Scaffold bottomBar 槽位)
@@ -240,17 +233,19 @@ fun MainScreen(
                         when (page) {
                             0 -> HomeScreen(
                                 onAppClick = { navController.navigate(Routes.detail(it)) },
-                                onOpenUrl = { url, _ ->
-                                    // 外置浏览器打开 (不用内置 WebView)
-                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
+                                onOpenUrl = { url, title ->
+                                    // 内置浏览器打开
+                                    navController.navigate(Routes.webview(url, title))
                                 },
                             )
                             1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
-                                onOpenWeb = { url, _ ->
-                                    // 外置浏览器打开
-                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
+                                onOpenWeb = { url, title ->
+                                    // mailto/tel 等协议交系统, http(s) 内置浏览器
+                                    if (!openExternalUrl(context, url)) {
+                                        navController.navigate(Routes.webview(url, title))
+                                    }
                                 },
                                 onOpenUpdate = { info ->
                                     navController.navigate(Routes.update(info))
@@ -285,9 +280,11 @@ fun MainScreen(
             DetailScreen(
                 appId = appId,
                 onBack = { navController.popBackStack() },
-                onOpenWeb = { url, _, _ ->
-                    // 外置浏览器打开 (不用内置 WebView)
-                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
+                onOpenWeb = { url, title, password ->
+                    // mailto/tel 等协议交系统, http(s) 内置浏览器
+                    if (!openExternalUrl(context, url)) {
+                        navController.navigate(Routes.webview(url, title, password))
+                    }
                 },
                 onOpenSubApp = { subId ->
                     navController.navigate(Routes.detail(subId))
@@ -311,7 +308,6 @@ fun MainScreen(
                 url = url,
                 title = title,
                 password = password,
-                sharedWebView = sharedWebView,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -442,7 +438,7 @@ private fun NoticeDialog(
                     }
                 }
                 // WebView 渲染公告 HTML
-                val webView = remember { WebView(context.applicationContext) }
+                val webView = remember { WebView(context) }
                 LaunchedEffect(content) {
                     webView.settings.javaScriptEnabled = true
                     webView.settings.domStorageEnabled = true

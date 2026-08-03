@@ -105,10 +105,13 @@ import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.BrandColors
 import com.fengling.share.ui.components.CouiPosition
+import com.fengling.share.ui.components.GitHubBrandIcon
 import com.fengling.share.ui.components.OShinCard
 import com.fengling.share.ui.components.OShinCardTitle
 import com.fengling.share.ui.components.OShinDivider
+import com.fengling.share.ui.components.QqBrandIcon
 import com.fengling.share.ui.components.OShinSettingRow
 import com.fengling.share.ui.theme.BgEffectView
 import kotlinx.coroutines.flow.collect
@@ -116,7 +119,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.ColorPalette
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
@@ -225,9 +227,11 @@ fun MyScreen(
                     showUpdateDialog = true
                 } else {
                     checkResult = "已是最新版本"
+                    Toast.makeText(context, "已是最新版本 v$currentVersion", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
                 checkResult = "检查失败: ${e.message}"
+                Toast.makeText(context, "检查更新失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
             checkingUpdate = false
         }
@@ -384,6 +388,15 @@ fun MyScreen(
                         summary = if (predictiveBack) "开启: 返回时页面滑动过渡" else "关闭: 直接返回无动画",
                         leftIcon = Icons.Filled.Settings,
                         position = CouiPosition.Top,
+                        trailing = {
+                            Switch(
+                                checked = predictiveBack,
+                                onCheckedChange = { checked ->
+                                    predictiveBack = checked
+                                    Settings.predictiveBackEnabled = checked
+                                },
+                            )
+                        },
                         onClick = {
                             predictiveBack = !predictiveBack
                             Settings.predictiveBackEnabled = predictiveBack
@@ -479,7 +492,7 @@ fun MyScreen(
 
                             Spacer(Modifier.height(16.dp))
 
-                            // 预置色板
+                            // 预置色板 (精选 7 色)
                             Text(
                                 text = "主题色",
                                 fontSize = 13.sp,
@@ -517,65 +530,6 @@ fun MyScreen(
                                     }
                                 }
                             }
-
-                            Spacer(Modifier.height(16.dp))
-
-                            // 动态取色
-                            Text(
-                                text = "动态取色",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(Settings.customColor))
-                                        .clickable {
-                                            themeColor = ThemeColor.CUSTOM
-                                            Settings.themeColor = ThemeColor.CUSTOM.value
-                                            onThemeChanged(themeMode)
-                                        }
-                                        .padding(3.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    if (themeColor == ThemeColor.CUSTOM) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Check,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(14.dp),
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    text = "自定义",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                )
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            ColorPalette(
-                                color = Color(Settings.customColor),
-                                onColorChanged = { newColor ->
-                                    Settings.customColor = newColor.value.toLong()
-                                    if (themeColor != ThemeColor.CUSTOM) {
-                                        themeColor = ThemeColor.CUSTOM
-                                        Settings.themeColor = ThemeColor.CUSTOM.value
-                                    }
-                                    onThemeChanged(themeMode)
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(140.dp),
-                            )
                         }
                     }
                 }
@@ -783,11 +737,22 @@ fun MyScreen(
                             )
                         }
                     }
-                    // QQ 群 (mqqapi 跳转, 无 QQ 回退网页)
+                    // QQ 群 (mqqapi 跳转, 无 QQ 回退网页; 彩色 QQ 群头像图标)
                     OShinSettingRow(
                         title = "加入官方QQ群",
                         summary = if (aboutConfig.qqGroup.isNotEmpty()) "群号: ${aboutConfig.qqGroup}" else "获取最新版本与专属福利",
-                        leftIcon = Icons.Filled.Person,
+                        leading = {
+                            if (aboutConfig.qqGroup.isNotEmpty()) {
+                                QqBrandIcon()
+                            } else {
+                                androidx.compose.material3.Icon(
+                                    imageVector = Icons.Filled.Person,
+                                    contentDescription = null,
+                                    tint = BrandColors.QQ,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+                        },
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.qqGroup.isNotEmpty()) {
@@ -802,13 +767,9 @@ fun MyScreen(
                                 try {
                                     context.startActivity(qqIntent)
                                 } catch (e: Exception) {
-                                    // QQ 未安装或 scheme 不可用 → 回退网页加群
+                                    // QQ 未安装或 scheme 不可用 → 回退内置浏览器打开加群网页
                                     if (aboutConfig.qqUrl.isNotEmpty()) {
-                                        try {
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.qqUrl)))
-                                        } catch (_: Exception) {
-                                            Toast.makeText(context, "请安装QQ后加入群聊", Toast.LENGTH_SHORT).show()
-                                        }
+                                        onOpenWeb(aboutConfig.qqUrl, "加入QQ群")
                                     } else {
                                         Toast.makeText(context, "请安装QQ后加入群聊", Toast.LENGTH_SHORT).show()
                                     }
@@ -823,10 +784,11 @@ fun MyScreen(
                         title = "意见反馈",
                         summary = "遇到问题告诉我们",
                         leftIcon = Icons.Filled.Email,
+                        iconColor = BrandColors.Feedback,
                         position = CouiPosition.Bottom,
                         onClick = {
                             if (aboutConfig.feedback.isNotEmpty()) {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.feedback)))
+                                onOpenWeb(aboutConfig.feedback, "意见反馈")
                             } else {
                                 Toast.makeText(context, "反馈通道暂未配置", Toast.LENGTH_SHORT).show()
                             }
@@ -870,10 +832,11 @@ fun MyScreen(
                         title = "官方网站",
                         summary = if (aboutConfig.website.isNotEmpty()) aboutConfig.website else "访问官网了解详情",
                         leftIcon = Icons.Filled.Language,
+                        iconColor = BrandColors.Website,
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.website.isNotEmpty()) {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.website)))
+                                onOpenWeb(aboutConfig.website, "官方网站")
                             } else {
                                 Toast.makeText(context, "官网暂未配置", Toast.LENGTH_SHORT).show()
                             }
@@ -883,11 +846,11 @@ fun MyScreen(
                     OShinSettingRow(
                         title = "GitHub",
                         summary = if (aboutConfig.github.isNotEmpty()) "开源项目 · 欢迎 Star" else "开源项目",
-                        leftIcon = Icons.Filled.Code,
+                        leading = { GitHubBrandIcon() },
                         position = CouiPosition.Middle,
                         onClick = {
                             if (aboutConfig.github.isNotEmpty()) {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.github)))
+                                onOpenWeb(aboutConfig.github, "GitHub")
                             } else {
                                 Toast.makeText(context, "GitHub 暂未配置", Toast.LENGTH_SHORT).show()
                             }
@@ -898,31 +861,13 @@ fun MyScreen(
                         title = "捐赠支持",
                         summary = "喜欢就支持一下吧",
                         leftIcon = Icons.Filled.Favorite,
-                        position = CouiPosition.Middle,
-                        onClick = {
-                            if (aboutConfig.donate.isNotEmpty()) {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(aboutConfig.donate)))
-                            } else {
-                                Toast.makeText(context, "捐赠通道暂未配置", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                    )
-                    OShinDivider()
-                    OShinSettingRow(
-                        title = "给个好评",
-                        summary = "在应用商店支持我们",
-                        leftIcon = Icons.Filled.ThumbUp,
+                        iconColor = BrandColors.Donate,
                         position = CouiPosition.Bottom,
                         onClick = {
-                            try {
-                                context.startActivity(
-                                    Intent(
-                                        Intent.ACTION_VIEW,
-                                        Uri.parse("market://details?id=${context.packageName}")
-                                    )
-                                )
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "未找到应用商店", Toast.LENGTH_SHORT).show()
+                            if (aboutConfig.donate.isNotEmpty()) {
+                                onOpenWeb(aboutConfig.donate, "捐赠支持")
+                            } else {
+                                Toast.makeText(context, "捐赠通道暂未配置", Toast.LENGTH_SHORT).show()
                             }
                         },
                     )

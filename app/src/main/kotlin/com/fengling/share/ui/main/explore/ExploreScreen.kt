@@ -1,6 +1,12 @@
 package com.fengling.share.ui.main.explore
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import coil.compose.AsyncImage
 import androidx.compose.foundation.clickable
@@ -17,6 +23,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -34,6 +43,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,6 +53,7 @@ import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
+import com.fengling.share.ui.components.LoadingBox
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -101,6 +113,11 @@ fun ExploreScreen(
         }
     }
 
+    // 返回键: 在分类二级页时返回分类列表, 否则默认处理
+    androidx.activity.compose.BackHandler(enabled = expandedCategory != null) {
+        expandedCategory = null
+    }
+
     Scaffold(
         topBar = {
             if (expandedCategory != null) {
@@ -115,28 +132,16 @@ fun ExploreScreen(
     ) { innerPadding ->
         when {
             loading -> {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                }
+                LoadingBox(Modifier.fillMaxSize().padding(innerPadding))
             }
             expandedCategory != null -> {
                 val catId = expandedCategory!!
                 if (categoryLoading && categoryApps.isEmpty()) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("加载中...", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                    }
+                    LoadingBox(Modifier.fillMaxSize().padding(innerPadding))
                 } else if (categoryApps.isEmpty()) {
-                    EmptyMessage(text = "该分类暂无软件")
+                    Box(Modifier.fillMaxSize().padding(innerPadding)) {
+                        EmptyMessage(text = "该分类暂无软件")
+                    }
                 } else {
                     LazyColumn(
                         modifier = Modifier
@@ -163,20 +168,23 @@ fun ExploreScreen(
                 EmptyMessage(text = "暂无分类")
             }
             else -> {
-                LazyColumn(
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding),
                     contentPadding = PaddingValues(
-                        start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
+                        start = 14.dp, end = 14.dp, top = 8.dp, bottom = 24.dp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item {
-                        SmallTitle(text = "全部分类")
+                    // 标题横跨整行 (2 列)
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        SmallTitle(text = "全部分类", modifier = Modifier.padding(vertical = 4.dp))
                     }
-                    items(categories) { cat ->
-                        CategoryCard(
+                    gridItems(categories) { cat ->
+                        MarketCategoryCard(
                             name = cat.name,
                             appCount = apps.count { it.categoryId == cat.id },
                             icon = cat.icon,
@@ -194,85 +202,101 @@ fun ExploreScreen(
     }
 }
 
-/** 分类卡片 (OShin 风格: 渐变图标圆 + 上传图标优先 + 计数徽章) */
+/**
+ * 应用市场风格分类大卡片 (2 列宫格, 小米应用商店分类页同款)
+ * 整卡渐变色背景 + 大图标 + 名称 + 软件数量, 视觉冲击力强
+ */
 @Composable
-private fun CategoryCard(name: String, appCount: Int, icon: String, color: String, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
+private fun MarketCategoryCard(
+    name: String,
+    appCount: Int,
+    icon: String,
+    color: String,
+    onClick: () -> Unit,
+) {
+    val catColor = parseColor(color)
+    val isDark = isSystemInDarkTheme()
+    val interaction = remember { MutableInteractionSource() }
+    val isPressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1f,
+        animationSpec = spring(
+            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+            stiffness = androidx.compose.animation.core.Spring.StiffnessLow,
+        ),
+        label = "catCard",
+    )
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        cornerRadius = 16.dp,
+            .height(110.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        catColor,
+                        catColor.copy(alpha = 0.62f),
+                    )
+                )
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(14.dp),
     ) {
-        Row(
+        // 大图标 (白底圆角方块内展示, 无图用首字符) — 左上
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .size(46.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.92f)),
+            contentAlignment = Alignment.Center,
         ) {
-            // 渐变彩色图标圆 (上传图标优先, 无图时首字符)
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                parseColor(color).copy(alpha = 0.85f),
-                                parseColor(color).copy(alpha = 0.45f),
-                            )
-                        )
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (icon.isNotEmpty()) {
-                    AsyncImage(
-                        model = icon,
-                        contentDescription = name,
-                        modifier = Modifier.size(28.dp),
-                    )
-                } else {
-                    Text(
-                        text = name.take(1),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = androidx.compose.ui.graphics.Color.White,
-                    )
-                }
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = name,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.onBackground,
+            if (icon.isNotEmpty()) {
+                AsyncImage(
+                    model = icon,
+                    contentDescription = name,
+                    modifier = Modifier.size(30.dp),
                 )
-                Spacer(Modifier.height(3.dp))
+            } else {
                 Text(
-                    text = "$appCount 款软件",
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-            }
-            // 圆形计数徽章
-            Box(
-                modifier = Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .background(
-                        parseColor(color).copy(alpha = 0.15f)
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = appCount.coerceAtMost(99).toString(),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = parseColor(color),
+                    text = name.take(1),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = catColor,
                 )
             }
         }
+        // 名称 + 数量 (左下, 与图标分开不遮挡)
+        Column(
+            modifier = Modifier.align(Alignment.BottomStart),
+        ) {
+            Text(
+                text = name,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(1.dp))
+            Text(
+                text = "$appCount 款软件",
+                fontSize = 11.sp,
+                color = Color.White.copy(alpha = 0.9f),
+            )
+        }
+        // 装饰圆 (右上角, 避开文字区域)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = if (isDark) 0.08f else 0.14f)),
+        )
     }
 }
 
@@ -287,7 +311,7 @@ private fun parseColor(hex: String): androidx.compose.ui.graphics.Color {
     }
 }
 
-/** 分类内软件项 */
+/** 分类内软件项 (现代化: 图标 + 名称 + 元信息 + 查看按钮) */
 @Composable
 private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
     Card(
@@ -295,21 +319,46 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp),
-        cornerRadius = 14.dp,
+        cornerRadius = 16.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 13.dp),
+                .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 应用图标 (圆角方块)
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(13.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (app.icon.isNotEmpty()) {
+                    AsyncImage(
+                        model = app.icon,
+                        contentDescription = app.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Text(
+                        text = app.name.take(1),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     text = app.name,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MiuixTheme.colorScheme.onBackground,
                     maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
@@ -317,18 +366,36 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                         if (app.version.isNotEmpty()) append("v${app.version}")
                         if (app.downloadCount > 0) {
                             if (isNotEmpty()) append(" · ")
-                            append("${app.downloadCount} 次下载")
+                            append("${formatCount(app.downloadCount)} 次下载")
                         }
                     },
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             }
-            Text(
-                text = "查看",
-                fontSize = 14.sp,
-                color = MiuixTheme.colorScheme.primary,
-            )
+            // 查看按钮 (胶囊)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+            ) {
+                Text(
+                    text = "查看",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
         }
+    }
+}
+
+/** 下载量格式化 */
+private fun formatCount(count: Int): String {
+    return when {
+        count >= 10000 -> String.format("%.1fw", count / 10000.0)
+        count >= 1000 -> String.format("%.1fk", count / 1000.0)
+        else -> count.toString()
     }
 }
