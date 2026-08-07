@@ -2,6 +2,14 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -47,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -101,7 +110,7 @@ object Routes {
 /**
  * MainScreen - 主界面 (OShin 风格重构)
  * - HorizontalPager: tab 左右滑动切换 (平滑滑动动画)
- * - 液态玻璃: 页面级 backdrop 捕获 + 玻璃底栏
+ * - 液态玻璃: 页面级 backdrop 捕获 + 玻璃底栏 (OShin 同款 kyant/backdrop)
  * - Navigation 返回栈: main → detail → webview
  * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
  */
@@ -133,7 +142,7 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊)
+    // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊) — OShin 同款方案
     val (backdrop, captureModifier) = rememberGlassBackdrop2()
 
     val tabs = remember {
@@ -185,7 +194,7 @@ fun MainScreen(
             noMoreToday = noMoreToday,
             onNoMoreTodayChange = { noMoreToday = it },
             onLinkClick = { url ->
-                // 公告里的链接: mailto/tel 交系统, http(s) 内置浏览器
+                // 公告里的链接统一分流: http(s) 内置浏览器, 自定义协议 (mqqwpa:// 等) 交系统应用
                 showNotice = false
                 if (!openExternalUrl(context, url)) {
                     navController.navigate(Routes.webview(url, "公告详情"))
@@ -202,27 +211,46 @@ fun MainScreen(
         )
     }
 
+    // 进入 = 滑动切换动画 (用户定案: 点击应用右滑进入, 旧页左滑出)
+    // 返回 = 系统预测返回动画 (跟手缩放回上一级, 不要滑出):
+    // manifest enableOnBackInvokedCallback=true 时系统手势跟手,
+    // 提交后 pop 转场用缩放+淡出延续预测返回观感 (官方 predictive-back)
+    val slideSpec = spring<IntOffset>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    val popSpec = spring<Float>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
         modifier = Modifier.fillMaxSize(),
-        // 系统预测返回 (enableOnBackInvokedCallback=true + 系统手势导航):
-        // 不设置自定义转场, 用 Navigation Compose 默认 → 系统手势驱动滑动+缩放预测返回
-        // ⚠️ 显式设置 None 会禁用预测返回动画; 自定义 fadeOut 会叠出"变透明"效果
+        enterTransition = { slideInHorizontally(slideSpec) { it } },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it } },
+        // 返回: 预测返回风格 — 当前页缩小淡出, 上一级放大淡入
+        popEnterTransition = {
+            scaleIn(initialScale = 0.95f, animationSpec = popSpec) + fadeIn(animationSpec = popSpec)
+        },
+        popExitTransition = {
+            scaleOut(targetScale = 0.9f, animationSpec = popSpec) + fadeOut(animationSpec = popSpec)
+        },
     ) {
         composable(Routes.MAIN) {
-            // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (不用 Scaffold bottomBar 槽位)
+            // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (kyant/backdrop, 不用 Scaffold bottomBar 槽位)
             Box(
                 Modifier
                     .fillMaxSize()
                     .background(MiuixTheme.colorScheme.background),
             ) {
-                // 内容区 (捕获背景供玻璃模糊)
+                // 内容区: 全屏 (无底部 padding) —— 列表必须能滚动到悬浮胶囊下方,
+                // 捕获层才能拿到真实内容做模糊; 底部留白由各页面 LazyColumn
+                // contentPadding bottom 自行处理 (OShin 同款布局)
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .then(captureModifier)
-                        .padding(bottom = 84.dp), // 给玻璃底栏留空间
+                        .then(captureModifier),
                 ) {
                     // HorizontalPager: tab 左右滑动切换
                     HorizontalPager(
@@ -445,11 +473,10 @@ private fun NoticeDialog(
                     webView.webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             val u = url ?: return false
-                            if (u.startsWith("http://") || u.startsWith("https://")) {
-                                onLinkClick(u)
-                                return true
-                            }
-                            return false
+                            // 所有链接统一交上层分流: http(s) 内置浏览器;
+                            // mqqwpa:// mailto: tel: 等自定义协议 WebView 自己加载不了, 必须交系统 Intent 打开
+                            onLinkClick(u)
+                            return true
                         }
                     }
                     // 深色模式: 页面底色随主题, 文字默认色适配

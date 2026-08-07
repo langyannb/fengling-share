@@ -13,7 +13,8 @@ import com.fengling.share.R
 import java.util.Scanner
 
 class BgEffectPainter(context: Context) {
-    private lateinit var bound: FloatArray
+    // 默认 bound (设备上未布局/异常时兜底, 不再 lateinit 防 UninitializedPropertyAccessException)
+    private var bound: FloatArray = floatArrayOf(0.0f, 0.4489f, 1.0f, 0.5511f)
     var mBgRuntimeShader: RuntimeShader
     var mResources: Resources = context.resources
     private lateinit var uResolution: FloatArray
@@ -42,7 +43,8 @@ class BgEffectPainter(context: Context) {
 
     init {
         val loadShader = loadShader(mResources, R.raw.bg_frag)
-        mBgRuntimeShader = RuntimeShader(loadShader!!)
+        // 资源读取失败直接抛异常 (由调用方 BgEffectView try-catch 降级)
+        mBgRuntimeShader = RuntimeShader(loadShader ?: throw IllegalStateException("bg_frag shader missing"))
         mBgRuntimeShader.setFloatUniform("uTranslateY", uTranslateY)
         mBgRuntimeShader.setFloatUniform("uPoints", uPoints)
         mBgRuntimeShader.setFloatUniform("uColors", uColors)
@@ -215,13 +217,18 @@ class BgEffectPainter(context: Context) {
     }
 
     private fun calcAnimationBound(context: Context, view: View) {
+        // 防御: View 未 attach 到布局树时 parent 为 null (荣耀等设备 post 回调时序问题),
+        // 或父布局未测量完成 height==0, 直接跳过用默认 bound, 避免 NPE/除零 (崩溃上报实锤)
+        val parent = view.parent as? ViewGroup ?: return
+        val parentHeight = parent.height
+        if (parentHeight <= 0) return
         val height = TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP,
             416f,
             context.resources.displayMetrics
         )
-        val height2 = height / (view.parent as ViewGroup).height
-        val width = (view.parent as ViewGroup).width.toFloat()
+        val height2 = height / parentHeight
+        val width = parent.width.toFloat()
         if (width <= height) {
             this.bound = floatArrayOf(0.0f, 1.0f - height2, 1.0f, height2)
         } else {

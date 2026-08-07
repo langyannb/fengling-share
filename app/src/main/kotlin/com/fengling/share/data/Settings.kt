@@ -24,7 +24,7 @@ enum class ThemeColor(val value: String, val label: String, val seed: Long) {
 
 /**
  * 应用设置存储 (SharedPreferences)
- * 设置项: 预测返回开关 / 主题模式 / 已缓存最新版本
+ * 设置项: 主题模式 / 已缓存最新版本
  */
 object Settings {
 
@@ -34,11 +34,6 @@ object Settings {
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
-
-    // ===== 预测返回 =====
-    var predictiveBackEnabled: Boolean
-        get() = prefs.getBoolean("predictive_back", true)
-        set(value) = prefs.edit().putBoolean("predictive_back", value).apply()
 
     // ===== 主题模式 =====
     var themeMode: String

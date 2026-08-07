@@ -2,23 +2,47 @@ package com.fengling.share.data
 
 import org.json.JSONObject
 
-/** 软件分类 */
+/** 软件分类 (parentId=0 为顶级分类, 支持一级子分类树) */
 data class Category(
     val id: Int,
+    val parentId: Int,
     val name: String,
     val color: String,
     val icon: String, // 分类图标 URL (后端上传)
     val sortOrder: Int,
 ) {
+    /** 顶级分类 */
+    val isTopLevel: Boolean get() = parentId == 0
+
     companion object {
         fun fromJson(json: JSONObject): Category = Category(
             id = json.optInt("id", 0),
+            parentId = json.optInt("parent_id", 0),
             name = json.optString("name", ""),
             color = json.optString("color", "#4C6FFF"),
             icon = json.optString("icon", ""),
             sortOrder = json.optInt("sort_order", 0),
         )
     }
+}
+
+/** 分类树工具: 从扁平分类列表构建两级结构 */
+fun buildCategoryTree(all: List<Category>): List<Category> {
+    val top = all.filter { it.isTopLevel }
+    val children = all.filter { !it.isTopLevel }
+    // 顶级按 sortOrder 排序, 子分类跟随父分类之后
+    return (top.sortedBy { it.sortOrder } +
+        children.sortedWith(compareBy<Category> { it.parentId }.thenBy { it.sortOrder }))
+}
+
+/** 某分类的直接子分类 (按 sortOrder 排序) */
+fun childrenOf(all: List<Category>, parentId: Int): List<Category> =
+    all.filter { it.parentId == parentId }.sortedBy { it.sortOrder }
+
+/** 某分类及其所有子分类的 id 集合 (用于统计/过滤) */
+fun categoryWithSubsIds(all: List<Category>, categoryId: Int): Set<Int> {
+    val subs = childrenOf(all, categoryId).map { it.id }
+    return if (subs.isEmpty()) setOf(categoryId) else (subs + categoryId).toSet()
 }
 
 /** 网盘推广链接 */

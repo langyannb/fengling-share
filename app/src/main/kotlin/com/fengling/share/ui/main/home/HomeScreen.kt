@@ -9,6 +9,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -44,6 +45,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +65,8 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Banner
 import com.fengling.share.data.Category
+import com.fengling.share.data.childrenOf
+import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
 import kotlin.math.abs
@@ -92,12 +97,24 @@ fun HomeScreen(
     var banners by remember { mutableStateOf<List<Banner>>(emptyList()) }
     // 分类缓存: 每个分类的 apps 缓存, 切换不重新加载
     val appsCache = remember { mutableStateMapOf<Int, List<AppItem>>() }
-    var selectedCategory by remember { mutableIntStateOf(0) }
-    var query by remember { mutableStateOf("") }
-    var searchExpanded by remember { mutableStateOf(false) }
+    // ⚠️ rememberSaveable: 进入详情页时 HomeScreen 离开组合, 返回后要恢复
+    // 所选分类/子分类/搜索词, 否则会重置回"全部" (用户反馈 bug)
+    var selectedCategory by rememberSaveable { mutableStateOf(0) }
+    var selectedSubCategory by rememberSaveable { mutableStateOf(0) } // 0=父分类全部
+    var query by rememberSaveable { mutableStateOf("") }
+    var searchExpanded by rememberSaveable { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
+
+    // 顶级分类 (宫格只显示顶级; 子分类以 chips 形式出现在选中分类下)
+    val topCategories = remember(categories) { categories.filter { it.isTopLevel } }
+    // 当前选中顶级分类的子分类
+    val subCategories = remember(categories, selectedCategory) {
+        childrenOf(categories, selectedCategory)
+    }
+    // 实际查询分类: 选中子分类用子分类 id, 否则父分类 (后端父分类自动包含子分类软件)
+    val effectiveCategoryId = if (selectedSubCategory > 0) selectedSubCategory else selectedCategory
 
     fun loadApps(catId: Int, kw: String) {
         // 命中缓存直接返回 (不重新加载)
@@ -116,7 +133,7 @@ fun HomeScreen(
                 apps = result
                 if (kw.isEmpty()) appsCache[catId] = result
             } catch (e: Exception) {
-                error = e.message ?: "加载失败"
+                error = e.userFriendlyMessage()
             }
             loading = false
         }
@@ -128,22 +145,36 @@ fun HomeScreen(
             try {
                 categories = ApiClient.getCategories()
                 appsCache.clear() // 下拉刷新: 清缓存强制重新加载
-                apps = ApiClient.getApps(selectedCategory, query)
-                if (query.isEmpty()) appsCache[selectedCategory] = apps
+                apps = ApiClient.getApps(effectiveCategoryId, query)
+                if (query.isEmpty()) appsCache[effectiveCategoryId] = apps
             } catch (_: Exception) { }
             refreshing = false
         }
     }
 
+    // 切换分类 (顶级宫格 / 子分类 chips 共用入口)
+    fun selectCategory(catId: Int) {
+        selectedSubCategory = 0
+        selectedCategory = catId
+        loadApps(catId, query)
+    }
+
+    fun selectSubCategory(subId: Int) {
+        selectedSubCategory = subId
+        loadApps(subId, query)
+    }
+
     LaunchedEffect(Unit) {
-        if (appsCache[0]?.isNotEmpty() == true || banners.isNotEmpty()) {
+        // 首次进入: 加载分类 + 轮播; 应用列表按当前选中分类加载
+        // (rememberSaveable 恢复后 selectedCategory 可能是非 0, 不能硬编码 0)
+        if (appsCache[effectiveCategoryId]?.isNotEmpty() == true || banners.isNotEmpty()) {
             return@LaunchedEffect
         }
         try {
             categories = ApiClient.getCategories()
             banners = ApiClient.getBanners()
         } catch (_: Exception) { }
-        loadApps(0, "")
+        loadApps(effectiveCategoryId, query)
     }
 
     val isDark = isSystemInDarkTheme()
@@ -179,7 +210,20 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            Column(Modifier.fillMaxSize()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    // 搜索展开时, 点空白处取消搜索 (子层 clickable 消费点击, 不触发这里)
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            if (searchExpanded) {
+                                searchExpanded = false
+                                query = ""
+                                loadApps(effectiveCategoryId, "")
+                            }
+                        }
+                    },
+            ) {
                 // Miuix 搜索栏
                 SearchBar(
                     inputField = {
@@ -187,9 +231,9 @@ fun HomeScreen(
                             query = query,
                             onQueryChange = {
                                 query = it
-                                loadApps(selectedCategory, it)
+                                loadApps(effectiveCategoryId, it)
                             },
-                            onSearch = { loadApps(selectedCategory, it) },
+                            onSearch = { loadApps(effectiveCategoryId, it) },
                             expanded = searchExpanded,
                             onExpandedChange = { searchExpanded = it },
                             label = "搜索软件",
@@ -229,8 +273,8 @@ fun HomeScreen(
                     )
                 }
 
-                // 分类快捷入口宫格 (现代化: 彩色圆角图标 + 名称, 点选分类)
-                if (categories.isNotEmpty()) {
+                // 顶级分类快捷入口宫格 (现代化: 彩色圆角图标 + 名称, 点选分类)
+                if (topCategories.isNotEmpty()) {
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -244,22 +288,42 @@ fun HomeScreen(
                                 icon = "",
                                 color = MiuixTheme.colorScheme.primary,
                                 selected = selectedCategory == 0,
-                                onClick = {
-                                    selectedCategory = 0
-                                    loadApps(0, query)
-                                },
+                                onClick = { selectCategory(0) },
                             )
                         }
-                        items(categories) { cat ->
+                        items(topCategories, key = { it.id }) { cat ->
                             CategoryQuickEntry(
                                 name = cat.name,
                                 icon = cat.icon,
                                 color = parseHexColor(cat.color),
                                 selected = selectedCategory == cat.id,
-                                onClick = {
-                                    selectedCategory = cat.id
-                                    loadApps(cat.id, query)
-                                },
+                                onClick = { selectCategory(cat.id) },
+                            )
+                        }
+                    }
+                }
+
+                // 子分类 chips: 选中顶级分类且有子分类时显示 (更具体地寻找应用)
+                if (subCategories.isNotEmpty() && query.isEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                    ) {
+                        item {
+                            SubCategoryChip(
+                                name = "全部",
+                                selected = selectedSubCategory == 0,
+                                onClick = { selectCategory(selectedCategory) },
+                            )
+                        }
+                        items(subCategories, key = { it.id }) { sub ->
+                            SubCategoryChip(
+                                name = sub.name,
+                                selected = selectedSubCategory == sub.id,
+                                onClick = { selectSubCategory(sub.id) },
                             )
                         }
                     }
@@ -267,15 +331,21 @@ fun HomeScreen(
 
                 // 列表区 (滑动切换, 与底部栏 pager 滑动一致的方向感)
                 val lastCat = remember { mutableIntStateOf(0) }
-                val animDirection = if (selectedCategory >= lastCat.intValue) 1 else -1
-                lastCat.intValue = selectedCategory
+                val animDirection = if (effectiveCategoryId >= lastCat.intValue) 1 else -1
+                lastCat.intValue = effectiveCategoryId
                 AnimatedContent(
-                    targetState = HomeListState(selectedCategory, apps, loading, error),
+                    targetState = HomeListState(effectiveCategoryId, apps, loading, error),
                     transitionSpec = {
-                        (slideInHorizontally(tween(260)) { it * animDirection } +
-                            fadeIn(tween(260))) togetherWith
-                            (slideOutHorizontally(tween(260)) { -it * animDirection } +
-                                fadeOut(tween(200)))
+                        if (targetState.categoryId == initialState.categoryId) {
+                            // 同分类刷新 (加载完成/搜索): 不要滑动动画, 只淡入淡出
+                            fadeIn(tween(200)) togetherWith fadeOut(tween(150))
+                        } else {
+                            // 切换分类: 滑动 + 淡入淡出
+                            (slideInHorizontally(tween(260)) { it * animDirection } +
+                                fadeIn(tween(260))) togetherWith
+                                (slideOutHorizontally(tween(260)) { -it * animDirection } +
+                                    fadeOut(tween(200)))
+                        }
                     },
                     label = "homeList",
                 ) { state ->
@@ -293,7 +363,8 @@ fun HomeScreen(
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(
-                                    start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
+                                    start = 12.dp, end = 12.dp, top = 4.dp,
+                                    bottom = 100.dp, // 留出悬浮胶囊空间, 内容可滚到胶囊下方被模糊
                                 ),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
@@ -388,6 +459,45 @@ private fun CategoryQuickEntry(
             maxLines = 1,
         )
     }
+}
+
+/** 子分类筛选 chip (胶囊形, 选中主色填充, 未选中玻璃描边) */
+@Composable
+private fun SubCategoryChip(
+    name: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val isPressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "subChip",
+    )
+    Text(
+        text = name,
+        fontSize = 13.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        color = if (selected) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onBackgroundVariant,
+        modifier = Modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (selected) MiuixTheme.colorScheme.primary
+                else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    )
 }
 
 /** 软件列表项 (现代化: 图标 + 名称 + 元信息 + 下载按钮, 按压缩放) */
@@ -608,7 +718,7 @@ private fun BannerCarousel(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(150.dp)
+                    .height(100.dp)
                     .graphicsLayer {
                         scaleX = scale
                         scaleY = scale
@@ -628,7 +738,7 @@ private fun BannerCarousel(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(64.dp)
+                            .height(44.dp)
                             .align(Alignment.BottomCenter)
                             .background(
                                 Brush.verticalGradient(

@@ -87,7 +87,8 @@ object ApkDownloader {
             _progress.value = 200
             _status.value = "下载完成"
         } catch (e: Exception) {
-            _error.value = "下载失败: ${e.message}"
+            // 不显示 e.message: 下载 URL 含服务器 IP, 失败提示不能泄露
+            _error.value = if (e is java.io.IOException) "下载失败，请检查网络后重试" else "下载失败，请稍后重试"
             _status.value = ""
             _progress.value = -1
         }

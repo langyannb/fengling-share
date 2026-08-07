@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
@@ -61,7 +62,18 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { CrashReporter.uploadPending(applicationContext) }
         super.onCreate(savedInstanceState)
         Settings.init(applicationContext)
-        enableEdgeToEdge()
+        // OShin 同款: 状态栏 + 导航栏全透明, 关闭导航栏对比度强制 (浅色主题下默认白色 scrim 会盖住玻璃底栏下方!)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ) { true },
+            navigationBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ) { true },
+        )
+        window.isNavigationBarContrastEnforced = false
         setContent {
             // 观察 themeMode + themeColor, 任一变化都触发重组换肤
             var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }

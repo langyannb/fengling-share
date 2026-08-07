@@ -103,6 +103,7 @@ import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
+import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.BrandColors
@@ -142,7 +143,6 @@ fun MyScreen(
     val scroll = rememberLazyListState()
     val density = LocalDensity.current
 
-    var predictiveBack by remember { mutableStateOf(Settings.predictiveBackEnabled) }
     var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
     var themeColor by remember { mutableStateOf(Settings.getThemeColor()) }
     var themeExpanded by remember { mutableStateOf(false) }
@@ -230,8 +230,9 @@ fun MyScreen(
                     Toast.makeText(context, "已是最新版本 v$currentVersion", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                checkResult = "检查失败: ${e.message}"
-                Toast.makeText(context, "检查更新失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                // 不显示 e.message: 网络异常消息含服务器 IP, 不能泄露
+                checkResult = e.userFriendlyMessage()
+                Toast.makeText(context, "检查更新失败", Toast.LENGTH_SHORT).show()
             }
             checkingUpdate = false
         }
@@ -383,25 +384,6 @@ fun MyScreen(
                 ) {
                     // ===== 通用 =====
                     OShinCardTitle(title = "通用")
-                    OShinSettingRow(
-                        title = "预测性返回",
-                        summary = if (predictiveBack) "开启: 返回时页面滑动过渡" else "关闭: 直接返回无动画",
-                        leftIcon = Icons.Filled.Settings,
-                        position = CouiPosition.Top,
-                        trailing = {
-                            Switch(
-                                checked = predictiveBack,
-                                onCheckedChange = { checked ->
-                                    predictiveBack = checked
-                                    Settings.predictiveBackEnabled = checked
-                                },
-                            )
-                        },
-                        onClick = {
-                            predictiveBack = !predictiveBack
-                            Settings.predictiveBackEnabled = predictiveBack
-                        },
-                    )
                 }
             }
 

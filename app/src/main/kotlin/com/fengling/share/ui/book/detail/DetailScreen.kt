@@ -3,6 +3,14 @@ package com.fengling.share.ui.book.detail
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +19,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,6 +34,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,16 +46,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.PackItem
 import com.fengling.share.data.PanLink
+import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
@@ -72,17 +92,19 @@ fun DetailScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var app by remember { mutableStateOf<AppItem?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var clicking by remember { mutableStateOf(false) }
+    var showHarmDialog by remember { mutableStateOf(false) }
 
     // 底部下载栏用普通卡片, 不用 blur backdrop
     LaunchedEffect(appId) {
         try {
             app = ApiClient.getAppDetail(appId)
         } catch (e: Exception) {
-            error = e.message ?: "加载失败"
+            error = e.userFriendlyMessage()
         }
         loading = false
     }
@@ -286,6 +308,11 @@ fun DetailScreen(
                             Spacer(Modifier.height(14.dp))
                             EmptyMessage(text = "暂无下载链接")
                         }
+
+                        // 反馈和谐入口 (用户报告软件被和谐, 请求更新)
+                        Spacer(Modifier.height(6.dp))
+                        HarmReportCard(onClick = { showHarmDialog = true })
+
                         Spacer(Modifier.height(120.dp))
                     }
 
@@ -356,6 +383,170 @@ fun DetailScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // 反馈和谐弹窗 (用户填写哪里被和谐了, 提交后端)
+    if (showHarmDialog && app != null) {
+        HarmReportDialog(
+            appName = app!!.name,
+            onDismiss = { showHarmDialog = false },
+            onSubmit = { content, contact ->
+                scope.launch {
+                    val err = ApiClient.submitHarmReport(app!!.id, app!!.name, content, contact)
+                    showHarmDialog = false
+                    Toast.makeText(
+                        context,
+                        if (err == null) "反馈已提交，感谢支持" else err,
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
+        )
+    }
+}
+
+/** 反馈和谐入口卡片 (详情页下载区下方) */
+@Composable
+private fun HarmReportCard(onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        cornerRadius = 14.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "软件有问题？反馈和谐",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onBackground,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "链接失效 / 内容被屏蔽 / 需要更新，告诉我们",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
+            }
+            Text(
+                text = "反馈",
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+/** 反馈和谐填写弹窗 (miuix 风格: 圆角卡片 + 主色胶囊按钮) */
+@Composable
+private fun HarmReportDialog(
+    appName: String,
+    onDismiss: () -> Unit,
+    onSubmit: (content: String, contact: String) -> Unit,
+) {
+    val context = LocalContext.current
+    var content by remember { mutableStateOf("") }
+    var contact by remember { mutableStateOf("") }
+    var submitting by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = { if (!submitting) onDismiss() }) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(MiuixTheme.colorScheme.surface)
+                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .imePadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "反馈和谐",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = MiuixTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "软件：$appName",
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(
+                value = content,
+                onValueChange = { content = it },
+                placeholder = { Text("哪里被和谐了？例如：下载链接失效、提取码错误、内容被屏蔽…", fontSize = 13.sp) },
+                minLines = 3,
+                maxLines = 5,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = contact,
+                onValueChange = { contact = it },
+                placeholder = { Text("联系方式（选填，方便处理结果通知你）", fontSize = 13.sp) },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                // 取消 (次级圆角按钮)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .clickable(enabled = !submitting, onClick = onDismiss)
+                        .padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "取消",
+                        fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onBackground,
+                    )
+                }
+                // 提交 (主色胶囊)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (submitting) MiuixTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            else MiuixTheme.colorScheme.primary
+                        )
+                        .clickable(enabled = !submitting, onClick = {
+                            if (content.trim().isEmpty()) {
+                                Toast.makeText(context, "请填写哪里被和谐了", Toast.LENGTH_SHORT).show()
+                                return@clickable
+                            }
+                            submitting = true
+                            onSubmit(content.trim(), contact.trim())
+                        })
+                        .padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (submitting) "提交中..." else "提交",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onPrimary,
+                    )
                 }
             }
         }
@@ -542,8 +733,13 @@ private fun ScreenshotStrip(urls: List<String>, appName: String) {
 }
 
 /**
- * 截图全屏预览 (横向滑动切换 + 页码 + 右上角关闭)
+ * 截图全屏预览 (横向滑动切换 + 双指缩放/拖动 + 页码 + 右上角关闭)
+ * 背景跟随主题深色玻璃, 支持双指捏合放大 1x~4x, 每页缩放独立
  */
+
+/** 单页缩放状态 (不可变, 整体替换触发重组) */
+private data class ZoomState(val scale: Float = 1f, val offset: Offset = Offset.Zero)
+
 @Composable
 private fun ScreenshotPreview(
     urls: List<String>,
@@ -554,37 +750,99 @@ private fun ScreenshotPreview(
     Dialog(onDismissRequest = onDismiss) {
         val pagerState = rememberPagerState(pageCount = { urls.size }, initialPage = initialIndex)
         var saveUrl by remember { mutableStateOf<String?>(null) }
+        // 每页独立缩放状态 (放大某张时相邻页不受影响)
+        val zoomStates = remember(urls.size) {
+            List(urls.size) { mutableStateOf(ZoomState()) }
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(8.dp),
         ) {
-            // 黑色底
+            // 深色玻璃底 (跟随主题, 替代纯黑)
             Box(
                 Modifier
                     .fillMaxSize()
                     .clip(RoundedCornerShape(20.dp))
-                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.92f)),
+                    .background(
+                        if (isSystemInDarkTheme()) Color.Black.copy(alpha = 0.75f)
+                        else Color(0xFF1A1A1E).copy(alpha = 0.88f)
+                    ),
             )
-            // 图片横向滑动 (点击关闭, 长按保存)
+            // 图片横向滑动 (双指缩放/拖动, 单击关闭, 双击放大, 长按保存)
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 beyondViewportPageCount = 1,
             ) { page ->
+                val density = LocalDensity.current
+                val config = LocalConfiguration.current
+                val screenW = with(density) { config.screenWidthDp.dp.toPx() }
+                val screenH = with(density) { config.screenHeightDp.dp.toPx() }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .clipToBounds() // 放大后图片不溢出到相邻页
                         .padding(12.dp)
-                        .combinedClickable(
-                            onClick = onDismiss,
-                            onLongClick = { saveUrl = urls[page] },
-                        ),
+                        .pointerInput(Unit) {
+                            // 只有双指(缩放)或已放大(拖动)时才消费手势;
+                            // 1x 状态下手势放行给 Pager 做横向翻页
+                            // ⚠️ 每次手势事件都重新读 zoomStates[page].value,
+                            //    不能捕获组合时的快照 (pointerInput 闭包不会重组)
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val zoomChange = event.calculateZoom()
+                                    val panChange = event.calculatePan()
+                                    val multiTouch = event.changes.size > 1
+                                    val cur = zoomStates[page].value
+                                    if (multiTouch || cur.scale > 1f) {
+                                        val newScale = (cur.scale * zoomChange).coerceIn(1f, 4f)
+                                        // 平移边界: 放大后拖动不超出图片范围 (scale>=1, 恒非负)
+                                        val maxX = screenW * (newScale - 1f) / 2f
+                                        val maxY = screenH * (newScale - 1f) / 2f
+                                        zoomStates[page].value = ZoomState(
+                                            scale = newScale,
+                                            offset = Offset(
+                                                (cur.offset.x + panChange.x).coerceIn(-maxX, maxX),
+                                                (cur.offset.y + panChange.y).coerceIn(-maxY, maxY),
+                                            ),
+                                        )
+                                        event.changes.forEach { it.consume() }
+                                    }
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { onDismiss() },
+                                onDoubleTap = {
+                                    // 读取最新状态: 放大过则还原, 否则放大
+                                    val cur = zoomStates[page].value
+                                    zoomStates[page].value = if (cur.scale > 1.1f) {
+                                        ZoomState()
+                                    } else {
+                                        ZoomState(scale = 2.5f)
+                                    }
+                                },
+                                onLongPress = { saveUrl = urls[page] },
+                            )
+                        },
                 ) {
+                    val zoom = zoomStates[page].value
                     AsyncImage(
                         model = urls[page],
                         contentDescription = "$appName 截图 ${page + 1}",
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = zoom.scale
+                                scaleY = zoom.scale
+                                translationX = zoom.offset.x
+                                translationY = zoom.offset.y
+                            },
+                        // Fit 完整显示全图 (默认即可看全图), 双击/双指放大看细节
                         contentScale = ContentScale.Fit,
                     )
                 }

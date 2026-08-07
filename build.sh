@@ -73,9 +73,14 @@ dim()   { printf "\033[2m%s\033[0m\n" "$1"; }
 # 用法: in_container <命令...>
 # 通过 proot 进入 Ubuntu rootfs 执行, 绑定:
 #   /dev /proc /sys, ${ACS_HOME} -> /home, /storage -> /storage
+#   项目在 Termux home 下时额外绑定 (容器内同路径可访问)
 in_container() {
     local cmd="$*"
     local proot_cmd
+    local bind_home=""
+    if echo "$PROJECT_DIR" | grep -q "^/data/user/0/com.termux/files/home"; then
+        bind_home="-b /data/user/0/com.termux/files/home:/data/user/0/com.termux/files/home"
+    fi
     proot_cmd="export JAVA_HOME=${JAVA_HOME_CONTAINER}; "
     proot_cmd="${proot_cmd}export ANDROID_HOME=/home/Android/Sdk; "
     proot_cmd="${proot_cmd}export ANDROID_SDK_ROOT=/home/Android/Sdk; "
@@ -83,7 +88,7 @@ in_container() {
     proot_cmd="${proot_cmd}export LANG=C.UTF-8 LC_ALL=C.UTF-8; "
     proot_cmd="${proot_cmd}export PATH=${JAVA_HOME_CONTAINER}/bin:/usr/bin:/bin; "
     proot_cmd="${proot_cmd}cd '${PROJECT_DIR}' && ${cmd}"
-    as_root "'${PROOT_BIN}' -r '${ROOTFS}' -b /dev -b /proc -b /sys -b '${ACS_HOME}:/home' -b /storage -w /root /bin/bash -c \"${proot_cmd}\""
+    as_root "'${PROOT_BIN}' -r '${ROOTFS}' -b /dev -b /proc -b /sys -b '${ACS_HOME}:/home' -b /storage ${bind_home} -w /root /bin/bash -c \"${proot_cmd}\""
 }
 
 # ============ 检测环境 ============
@@ -279,8 +284,8 @@ build_app() {
         local apk_path_tmp="$apk_path"
         local install_cmd=""
 
-        # 对于 storage/emulated 上的文件，需要复制到 /data/local/tmp 并 root 安装
-        if echo "$apk_path" | grep -q "/storage/emulated/"; then
+        # 对于 storage/emulated 或 Termux home 上的文件, 需要复制到 /data/local/tmp 并 root 安装
+        if echo "$apk_path" | grep -qE "^/storage/emulated/|^/data/user/0/|^/data/data/"; then
             local tmp="/data/local/tmp/$(basename "$apk_path")"
             su -c "cp '$apk_path_tmp' '$tmp'" 2>/dev/null
             if [ -f "$tmp" ]; then

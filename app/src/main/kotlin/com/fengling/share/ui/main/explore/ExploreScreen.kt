@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -51,6 +52,8 @@ import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
+import com.fengling.share.data.categoryWithSubsIds
+import com.fengling.share.data.childrenOf
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
@@ -75,12 +78,20 @@ fun ExploreScreen(
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var expandedCategory by remember { mutableStateOf<Int?>(null) }
+    var selectedSubCategory by remember { mutableStateOf<Int?>(null) } // null=父分类全部
     var categoryApps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var categoryLoading by remember { mutableStateOf(false) }
     // 分类软件缓存 (key: categoryId, 切换分类不重新请求)
     val categoryCache = remember { mutableMapOf<Int, List<AppItem>>() }
     // 页面级缓存: categories + 全部 apps (切 tab 回来不重新加载)
     var pageLoaded by remember { mutableStateOf(false) }
+
+    // 顶级分类 (宫格只显示顶级; 子分类在二级页以 chips 呈现)
+    val topCategories = remember(categories) { categories.filter { it.isTopLevel } }
+    // 当前展开分类的子分类
+    val subCategories = remember(categories, expandedCategory) {
+        expandedCategory?.let { childrenOf(categories, it) } ?: emptyList()
+    }
 
     LaunchedEffect(Unit) {
         if (pageLoaded) {
@@ -113,9 +124,28 @@ fun ExploreScreen(
         }
     }
 
-    // 返回键: 在分类二级页时返回分类列表, 否则默认处理
+    // 返回键: 子分类筛选时先回「全部」, 二级页时回分类列表, 否则默认处理
     androidx.activity.compose.BackHandler(enabled = expandedCategory != null) {
-        expandedCategory = null
+        if (selectedSubCategory != null) {
+            selectedSubCategory = null
+            categoryApps = emptyList()
+            loadCategoryApps(expandedCategory!!)
+        } else {
+            expandedCategory = null
+        }
+    }
+
+    fun openCategory(catId: Int) {
+        expandedCategory = catId
+        selectedSubCategory = null
+        categoryApps = emptyList()
+        loadCategoryApps(catId)
+    }
+
+    fun selectSubCategory(subId: Int) {
+        selectedSubCategory = subId
+        categoryApps = emptyList()
+        loadCategoryApps(subId)
     }
 
     Scaffold(
@@ -123,7 +153,15 @@ fun ExploreScreen(
             if (expandedCategory != null) {
                 AppTopBar(
                     title = categories.firstOrNull { it.id == expandedCategory }?.name ?: "分类",
-                    onBack = { expandedCategory = null },
+                    onBack = {
+                        if (selectedSubCategory != null) {
+                            selectedSubCategory = null
+                            categoryApps = emptyList()
+                            loadCategoryApps(expandedCategory!!)
+                        } else {
+                            expandedCategory = null
+                        }
+                    },
                 )
             } else {
                 AppTopBar(title = "分类")
@@ -136,32 +174,64 @@ fun ExploreScreen(
             }
             expandedCategory != null -> {
                 val catId = expandedCategory!!
-                if (categoryLoading && categoryApps.isEmpty()) {
-                    LoadingBox(Modifier.fillMaxSize().padding(innerPadding))
-                } else if (categoryApps.isEmpty()) {
-                    Box(Modifier.fillMaxSize().padding(innerPadding)) {
-                        EmptyMessage(text = "该分类暂无软件")
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        contentPadding = PaddingValues(
-                            start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp,
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        item {
-                            SmallTitle(text = "共 ${categoryApps.size} 款软件")
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                ) {
+                    // 子分类筛选 chips (选中分类有子分类时显示)
+                    if (subCategories.isNotEmpty()) {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            item {
+                                CategoryChip(
+                                    name = "全部",
+                                    selected = selectedSubCategory == null,
+                                    onClick = {
+                                        selectedSubCategory = null
+                                        categoryApps = emptyList()
+                                        loadCategoryApps(catId)
+                                    },
+                                )
+                            }
+                            items(subCategories, key = { it.id }) { sub ->
+                                CategoryChip(
+                                    name = sub.name,
+                                    selected = selectedSubCategory == sub.id,
+                                    onClick = { selectSubCategory(sub.id) },
+                                )
+                            }
                         }
-                        items(categoryApps, key = { it.id }) { app ->
-                            CategoryAppItem(app = app, onClick = { onAppClick(app.id) })
+                    }
+                    if (categoryLoading && categoryApps.isEmpty()) {
+                        LoadingBox(Modifier.fillMaxSize())
+                    } else if (categoryApps.isEmpty()) {
+                        Box(Modifier.fillMaxSize()) {
+                            EmptyMessage(text = "该分类暂无软件")
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                start = 12.dp, end = 12.dp, top = 4.dp,
+                                bottom = 100.dp, // 留出悬浮胶囊空间, 内容可滚到胶囊下方被模糊
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            item {
+                                SmallTitle(text = "共 ${categoryApps.size} 款软件")
+                            }
+                            items(categoryApps, key = { it.id }) { app ->
+                                CategoryAppItem(app = app, onClick = { onAppClick(app.id) })
+                            }
                         }
                     }
                 }
-                LaunchedEffect(catId) {
-                    loadCategoryApps(catId)
+                LaunchedEffect(catId, selectedSubCategory) {
+                    if (categoryApps.isEmpty()) loadCategoryApps(selectedSubCategory ?: catId)
                 }
             }
             categories.isEmpty() -> {
@@ -174,7 +244,8 @@ fun ExploreScreen(
                         .fillMaxSize()
                         .padding(innerPadding),
                     contentPadding = PaddingValues(
-                        start = 14.dp, end = 14.dp, top = 8.dp, bottom = 24.dp,
+                        start = 14.dp, end = 14.dp, top = 8.dp,
+                        bottom = 100.dp, // 留出悬浮胶囊空间, 内容可滚到胶囊下方被模糊
                     ),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -183,23 +254,60 @@ fun ExploreScreen(
                     item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                         SmallTitle(text = "全部分类", modifier = Modifier.padding(vertical = 4.dp))
                     }
-                    gridItems(categories) { cat ->
+                    gridItems(topCategories, key = { it.id }) { cat ->
                         MarketCategoryCard(
                             name = cat.name,
-                            appCount = apps.count { it.categoryId == cat.id },
+                            appCount = apps.count { it.categoryId in categoryWithSubsIds(categories, cat.id) },
                             icon = cat.icon,
                             color = cat.color,
-                            onClick = {
-                                expandedCategory = cat.id
-                                categoryApps = emptyList()
-                                loadCategoryApps(cat.id)
-                            },
+                            onClick = { openCategory(cat.id) },
                         )
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * 子分类筛选 chip (胶囊形, 选中主色填充, 未选中玻璃浅底)
+ */
+@Composable
+private fun CategoryChip(
+    name: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val isPressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = spring(
+            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+            stiffness = androidx.compose.animation.core.Spring.StiffnessLow,
+        ),
+        label = "exploreChip",
+    )
+    Text(
+        text = name,
+        fontSize = 13.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        color = if (selected) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onBackgroundVariant,
+        modifier = Modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (selected) MiuixTheme.colorScheme.primary
+                else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    )
 }
 
 /**

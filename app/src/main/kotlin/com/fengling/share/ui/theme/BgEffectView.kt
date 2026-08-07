@@ -18,10 +18,17 @@ class BgEffectView(context: Context?, mode: Int) : LinearLayout(context) {
     private var colorMode = 1
     var runnableBgEffect: Runnable = object : Runnable {
         override fun run() {
-            mBgEffectPainter!!.setAnimTime((((System.nanoTime().toFloat()) - startTime) / 1.0E9f) % 62.831852f)
-            mBgEffectPainter!!.setResolution(floatArrayOf(mBgEffectView!!.width.toFloat(), mBgEffectView!!.height.toFloat()))
-            mBgEffectPainter!!.updateMaterials()
-            mBgEffectView!!.setRenderEffect(mBgEffectPainter!!.renderEffect)
+            // 渲染循环加固: View detach/尺寸异常时不再 postDelayed, 停止循环 (降级静态背景), 避免闪退
+            try {
+                val painter = mBgEffectPainter ?: return
+                val view = mBgEffectView ?: return
+                painter.setAnimTime((((System.nanoTime().toFloat()) - startTime) / 1.0E9f) % 62.831852f)
+                painter.setResolution(floatArrayOf(view.width.toFloat(), view.height.toFloat()))
+                painter.updateMaterials()
+                view.setRenderEffect(painter.renderEffect)
+            } catch (_: Throwable) {
+                return
+            }
             mHandler.postDelayed(runnableBgEffect, 16L)
         }
     }
@@ -33,10 +40,16 @@ class BgEffectView(context: Context?, mode: Int) : LinearLayout(context) {
         mBgEffectView = LayoutInflater.from(context).inflate(R.layout.layout_effect_bg, this, true)
         mBgEffectView!!.post(Runnable {
             if (context != null) {
-                val appContext = context.applicationContext
-                mBgEffectPainter = BgEffectPainter(appContext)
-                mBgEffectPainter!!.showRuntimeShader(appContext, mBgEffectView!!, colorMode)
-                mHandler.post(runnableBgEffect)
+                try {
+                    val appContext = context.applicationContext
+                    mBgEffectPainter = BgEffectPainter(appContext)
+                    mBgEffectPainter!!.showRuntimeShader(appContext, mBgEffectView!!, colorMode)
+                    mHandler.post(runnableBgEffect)
+                } catch (_: Throwable) {
+                    // GPU 不支持 AGSL/RuntimeShader 或 View 未布局 (荣耀等设备实锤 NPE):
+                    // 降级为普通背景, 不再启动渲染循环, 避免闪退
+                    mBgEffectPainter = null
+                }
             }
         })
     }
@@ -53,7 +66,8 @@ class BgEffectView(context: Context?, mode: Int) : LinearLayout(context) {
     fun updateMode(mode: Int) {
         if (mode != colorMode) {
             colorMode = mode
-            mBgEffectPainter!!.updateMode(mode)
+            // 降级模式 (GPU 不支持 AGSL) 时 painter 为 null, 直接忽略
+            mBgEffectPainter?.updateMode(mode)
         }
     }
 }

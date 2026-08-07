@@ -237,6 +237,10 @@ fun LiquidBottomBar(
                 .drawBackdrop(
                     backdrop = backdrop,
                     shape = { RoundedCornerShape(28.dp) },
+                    // 静止状态不要默认的白色高光描边 + 底部投影 (用户要求干净无白边/阴影);
+                    // 按下反馈由下方拖动层单独提供
+                    highlight = { null },
+                    shadow = { null },
                     effects = {
                         vibrancy()
                         blur(8f.dp.toPx())

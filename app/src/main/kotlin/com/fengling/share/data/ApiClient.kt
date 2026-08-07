@@ -143,6 +143,27 @@ object ApiClient {
         )
     }
 
+    /**
+     * 反馈和谐: 用户报告软件哪里被和谐了 (App 端匿名提交, 管理员在管理端「设置→和谐」查看)
+     * @return null = 提交成功; 非 null = 错误消息 (后端业务拒绝如频率限制 / 网络失败, 可直接 Toast)
+     */
+    suspend fun submitHarmReport(appId: Int, appName: String, content: String, contact: String = ""): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                request("harm_report", mapOf(
+                    "app_id" to appId,
+                    "app_name" to appName,
+                    "content" to content,
+                    "contact" to contact,
+                ))
+                null
+            } catch (e: ApiException) {
+                e.message ?: "提交失败，请稍后重试"
+            } catch (_: Exception) {
+                "网络连接失败，请检查网络后重试"
+            }
+        }
+
     /** 投稿名单: 只返回头像/昵称/说明 + 投稿应用名 (后端不暴露 QQ 号) */
     suspend fun getContributors(): List<Contributor> = withContext(Dispatchers.IO) {
         val obj = request("contributors")
@@ -218,3 +239,17 @@ fun isNewerVersion(latest: String, current: String): Boolean {
 }
 
 class ApiException(message: String) : Exception(message)
+
+/**
+ * 用户可见错误文案 — 绝不展示原始异常消息
+ * OkHttp 连接失败消息形如 "Failed to connect to /REDACTED_SERVER_HOST:9845", 直接显示会泄露服务器 IP
+ * (用户明确要求: 没联网打开分享库也不能暴露服务器 IP)
+ */
+fun Throwable.userFriendlyMessage(): String = when (this) {
+    is ApiException -> message?.takeIf { it.isNotBlank() } ?: "请求失败"
+    is java.net.UnknownHostException,
+    is java.net.ConnectException,
+    is java.net.SocketTimeoutException,
+    is java.io.IOException -> "网络连接失败，请检查网络后重试"
+    else -> "加载失败，请稍后重试"
+}
