@@ -22,3 +22,7 @@ local.properties
 .DS_Store
 此项目规范.md
 *.md.bak
+*.bak
+
+# 开发规则备份 (不入库)
+.rules.zip

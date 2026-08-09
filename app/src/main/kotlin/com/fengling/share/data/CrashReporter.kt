@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
  */
 object CrashReporter {
 
-    private const val API_URL = "http://REDACTED_SERVER_HOST:9845/api.php?action=crash_report"
+    private val API_URL = ServerConfig.CRASH_URL
     private const val MAX_FILES = 20
     private val JSON = "application/json; charset=utf-8".toMediaType()
 

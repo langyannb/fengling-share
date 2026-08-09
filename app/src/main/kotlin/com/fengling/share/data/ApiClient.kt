@@ -12,12 +12,12 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 风铃分享库 API 客户端
- * 后端: PHP + Nginx, 地址 http://REDACTED_SERVER_HOST:9845/api.php
+ * 后端: PHP + Nginx (地址已加密, 见 ServerConfig)
  * 响应格式: {"code":0,"msg":"ok","data":...}
  */
 object ApiClient {
 
-    private const val BASE_URL = "http://REDACTED_SERVER_HOST:9845/api.php"
+    private val BASE_URL = ServerConfig.BASE_URL
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
@@ -242,8 +242,8 @@ class ApiException(message: String) : Exception(message)
 
 /**
  * 用户可见错误文案 — 绝不展示原始异常消息
- * OkHttp 连接失败消息形如 "Failed to connect to /REDACTED_SERVER_HOST:9845", 直接显示会泄露服务器 IP
- * (用户明确要求: 没联网打开分享库也不能暴露服务器 IP)
+ * OkHttp 连接失败消息形如 "Failed to connect to /<host>:<port>", 直接显示会泄露服务器 IP
+ * (用户明确要求: 没联网打开分享库也不能暴露服务器 IP; 地址本身也已加密见 ServerConfig)
  */
 fun Throwable.userFriendlyMessage(): String = when (this) {
     is ApiException -> message?.takeIf { it.isNotBlank() } ?: "请求失败"
