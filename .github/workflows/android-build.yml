@@ -37,13 +37,13 @@ jobs:
       - name: 配置 Gradle 缓存
         uses: gradle/actions/setup-gradle@v4
 
-      - name: 配置 Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: 安装 SDK 组件
+      - name: 安装 SDK 组件 (使用 runner 预装 SDK, 不用 setup-android 避免 sdkmanager tools 报错)
         run: |
-          sdkmanager --install "platform-tools" "platforms;android-37" "build-tools;37.0.0" || \
-          sdkmanager --install "platform-tools" "platforms;android-37"
+          SDKMGR="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          echo "使用 sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-37" "build-tools;37.0.0" || \
+          "$SDKMGR" --install "platform-tools" "platforms;android-37"
 
       - name: 移除本地专有的 aapt2 覆盖 (Termux 专用, CI 上不存在)
         run: sed -i '/aapt2FromMavenOverride/d' gradle.properties
@@ -74,7 +74,7 @@ jobs:
       - name: 上传 APK
         uses: actions/upload-artifact@v4
         with:
-          name: fengling-apk-${{ github.ref_name }}-${{ github.run_number }}
+          name: fengling-apk-${{ github.run_number }}-${{ github.sha }}
           path: app/build/outputs/apk/**/*.apk
           if-no-files-found: warn
           retention-days: 30
