@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     // AGP 9.0+ 内置 Kotlin 支持, 无需 org.jetbrains.kotlin.android
     alias(libs.plugins.android.application)
@@ -5,9 +7,10 @@ plugins {
 }
 
 // 签名密码不落库: 优先读 CI Secret 注入的环境变量, 其次读未跟踪的 local.properties
-val localProps = java.util.Properties().apply {
-    val f = rootProject.file("local.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
+val localProps = Properties()
+val localPropsFile = rootProject.file("local.properties")
+if (localPropsFile.exists()) {
+    localPropsFile.inputStream().use { stream -> localProps.load(stream) }
 }
 val keystorePassword: String = System.getenv("FENGLING_KEYSTORE_PASSWORD")
     ?: localProps.getProperty("fengling.keystore.password")
