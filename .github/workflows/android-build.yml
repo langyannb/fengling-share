@@ -37,13 +37,21 @@ jobs:
       - name: 配置 Gradle 缓存
         uses: gradle/actions/setup-gradle@v4
 
-      - name: 安装 SDK 组件 (使用 runner 预装 SDK, 不用 setup-android 避免 sdkmanager tools 报错)
+      - name: 安装 SDK 组件 (runner 预装 SDK + 诊断输出)
         run: |
-          SDKMGR="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMGR" ] || SDKMGR="$(command -v sdkmanager)"
           echo "使用 sdkmanager: $SDKMGR"
+          "$SDKMGR" --version 2>&1 | tail -2 || true
+          echo "--- 已安装 platforms ---"; ls "$ANDROID_HOME/platforms" 2>&1 || true
+          echo "--- 已安装 build-tools ---"; ls "$ANDROID_HOME/build-tools" 2>&1 || true
+          echo "--- 仓库可用 platforms;android-3x ---"
+          "$SDKMGR" --list 2>/dev/null | grep -E "platforms;android-3[4-9]" | sort -u | head -20 || true
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-          "$SDKMGR" --install "platform-tools" "platforms;android-37" "build-tools;37.0.0" || \
-          "$SDKMGR" --install "platform-tools" "platforms;android-37"
+          "$SDKMGR" --install "platform-tools" "platforms;android-37" "build-tools;37.0.0" \
+            || "$SDKMGR" --install --channel=3 "platform-tools" "platforms;android-37" "build-tools;37.0.0" \
+            || echo "::warning::android-37 安装失败, 交给 gradle 阶段报错"
+          echo "--- 安装后 platforms ---"; ls "$ANDROID_HOME/platforms" 2>&1 || true
 
       - name: 移除本地专有的 aapt2 覆盖 (Termux 专用, CI 上不存在)
         run: sed -i '/aapt2FromMavenOverride/d' gradle.properties
