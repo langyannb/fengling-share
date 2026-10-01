@@ -76,10 +76,14 @@ jobs:
 
       - name: 编译 Release
         if: ${{ github.event.inputs.variant != 'debug' && steps.keystore.outputs.has_key == 'true' }}
+        env:
+          FENGLING_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: ./gradlew --no-daemon --stacktrace assembleRelease
 
       - name: 编译 Debug
         if: ${{ github.event.inputs.variant == 'debug' || steps.keystore.outputs.has_key != 'true' }}
+        env:
+          FENGLING_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
       - name: 上传 APK

@@ -4,6 +4,15 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// 签名密码不落库: 优先读 CI Secret 注入的环境变量, 其次读未跟踪的 local.properties
+val localProps = java.util.Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val keystorePassword: String = System.getenv("FENGLING_KEYSTORE_PASSWORD")
+    ?: localProps.getProperty("fengling.keystore.password")
+    ?: ""
+
 android {
     namespace = "com.fengling.share"
     compileSdk = 37
@@ -26,9 +35,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("../keystore/fengling.jks")
-            storePassword = "REDACTED_KEYSTORE_PASS"
+            storePassword = keystorePassword
             keyAlias = "fengling"
-            keyPassword = "REDACTED_KEYSTORE_PASS"
+            keyPassword = keystorePassword
             enableV1Signing = true
             enableV2Signing = true
         }
