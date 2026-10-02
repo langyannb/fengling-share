@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -138,6 +141,24 @@ fun HomeScreen(
             loading = false
         }
     }
+
+    // 键盘收起时自动收起搜索 (用户反馈: 收起键盘后搜索栏还挂在界面上)
+    val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    var imeWasShown by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible, searchExpanded) {
+        if (imeVisible) {
+            imeWasShown = true
+        } else if (imeWasShown) {
+            imeWasShown = false
+            if (searchExpanded) {
+                searchExpanded = false
+                query = ""
+                loadApps(effectiveCategoryId, "")
+            }
+        }
+    }
+
 
     fun refresh() {
         scope.launch {

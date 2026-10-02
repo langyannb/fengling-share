@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -30,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,12 +42,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppItem
 import com.fengling.share.data.Category
+import com.fengling.share.data.categoryWithSubsIds
 import com.fengling.share.data.childrenOf
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
@@ -58,11 +62,22 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * ExploreScreen - 分类页 (左侧分类栏 + 右侧软件列表, 双栏联动)
+ * 进程级缓存: ExploreScreen 在 NavHost 的 MAIN destination 内,
+ * 进详情页时组合被销毁, 返回后 remember 全部归零。
+ * 用 object 缓存让返回时列表数据立即可用(配合 rememberSaveable 的选中项,
+ * 滚动位置才能被 LazyListState 正确恢复)。
+ */
+private object ExploreCache {
+    var categories: List<Category> = emptyList()
+    var allApps: List<AppItem> = emptyList()
+    val appsByKey = mutableMapOf<Int, List<AppItem>>()
+}
+
+/**
+ * ExploreScreen - 分类页 (左侧一级分类栏 + 右侧软件列表, 双栏联动)
  *
- * 布局:
  *   ┌────────┬──────────────────────────┐
- *   │ 全部   │  子分类 chips (横滑)      │
+ *   │ 全部   │  子分类 chips (横滑, 有才显示)│
  *   │ 分类1  │  ───────────────────────  │
  *   │ 分类2  │  软件列表 (图标+名称+元信息)│
  *   └────────┴──────────────────────────┘
@@ -74,66 +89,80 @@ fun ExploreScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
-    var allApps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    val listState = rememberLazyListState()
 
-    var selectedCategory by remember { mutableStateOf(0) }    // 左侧选中的一级分类 (0 = 全部)
-    var selectedSubCategory by remember { mutableStateOf(0) } // 右侧选中的子分类 (0 = 该分类全部)
-    var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
-    var appsLoading by remember { mutableStateOf(false) }
-    var pendingKey by remember { mutableStateOf(0) }          // 最近一次请求的分类 id, 防乱序落地
+    var categories by remember { mutableStateOf(ExploreCache.categories) }
+    var allApps by remember { mutableStateOf(ExploreCache.allApps) }
+    var loading by remember { mutableStateOf(ExploreCache.categories.isEmpty()) }
 
-    // 分类软件缓存 (key: categoryId, 切回来不重新请求)
-    val cache = remember { mutableMapOf<Int, List<AppItem>>() }
-    var pageLoaded by remember { mutableStateOf(false) }
+    // ⚠️ rememberSaveable: 进详情页返回后要恢复选中项, 否则回到「全部」
+    var selectedCategory by rememberSaveable { mutableStateOf(0) }
+    var selectedSubCategory by rememberSaveable { mutableStateOf(0) }
+    var lastKey by rememberSaveable { mutableStateOf(-1) }
+
+    // 实际生效的分类 key: 选了子分类用子分类, 否则用一级分类
+    val currentKey = if (selectedSubCategory > 0) selectedSubCategory else selectedCategory
+
+    var apps by remember { mutableStateOf(ExploreCache.appsByKey[currentKey] ?: emptyList()) }
+    var appsLoading by remember { mutableStateOf(apps.isEmpty()) }
+    var appsError by remember { mutableStateOf("") }
 
     val topCategories = remember(categories) { categories.filter { it.isTopLevel } }
     val subCategories = remember(categories, selectedCategory) {
         if (selectedCategory > 0) childrenOf(categories, selectedCategory) else emptyList()
     }
-
-    fun loadApps(catId: Int) {
-        cache[catId]?.let {
-            apps = it
-            appsLoading = false
-            return
-        }
-        scope.launch {
-            appsLoading = true
-            val result = runCatching { ApiClient.getApps(catId) }.getOrDefault(emptyList())
-            cache[catId] = result
-            if (pendingKey == catId) apps = result
-            appsLoading = false
+    // 一级分类的软件数 (含子分类)
+    val topCounts = remember(categories, allApps) {
+        topCategories.associate { c ->
+            c.id to allApps.count { it.categoryId in categoryWithSubsIds(categories, c.id) }
         }
     }
 
-    fun openCategory(catId: Int) {
-        selectedCategory = catId
-        selectedSubCategory = 0
-        pendingKey = catId
-        apps = cache[catId] ?: emptyList()
-        loadApps(catId)
-    }
-
-    fun openSubCategory(subId: Int) {
-        selectedSubCategory = subId
-        pendingKey = subId
-        apps = cache[subId] ?: emptyList()
-        loadApps(subId)
-    }
-
+    // 首次加载: 分类列表 + 全部软件
     LaunchedEffect(Unit) {
-        if (!pageLoaded) {
-            try {
-                categories = ApiClient.getCategories()
-                allApps = ApiClient.getApps()
-                pageLoaded = true
-            } catch (_: Exception) { }
+        if (ExploreCache.categories.isEmpty()) {
+            runCatching { ApiClient.getCategories() }
+                .getOrNull()
+                ?.let { list ->
+                    ExploreCache.categories = list
+                    categories = list
+                }
+            runCatching { ApiClient.getApps() }
+                .getOrNull()
+                ?.let { list ->
+                    ExploreCache.allApps = list
+                    allApps = list
+                    ExploreCache.appsByKey[0] = list
+                }
         }
         loading = false
-        pendingKey = 0
-        loadApps(0)
+    }
+
+    // 分类切换 -> 加载对应软件 (命中缓存不重复请求)
+    LaunchedEffect(currentKey, categories) {
+        if (categories.isEmpty()) return@LaunchedEffect
+        val cached = ExploreCache.appsByKey[currentKey]
+        if (cached != null) {
+            apps = cached
+            appsLoading = false
+            appsError = ""
+        } else {
+            appsLoading = true
+            appsError = ""
+            apps = emptyList()
+            runCatching { ApiClient.getApps(currentKey) }
+                .onSuccess { result ->
+                    ExploreCache.appsByKey[currentKey] = result
+                    apps = result
+                }
+                .onFailure { appsError = "加载失败, 请稍后重试" }
+            appsLoading = false
+        }
+        // 主动切换分类才回到顶部; 从详情页返回(lastKey 已恢复)不滚动
+        if (lastKey != currentKey) {
+            if (lastKey != -1) listState.scrollToItem(0)
+            lastKey = currentKey
+        }
     }
 
     Scaffold(
@@ -156,12 +185,12 @@ fun ExploreScreen(
                         .fillMaxSize()
                         .padding(innerPadding),
                 ) {
-                    // ── 左侧: 一级分类竖排栏 ──
+                    // ── 左侧: 一级分类栏 ──
                     LazyColumn(
                         modifier = Modifier
-                            .width(96.dp)
+                            .width(100.dp)
                             .fillMaxHeight()
-                            .background(MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                            .background(MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)),
                         contentPadding = PaddingValues(top = 6.dp, bottom = 110.dp),
                     ) {
                         item(key = "cat_all") {
@@ -170,16 +199,26 @@ fun ExploreScreen(
                                 count = allApps.size,
                                 selected = selectedCategory == 0,
                                 accent = MiuixTheme.colorScheme.primary,
-                                onClick = { openCategory(0) },
+                                onClick = {
+                                    if (selectedCategory != 0 || selectedSubCategory != 0) {
+                                        selectedCategory = 0
+                                        selectedSubCategory = 0
+                                    }
+                                },
                             )
                         }
                         items(topCategories, key = { it.id }) { cat ->
                             SideCategoryItem(
                                 name = cat.name,
-                                count = 0,
+                                count = topCounts[cat.id] ?: 0,
                                 selected = selectedCategory == cat.id,
                                 accent = parseColor(cat.color),
-                                onClick = { openCategory(cat.id) },
+                                onClick = {
+                                    if (selectedCategory != cat.id) {
+                                        selectedCategory = cat.id
+                                        selectedSubCategory = 0   // 切一级分类时重置子分类
+                                    }
+                                },
                             )
                         }
                     }
@@ -200,19 +239,14 @@ fun ExploreScreen(
                                     CategoryChip(
                                         name = "全部",
                                         selected = selectedSubCategory == 0,
-                                        onClick = {
-                                            selectedSubCategory = 0
-                                            pendingKey = selectedCategory
-                                            apps = cache[selectedCategory] ?: emptyList()
-                                            loadApps(selectedCategory)
-                                        },
+                                        onClick = { selectedSubCategory = 0 },
                                     )
                                 }
                                 items(subCategories, key = { it.id }) { sub ->
                                     CategoryChip(
                                         name = sub.name,
                                         selected = selectedSubCategory == sub.id,
-                                        onClick = { openSubCategory(sub.id) },
+                                        onClick = { selectedSubCategory = sub.id },
                                     )
                                 }
                             }
@@ -223,6 +257,12 @@ fun ExploreScreen(
                                 LoadingBox(Modifier.fillMaxSize())
                             }
 
+                            appsError.isNotEmpty() && apps.isEmpty() -> {
+                                Box(Modifier.fillMaxSize()) {
+                                    EmptyMessage(text = appsError)
+                                }
+                            }
+
                             apps.isEmpty() -> {
                                 Box(Modifier.fillMaxSize()) {
                                     EmptyMessage(text = "该分类暂无软件")
@@ -231,6 +271,7 @@ fun ExploreScreen(
 
                             else -> {
                                 LazyColumn(
+                                    state = listState,
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(
                                         start = 12.dp,
@@ -270,7 +311,7 @@ private fun SideCategoryItem(
     val interaction = remember { MutableInteractionSource() }
     val isPressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.95f else 1f,
+        targetValue = if (isPressed) 0.96f else 1f,
         animationSpec = spring(
             dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
             stiffness = androidx.compose.animation.core.Spring.StiffnessLow,
@@ -280,9 +321,9 @@ private fun SideCategoryItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .padding(horizontal = 7.dp, vertical = 3.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(11.dp))
             .background(
                 if (selected) MiuixTheme.colorScheme.surface else Color.Transparent
             )
@@ -291,38 +332,39 @@ private fun SideCategoryItem(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 6.dp, vertical = 13.dp),
+            .padding(horizontal = 8.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (selected) {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 3.dp, height = 14.dp)
-                            .clip(CircleShape)
-                            .background(accent),
-                    )
-                    Spacer(Modifier.width(5.dp))
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 3.dp, height = 15.dp)
+                        .clip(CircleShape)
+                        .background(accent),
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                 Text(
                     text = name,
                     fontSize = 13.sp,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                     color = if (selected) accent else MiuixTheme.colorScheme.onBackgroundVariant,
                     maxLines = 2,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                 )
+                if (count > 0) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "$count",
+                        fontSize = 10.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.65f),
+                    )
+                }
             }
-            if (count > 0) {
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = "$count",
-                    fontSize = 10.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
-                )
-            }
+            if (selected) Spacer(Modifier.width(9.dp)) // 与左侧竖条对齐, 文字不偏移
         }
     }
 }
@@ -377,7 +419,7 @@ private fun parseColor(hex: String): Color {
     }
 }
 
-/** 分类内软件项 (现代化: 图标 + 名称 + 元信息 + 查看按钮) */
+/** 分类内软件项 (图标 + 名称 + 元信息 + 查看按钮) */
 @Composable
 private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
     Card(
@@ -393,7 +435,6 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                 .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 应用图标 (圆角方块)
             Box(
                 modifier = Modifier
                     .size(48.dp)
@@ -425,7 +466,7 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                         fontWeight = FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onBackground,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     if (app.isNew) {
@@ -464,7 +505,6 @@ private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             }
-            // 查看按钮 (胶囊)
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
