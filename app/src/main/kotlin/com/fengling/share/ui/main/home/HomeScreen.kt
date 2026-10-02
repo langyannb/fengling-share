@@ -180,27 +180,15 @@ fun HomeScreen(
     val isDark = isSystemInDarkTheme()
     Scaffold(
         topBar = {
-            // 现代化渐变标题区
-            Column(
+            // 极简顶部占位: 只保留状态栏高度 + 6dp 间距
+            // (原「风铃分享库 / 发现好软件 · 分享新乐趣」大标题区已移除, 释放垂直空间)
+            Spacer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MiuixTheme.colorScheme.surface)
                     .statusBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-            ) {
-                Text(
-                    text = "风铃分享库",
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "发现好软件 · 分享新乐趣",
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-            }
+                    .height(6.dp),
+            )
         },
     ) { innerPadding ->
         PullToRefresh(
