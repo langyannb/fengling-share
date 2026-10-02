@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Message
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.DownloadListener
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -145,6 +147,11 @@ fun WebViewScreen(
                 .replace("Version/4.0 Mobile", "")
                 .trim() + " Mobile"
 
+        // ===== 布局高度塌陷修复 (2026-08-10, link3.cc 实测) =====
+        // SPA 页面用 html/body height:100% 百分比高度链, WebView 在视口未就绪时
+        // 解析该链得到 0 → 内容在 DOM 里但 offsetHeight=0 不可见, 只剩 fixed 元素。
+        // vh 单位实时跟随视口, 不依赖百分比链; 多时延重试覆盖 SPA 晚挂载。
+        // 仅在检测到塌陷 (body 高度 < 视口一半) 时注入, 正常页面零影响。
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
@@ -163,6 +170,52 @@ fun WebViewScreen(
             override fun onPageFinished(view: WebView?, url: String?) {
                 // 加载完成后更新 (goBack 后 canGoBack 可能变 false)
                 canGoBack = view?.canGoBack() ?: false
+                // 修复 SPA 页面在 WebView 中「内容空白只剩 fixed 元素」的两大元凶:
+                // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0 不可见
+                // 2) 首屏 loading 遮罩 (#index_loading) 应用挂载后未移除 → 一直盖在白屏上
+                // vh 单位实时跟随视口, 不依赖百分比链; 多时延重试覆盖 SPA 晚挂载。
+                if (url?.startsWith("http") == true) {
+                    runCatching {
+                        view?.evaluateJavascript(
+                            """
+                            (function(){
+                              if (window.__flFixInstalled) return;
+                              window.__flFixInstalled = true;
+                              var log = function(m){ try { console.log('[FLfix] ' + m); } catch(e){} };
+                              var fix = function(tag){
+                                try {
+                                  var vh = window.innerHeight || document.documentElement.clientHeight;
+                                  var de = document.documentElement, b = document.body;
+                                  var app = document.getElementById('app');
+                                  var bh = b ? b.offsetHeight : -1;
+                                  var ah = app ? app.offsetHeight : -1;
+                                  log(tag + ' vh=' + vh + ' bodyH=' + bh + ' appH=' + ah + ' appKids=' + (app ? app.children.length : -1));
+                                  if (!vh || vh <= 0) return;
+                                  if (bh < vh * 0.5 || (app && ah < vh * 0.5)) {
+                                    de.style.minHeight = '100vh';
+                                    if (b) { b.style.minHeight = '100vh'; b.style.height = 'auto'; }
+                                    if (app) { app.style.minHeight = '100vh'; app.style.height = 'auto'; }
+                                    log(tag + ' 已修复高度塌陷');
+                                  }
+                                  var ld = document.getElementById('index_loading');
+                                  if (ld && app && app.children.length > 0) {
+                                    ld.parentNode.removeChild(ld);
+                                    log(tag + ' 已移除首屏 loading 遮罩');
+                                  }
+                                  window.dispatchEvent(new Event('resize'));
+                                  window.dispatchEvent(new Event('scroll'));
+                                } catch(e) { log(tag + ' ERR ' + e.message); }
+                              };
+                              fix('t0');
+                              setTimeout(function(){fix('t500')},500);
+                              setTimeout(function(){fix('t1500')},1500);
+                              setTimeout(function(){fix('t3000')},3000);
+                              setTimeout(function(){fix('t6000')},6000);
+                            })();
+                            """.trimIndent()
+                        ) { }
+                    }
+                }
             }
         }
 
@@ -171,6 +224,12 @@ fun WebViewScreen(
                 progress = newProgress
                 // 进度变化时同步更新 (goBack 前后)
                 canGoBack = view.canGoBack()
+            }
+
+            // 网页 console 转发到 logcat (诊断内置浏览器空白/报错, tag: FLWebView)
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                Log.i("FLWebView", "console: " + message.message() + " @" + message.sourceId() + ":" + message.lineNumber())
+                return true
             }
 
             override fun onReceivedTitle(view: WebView, title: String?) {
