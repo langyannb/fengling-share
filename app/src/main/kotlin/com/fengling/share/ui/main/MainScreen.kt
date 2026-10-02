@@ -436,44 +436,24 @@ private fun NoticeDialog(
                 cornerRadius = 26.dp,
                 insideMargin = PaddingValues(0.dp),
             ) {
-                // ── 头部: 浅色圆形图标 + 标题 + 轻量关闭按钮 ──
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 26.dp, start = 24.dp, end = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(CircleShape)
-                                .background(scheme.primary.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Campaign,
-                                contentDescription = null,
-                                tint = scheme.primary,
-                                modifier = Modifier.size(26.dp),
-                            )
-                        }
-                        Spacer(Modifier.height(14.dp))
-                        Text(
-                            text = "公告",
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = scheme.onBackground,
-                        )
-                    }
-                    // 关闭按钮
+                // ── 头部: 左对齐标题 + 淡色关闭按钮 (去掉彩色圆底图标, 不再有模板感) ──
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "公告",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = scheme.onBackground,
+                        modifier = Modifier.weight(1f),
+                    )
                     Box(
                         modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 14.dp, end = 14.dp)
-                            .size(30.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
-                            .background(scheme.surfaceContainerHigh)
                             .clickable(onClick = onDismiss),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -481,14 +461,18 @@ private fun NoticeDialog(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "关闭",
                             tint = scheme.onBackgroundVariant,
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(scheme.surfaceVariant),
+                )
 
-                Spacer(Modifier.height(16.dp))
-
-                // ── 内容: WebView 渲染公告 HTML (透明底, 融进容器) ──
+                // ── 内容: WebView 直接铺在卡片上 (透明底, 不再套一层灰色容器) ──
                 val webView = remember { WebView(context) }
                 LaunchedEffect(content) {
                     webView.settings.javaScriptEnabled = true
@@ -516,49 +500,46 @@ private fun NoticeDialog(
                     val fullHtml = "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">$css</head><body>$content</body></html>"
                     webView.loadDataWithBaseURL(null, fullHtml, "text/html", "utf-8", null)
                 }
+                AndroidView(
+                    factory = { webView },
+                    update = {},
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .heightIn(min = 80.dp, max = 300.dp),
+                )
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(scheme.surfaceContainerHigh),
-                ) {
-                    AndroidView(
-                        factory = { webView },
-                        update = {},
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 96.dp, max = 320.dp)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                    )
-                }
+                        .height(1.dp)
+                        .background(scheme.surfaceVariant),
+                )
 
-                Spacer(Modifier.height(18.dp))
-
-                // ── 底部: 自绘勾选 + 主按钮 ──
+                // ── 底部: 方形勾选 (原生质感) + 主按钮 ──
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+                        .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 16.dp),
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .clickable { onNoMoreTodayChange(!noMoreToday) }
                             .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
+                                .size(18.dp)
+                                .clip(RoundedCornerShape(5.dp))
                                 .background(if (noMoreToday) scheme.primary else Color.Transparent)
                                 .then(
                                     if (noMoreToday) Modifier
                                     else Modifier.border(
                                         BorderStroke(1.5.dp, scheme.onBackgroundVariant.copy(alpha = 0.45f)),
-                                        CircleShape,
+                                        RoundedCornerShape(5.dp),
                                     )
                                 ),
                             contentAlignment = Alignment.Center,
@@ -568,7 +549,7 @@ private fun NoticeDialog(
                                     imageVector = Icons.Filled.Check,
                                     contentDescription = null,
                                     tint = scheme.onPrimary,
-                                    modifier = Modifier.size(13.dp),
+                                    modifier = Modifier.size(12.dp),
                                 )
                             }
                         }
@@ -579,8 +560,8 @@ private fun NoticeDialog(
                             color = scheme.onBackgroundVariant,
                         )
                     }
-                    Spacer(Modifier.height(10.dp))
-                    // Miuix 官方 Button (自带按压反馈与涟漪, 不再手搓 Box + clickable)
+                    Spacer(Modifier.height(12.dp))
+                    // Miuix 官方 Button (自带按压反馈与涟漪, 不手搓 Box + clickable)
                     Button(
                         onClick = onDismiss,
                         modifier = Modifier
