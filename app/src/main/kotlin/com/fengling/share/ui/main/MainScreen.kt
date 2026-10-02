@@ -16,6 +16,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -73,6 +74,14 @@ import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
+import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.ui.window.DialogProperties
+import android.widget.Toast
+import com.fengling.share.ui.components.ExternalJumpDialog
+import com.fengling.share.ui.components.ExternalJumpTarget
+import com.fengling.share.ui.components.resolveExternalJump
 import com.fengling.share.ui.components.navigation.LiquidBottomBar
 import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
@@ -81,6 +90,8 @@ import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MyScreen
 import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.text.SimpleDateFormat
@@ -115,25 +126,6 @@ object Routes {
  * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
  */
 
-/**
- * 智能打开链接: http(s) 走内置浏览器; mailto/tel/sms 等协议交系统 (打开邮箱/拨号等)
- * @return true = 已处理 (交系统), false = 应走内置浏览器
- */
-private fun openExternalUrl(context: android.content.Context, url: String): Boolean {
-    val scheme = try { android.net.Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
-    if (scheme == "http" || scheme == "https") return false
-    // mailto/tel/sms/其他 scheme → 交系统打开对应应用
-    try {
-        context.startActivity(
-            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-        return true
-    } catch (_: Exception) {
-        return false
-    }
-}
-
 @Composable
 fun MainScreen(
     onThemeChanged: (ThemeMode) -> Unit = {},
@@ -154,6 +146,23 @@ fun MainScreen(
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // ===== 外部应用跳转确认 (2026-10-02: 用户要求跳转前先问一句) =====
+    // 以前 mailto/tel/mqqwpa/uclink 等协议是直接 startActivity 抢跳, 现在一律先弹确认框
+    var pendingExternal by remember { mutableStateOf<ExternalJumpTarget?>(null) }
+
+    /**
+     * 统一链接分流: http(s) → 内置浏览器;
+     * 其它 scheme → 记下来弹确认框, 用户点「打开」才真跳, 点「取消」什么都不做
+     */
+    fun openLink(url: String, title: String, password: String = "") {
+        val target = resolveExternalJump(context, url)
+        if (target == null) {
+            navController.navigate(Routes.webview(url, title, password))
+        } else {
+            pendingExternal = target
+        }
+    }
 
     // ===== 公告 (首页弹窗: 每日一次 / 每次打开 + 今日不再提示) =====
     // 语义: 「今日不再提示」只对当时那条公告当天生效; 公告内容一变 (hidden/shown content != 当前), 当天也重新弹
@@ -196,9 +205,7 @@ fun MainScreen(
             onLinkClick = { url ->
                 // 公告里的链接统一分流: http(s) 内置浏览器, 自定义协议 (mqqwpa:// 等) 交系统应用
                 showNotice = false
-                if (!openExternalUrl(context, url)) {
-                    navController.navigate(Routes.webview(url, "公告详情"))
-                }
+                openLink(url, "公告详情")
             },
             onDismiss = {
                 if (noMoreToday) {
@@ -208,6 +215,25 @@ fun MainScreen(
                 }
                 showNotice = false
             },
+        )
+    }
+
+    // 外部应用跳转确认框 (公告/关于页/详情页里点了自定义协议链接时弹出)
+    pendingExternal?.let { target ->
+        ExternalJumpDialog(
+            target = target,
+            onConfirm = {
+                val opened = runCatching { context.startActivity(target.intent) }.isSuccess
+                if (!opened) {
+                    Toast.makeText(
+                        context,
+                        "没有找到可以打开该链接的应用",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                pendingExternal = null
+            },
+            onDismiss = { pendingExternal = null },
         )
     }
 
@@ -270,10 +296,8 @@ fun MainScreen(
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
                                 onOpenWeb = { url, title ->
-                                    // mailto/tel 等协议交系统, http(s) 内置浏览器
-                                    if (!openExternalUrl(context, url)) {
-                                        navController.navigate(Routes.webview(url, title))
-                                    }
+                                    // 自定义协议先弹确认框, http(s) 内置浏览器
+                                    openLink(url, title)
                                 },
                                 onOpenUpdate = { info ->
                                     navController.navigate(Routes.update(info))
@@ -309,10 +333,8 @@ fun MainScreen(
                 appId = appId,
                 onBack = { navController.popBackStack() },
                 onOpenWeb = { url, title, password ->
-                    // mailto/tel 等协议交系统, http(s) 内置浏览器
-                    if (!openExternalUrl(context, url)) {
-                        navController.navigate(Routes.webview(url, title, password))
-                    }
+                    // 自定义协议先弹确认框, http(s) 内置浏览器
+                    openLink(url, title, password)
                 },
                 onOpenSubApp = { subId ->
                     navController.navigate(Routes.detail(subId))
@@ -376,11 +398,9 @@ fun MainScreen(
 }
 
 /**
- * 公告弹窗 (首页弹出, 富文本 HTML 渲染 + 美化)
- * - 渐变顶部 + 关闭按钮 + 圆角大卡片
- * - WebView 渲染公告 HTML (支持加粗/变色/图片/列表)
- * - 点击链接 → onLinkClick (App 内置浏览器打开)
- * - 「今日不再提示」复选框: 勾选后关闭时记录当天, 当天不再弹
+ * 公告弹窗 (首页弹出, 富文本 HTML 渲染)
+ * 2026-10-02 重新设计: 去掉高饱和渐变横幅 (塑料感来源) → 浅色图标 + 通透留白;
+ * WebView 底色改透明、融进圆角容器, 消除「白块拼贴」; 进出场缩放淡入。
  */
 @Composable
 private fun NoticeDialog(
@@ -393,96 +413,90 @@ private fun NoticeDialog(
     val content = info?.content ?: ""
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
+    val scheme = MiuixTheme.colorScheme
 
-    Dialog(onDismissRequest = onDismiss) {
+    // 不做任何入场动画: Dialog 遮罩一出现, 卡片就是最终状态。
+    // 历史坑: ①欠阻尼 spring 缩放 + alpha 淡入 → 回弹 + 遮罩空窗;
+    //         ②animateContentSize 跟随 WebView 加载时的高度多帧变化,
+    //           默认 spring(StiffnessMediumLow) 会让卡片缓慢弹性伸缩 —— 用户反馈的「很抖很抖慢慢的」。
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(MiuixTheme.colorScheme.surface),
+            // Miuix 官方 Card (自带正确的圆角与配色, 不再手搓 clip+background)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 26.dp,
+                insideMargin = PaddingValues(0.dp),
             ) {
-                // 顶部渐变横幅
+                // ── 头部: 左对齐标题 + 淡色关闭按钮 (去掉彩色圆底图标, 不再有模板感) ──
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "公告",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = scheme.onBackground,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "关闭",
+                            tint = scheme.onBackgroundVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    MiuixTheme.colorScheme.primary,
-                                    MiuixTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                )
-                            )
-                        )
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Campaign,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = "公告",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.weight(1f),
-                        )
-                        // 关闭按钮
-                        Box(
-                            modifier = Modifier
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .clickable(onClick = onDismiss),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "关闭",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                }
-                // WebView 渲染公告 HTML
+                        .height(1.dp)
+                        .background(scheme.surfaceVariant),
+                )
+
+                // ── 内容: WebView 直接铺在卡片上 (透明底, 不再套一层灰色容器) ──
                 val webView = remember { WebView(context) }
                 LaunchedEffect(content) {
                     webView.settings.javaScriptEnabled = true
                     webView.settings.domStorageEnabled = true
+                    webView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     webView.webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             val u = url ?: return false
-                            // 所有链接统一交上层分流: http(s) 内置浏览器;
-                            // mqqwpa:// mailto: tel: 等自定义协议 WebView 自己加载不了, 必须交系统 Intent 打开
+                            // 链接统一交上层分流 (http(s) 内置浏览器; 自定义协议弹确认框)
                             onLinkClick(u)
                             return true
                         }
                     }
-                    // 深色模式: 页面底色随主题, 文字默认色适配
-                    val bg = if (isDark) "#1C1B1F" else "#FFFFFF"
-                    val text = if (isDark) "#E6E1E5" else "#1A1A2E"
-                    val css = "<style>body{background:$bg;color:$text;font-size:15px;line-height:1.7;padding:0;margin:0;word-break:break-word;} a{color:#4C6FFF;} img{max-width:100%;border-radius:10px;} h1,h2,h3{color:${if (isDark) "#FFFFFF" else "#1A1A2E"};}</style>"
+                    val textColor = if (isDark) "#E6E1E5" else "#1A1A2E"
+                    val css = "<style>" +
+                        "html,body{background:transparent;color:$textColor;font-size:14.5px;line-height:1.75;word-break:break-word;}" +
+                        "body{padding:0;margin:0;}" +
+                        "p{margin:0 0 8px 0;} p:last-child{margin-bottom:0;}" +
+                        "a{color:#4C6FFF;text-decoration:none;font-weight:500;}" +
+                        "img{max-width:100%;border-radius:10px;display:block;margin:8px 0;}" +
+                        "h1,h2,h3{font-size:16px;font-weight:600;color:$textColor;margin:10px 0 6px;}" +
+                        "ul,ol{padding-left:20px;margin:6px 0;}" +
+                        "blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid #4C6FFF;background:rgba(127,127,127,0.08);border-radius:8px;}" +
+                        "</style>"
                     val fullHtml = "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">$css</head><body>$content</body></html>"
                     webView.loadDataWithBaseURL(null, fullHtml, "text/html", "utf-8", null)
                 }
@@ -491,55 +505,74 @@ private fun NoticeDialog(
                     update = {},
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 120.dp, max = 420.dp)
-                        .padding(horizontal = 4.dp),
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .heightIn(min = 80.dp, max = 300.dp),
                 )
-                // 底部操作区
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(scheme.surfaceVariant),
+                )
+
+                // ── 底部: 方形勾选 (原生质感) + 主按钮 ──
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                        .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 16.dp),
                 ) {
-                    // 今日不再提示复选框
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .clickable { onNoMoreTodayChange(!noMoreToday) }
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Checkbox(
-                            checked = noMoreToday,
-                            onCheckedChange = { onNoMoreTodayChange(it) },
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = MiuixTheme.colorScheme.primary,
-                            ),
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(if (noMoreToday) scheme.primary else Color.Transparent)
+                                .then(
+                                    if (noMoreToday) Modifier
+                                    else Modifier.border(
+                                        BorderStroke(1.5.dp, scheme.onBackgroundVariant.copy(alpha = 0.45f)),
+                                        RoundedCornerShape(5.dp),
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (noMoreToday) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = scheme.onPrimary,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
                         Text(
                             text = "今日不再提示",
                             fontSize = 13.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            color = scheme.onBackgroundVariant,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
-                    // 知道了按钮 (主色胶囊)
-                    Box(
+                    Spacer(Modifier.height(12.dp))
+                    // Miuix 官方 Button (自带按压反馈与涟漪, 不手搓 Box + clickable)
+                    Button(
+                        onClick = onDismiss,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MiuixTheme.colorScheme.primary)
-                            .clickable(onClick = onDismiss)
-                            .padding(vertical = 12.dp),
-                        contentAlignment = Alignment.Center,
+                            .height(46.dp),
+                        cornerRadius = 23.dp,
                     ) {
                         Text(
-                            text = "知道了",
+                            text = "我知道了",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = MiuixTheme.colorScheme.onPrimary,
                         )
                     }
                 }

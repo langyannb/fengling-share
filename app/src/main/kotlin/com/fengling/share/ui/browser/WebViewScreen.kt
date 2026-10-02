@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Message
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.DownloadListener
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -65,6 +67,9 @@ import android.app.DownloadManager
 import android.os.Environment
 import android.widget.Toast
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.ExternalJumpDialog
+import com.fengling.share.ui.components.ExternalJumpTarget
+import com.fengling.share.ui.components.resolveExternalJump
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -99,6 +104,20 @@ fun WebViewScreen(
     // WebViewClient 未设置 → 页面加载绕过 shouldOverrideUrlLoading 拦截)
     // 文件上传回调 (onShowFileChooser)
     var filePathCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+
+    // ===== 外部应用跳转确认 (2026-10-02: 用户要求跳转前先问) =====
+    // 非 http(s) 链接 (uclink:// weixin:// intent:// mailto: 等) 不再直接 startActivity,
+    // 先记下来弹确认框, 用户点「打开」才真正跳转。http(s) 返回 false 放行给 WebView。
+    var pendingExternal by remember { mutableStateOf<ExternalJumpTarget?>(null) }
+    val interceptExternal: (String) -> Boolean = { u ->
+        val target = resolveExternalJump(context, u)
+        if (target == null) {
+            false
+        } else {
+            pendingExternal = target
+            true
+        }
+    }
     val fileChooserLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -145,15 +164,20 @@ fun WebViewScreen(
                 .replace("Version/4.0 Mobile", "")
                 .trim() + " Mobile"
 
+        // ===== 布局高度塌陷修复 (2026-08-10, link3.cc 实测) =====
+        // SPA 页面用 html/body height:100% 百分比高度链, WebView 在视口未就绪时
+        // 解析该链得到 0 → 内容在 DOM 里但 offsetHeight=0 不可见, 只剩 fixed 元素。
+        // vh 单位实时跟随视口, 不依赖百分比链; 多时延重试覆盖 SPA 晚挂载。
+        // 仅在检测到塌陷 (body 高度 < 视口一半) 时注入, 正常页面零影响。
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean = handleProtocolUrl(view, request.url.toString())
+            ): Boolean = interceptExternal(request.url.toString())
 
             @Deprecated("Deprecated in Java")
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
-                handleProtocolUrl(view, url)
+                interceptExternal(url)
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
@@ -163,6 +187,52 @@ fun WebViewScreen(
             override fun onPageFinished(view: WebView?, url: String?) {
                 // 加载完成后更新 (goBack 后 canGoBack 可能变 false)
                 canGoBack = view?.canGoBack() ?: false
+                // 修复 SPA 页面在 WebView 中「内容空白只剩 fixed 元素」的两大元凶:
+                // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0 不可见
+                // 2) 首屏 loading 遮罩 (#index_loading) 应用挂载后未移除 → 一直盖在白屏上
+                // vh 单位实时跟随视口, 不依赖百分比链; 多时延重试覆盖 SPA 晚挂载。
+                if (url?.startsWith("http") == true) {
+                    runCatching {
+                        view?.evaluateJavascript(
+                            """
+                            (function(){
+                              if (window.__flFixInstalled) return;
+                              window.__flFixInstalled = true;
+                              var log = function(m){ try { console.log('[FLfix] ' + m); } catch(e){} };
+                              var fix = function(tag){
+                                try {
+                                  var vh = window.innerHeight || document.documentElement.clientHeight;
+                                  var de = document.documentElement, b = document.body;
+                                  var app = document.getElementById('app');
+                                  var bh = b ? b.offsetHeight : -1;
+                                  var ah = app ? app.offsetHeight : -1;
+                                  log(tag + ' vh=' + vh + ' bodyH=' + bh + ' appH=' + ah + ' appKids=' + (app ? app.children.length : -1));
+                                  if (!vh || vh <= 0) return;
+                                  if (bh < vh * 0.5 || (app && ah < vh * 0.5)) {
+                                    de.style.minHeight = '100vh';
+                                    if (b) { b.style.minHeight = '100vh'; b.style.height = 'auto'; }
+                                    if (app) { app.style.minHeight = '100vh'; app.style.height = 'auto'; }
+                                    log(tag + ' 已修复高度塌陷');
+                                  }
+                                  var ld = document.getElementById('index_loading');
+                                  if (ld && app && app.children.length > 0) {
+                                    ld.parentNode.removeChild(ld);
+                                    log(tag + ' 已移除首屏 loading 遮罩');
+                                  }
+                                  window.dispatchEvent(new Event('resize'));
+                                  window.dispatchEvent(new Event('scroll'));
+                                } catch(e) { log(tag + ' ERR ' + e.message); }
+                              };
+                              fix('t0');
+                              setTimeout(function(){fix('t500')},500);
+                              setTimeout(function(){fix('t1500')},1500);
+                              setTimeout(function(){fix('t3000')},3000);
+                              setTimeout(function(){fix('t6000')},6000);
+                            })();
+                            """.trimIndent()
+                        ) { }
+                    }
+                }
             }
         }
 
@@ -171,6 +241,12 @@ fun WebViewScreen(
                 progress = newProgress
                 // 进度变化时同步更新 (goBack 前后)
                 canGoBack = view.canGoBack()
+            }
+
+            // 网页 console 转发到 logcat (诊断内置浏览器空白/报错, tag: FLWebView)
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                Log.i("FLWebView", "console: " + message.message() + " @" + message.sourceId() + ":" + message.lineNumber())
+                return true
             }
 
             override fun onReceivedTitle(view: WebView, title: String?) {
@@ -190,7 +266,7 @@ fun WebViewScreen(
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView?, request: WebResourceRequest?): Boolean {
                         val u = request?.url?.toString() ?: return false
-                        if (handleProtocolUrl(view, u)) return true
+                        if (interceptExternal(u)) return true
                         view.loadUrl(u)
                         return true
                     }
@@ -407,36 +483,27 @@ fun WebViewScreen(
                     }
                 }
             }
+
+            // 外部应用跳转确认框 (点击非 http(s) 链接时弹出)
+            pendingExternal?.let { target ->
+                ExternalJumpDialog(
+                    target = target,
+                    onConfirm = {
+                        val opened = runCatching { context.startActivity(target.intent) }.isSuccess
+                        if (!opened) {
+                            Toast.makeText(
+                                context,
+                                "没有找到可以打开该链接的应用",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                        pendingExternal = null
+                    },
+                    onDismiss = { pendingExternal = null },
+                )
+            }
         }
     }
-}
-
-/**
- * 处理协议跳转链接: http(s) 放行给 WebView 正常加载;
- * 非 http(s) scheme (intent:// / uclink:// 等) 正常跳转交给系统处理
- * (Intent.parseUri 或 ACTION_VIEW, 系统会路由到注册了对应 scheme 的应用, 如 UC 浏览器),
- * 不做任何拦截/重写。无法处理的 scheme 吞掉, 防止 WebView 显示乱码。
- */
-private fun handleProtocolUrl(view: WebView, url: String): Boolean {
-    val scheme = try { Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
-    if (scheme == "http" || scheme == "https") return false
-
-    // intent:// 用 Intent.parseUri 解析后正常启动 (系统路由到对应 App)
-    if (url.startsWith("intent://")) {
-        try {
-            val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-            view.context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return true
-        } catch (_: Exception) { }
-    }
-
-    // 其他 scheme (uclink:// 等): ACTION_VIEW 正常跳转
-    try {
-        view.context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    } catch (_: Exception) { }
-    return true
 }
 
 /** 从下载 URL / Content-Disposition / MIME 推断文件名 (DownloadManager 落盘用) */

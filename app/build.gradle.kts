@@ -1,8 +1,20 @@
+import java.util.Properties
+
 plugins {
     // AGP 9.0+ 内置 Kotlin 支持, 无需 org.jetbrains.kotlin.android
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+// 签名密码不落库: 优先读 CI Secret 注入的环境变量, 其次读未跟踪的 local.properties
+val localProps = Properties()
+val localPropsFile = rootProject.file("local.properties")
+if (localPropsFile.exists()) {
+    localPropsFile.inputStream().use { stream -> localProps.load(stream) }
+}
+val keystorePassword: String = System.getenv("FENGLING_KEYSTORE_PASSWORD")
+    ?: localProps.getProperty("fengling.keystore.password")
+    ?: ""
 
 android {
     namespace = "com.fengling.share"
@@ -12,8 +24,8 @@ android {
         applicationId = "com.fengling.share"
         minSdk = 33
         targetSdk = 34
-        versionCode = 105
-        versionName = "1.0.5"
+        versionCode = 106
+        versionName = "1.0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -26,9 +38,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("../keystore/fengling.jks")
-            storePassword = "REDACTED_KEYSTORE_PASS"
+            storePassword = keystorePassword
             keyAlias = "fengling"
-            keyPassword = "REDACTED_KEYSTORE_PASS"
+            keyPassword = keystorePassword
             enableV1Signing = true
             enableV2Signing = true
         }
