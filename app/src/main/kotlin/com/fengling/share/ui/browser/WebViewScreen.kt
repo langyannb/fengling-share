@@ -221,6 +221,24 @@ fun WebViewScreen(
                             if (r == "true") {
                                 challengeCount++
                                 Log.w("FLWebView", "反爬挑战页 第 $challengeCount 次, 等待 PoW 后自动重载: $url")
+                                // 腾讯 TADs 挑战页偶发「solveChallenge 尚未加载」而停在壳上 (白屏) →
+                                // 3.5s 后若 cookie 里仍没有 EO-Bot-Js-Token 就重载重试, 最多 3 次
+                                if (challengeCount <= 3 && view != null) {
+                                    view.postDelayed({
+                                        runCatching {
+                                            view.evaluateJavascript(
+                                                "(function(){try{return document.cookie.indexOf('EO-Bot-Js-Token')>=0?'yes':'no'}catch(e){return 'no'}})()"
+                                            ) { c ->
+                                                if (c != "\"yes\"") {
+                                                    Log.w("FLWebView", "反爬 token 未生成, 重载重试 (第 $challengeCount 次)")
+                                                    runCatching { view.reload() }
+                                                } else {
+                                                    Log.i("FLWebView", "反爬 token 已写入 cookie")
+                                                }
+                                            }
+                                        }
+                                    }, 3500)
+                                }
                             } else if (challengeCount != 0) {
                                 Log.i("FLWebView", "已通过反爬挑战 (共 $challengeCount 次)")
                                 challengeCount = 0
