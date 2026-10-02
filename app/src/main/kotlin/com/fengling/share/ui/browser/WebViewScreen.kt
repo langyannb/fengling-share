@@ -489,7 +489,14 @@ fun WebViewScreen(
                 ExternalJumpDialog(
                     target = target,
                     onConfirm = {
-                        runCatching { context.startActivity(target.intent) }
+                        val opened = runCatching { context.startActivity(target.intent) }.isSuccess
+                        if (!opened) {
+                            Toast.makeText(
+                                context,
+                                "没有找到可以打开该链接的应用",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
                         pendingExternal = null
                     },
                     onDismiss = { pendingExternal = null },

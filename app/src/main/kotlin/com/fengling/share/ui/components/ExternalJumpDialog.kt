@@ -47,7 +47,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * @param intent      已补好 FLAG_ACTIVITY_NEW_TASK 的启动 Intent
  * @param host        展示用的标识 (域名或 scheme)
  * @param packageName 目标应用包名 (用于加载应用图标, 可能为 null)
- * @param hasApp      系统里是否真的存在可处理该链接的应用
+ * @param hasApp      是否检测到可处理该链接的应用 (仅供参考, 不作为「能否打开」的判据)
  */
 data class ExternalJumpTarget(
     val url: String,
@@ -63,40 +63,61 @@ data class ExternalJumpTarget(
  * - `http` / `https` → 返回 null (继续用内置浏览器加载, 不拦截)
  * - 其它 scheme → 返回 [ExternalJumpTarget], 交由 UI 弹确认框, 用户点了才真正跳转
  */
+private val SCHEME_APP_NAMES = mapOf(
+    "uclink" to "UC浏览器", "uc" to "UC浏览器", "ucbrowser" to "UC浏览器",
+    "weixin" to "微信", "wechat" to "微信",
+    "mqqwpa" to "QQ", "mqq" to "QQ", "mqqapi" to "QQ", "mqqopensdkapi" to "QQ",
+    "alipays" to "支付宝", "alipay" to "支付宝",
+    "taobao" to "淘宝", "tmall" to "天猫",
+    "bilibili" to "哔哩哔哩", "bilikiko" to "哔哩哔哩",
+    "baiduboxapp" to "百度", "baidumap" to "百度地图",
+    "qqmusic" to "QQ音乐", "kugou" to "酷狗音乐", "kwplayer" to "酷我音乐",
+    "orpheuswidget" to "网易云音乐", "neteasemusic" to "网易云音乐",
+    "tencentvideo" to "腾讯视频", "iqiyi" to "爱奇艺", "youku" to "优酷",
+    "snssdk1128" to "抖音", "snssdk143" to "抖音", "douyin" to "抖音",
+    "xhsdiscover" to "小红书", "xhs" to "小红书",
+    "thunder" to "迅雷", "magnet" to "磁力链接", "ed2k" to "电驴",
+    "mailto" to "电子邮件", "tel" to "电话", "sms" to "短信", "geo" to "地图",
+)
+
 fun resolveExternalJump(context: Context, url: String): ExternalJumpTarget? {
-    val scheme = runCatching { Uri.parse(url).scheme?.lowercase() ?: "" }.getOrDefault("")
-    if (scheme.isEmpty() || scheme == "http" || scheme == "https") return null
+    val link = url.trim()
+    if (link.isEmpty()) return null
+    val uri = runCatching { Uri.parse(link) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase() ?: return null
+    // http(s) 继续用内置浏览器, 不拦截
+    if (scheme == "http" || scheme == "https") return null
 
-    val intent = (if (url.startsWith("intent://")) {
-        runCatching { Intent.parseUri(url, Intent.URI_INTENT_SCHEME) }.getOrNull()
+    val intent = (if (scheme == "intent") {
+        runCatching { Intent.parseUri(link, Intent.URI_INTENT_SCHEME) }.getOrNull()
     } else {
-        runCatching { Intent(Intent.ACTION_VIEW, Uri.parse(url)) }.getOrNull()
-    }) ?: return ExternalJumpTarget(url, "外部应用", Intent(), scheme, null, false)
-
+        runCatching { Intent(Intent.ACTION_VIEW, uri) }.getOrNull()
+    }) ?: return null
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     val pm = context.packageManager
-    val resolved = runCatching {
-        pm.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
-    }.getOrNull()
-
+    // Android 11+ 有包可见性限制: resolveActivity 对没在 <queries> 里声明的 scheme 会返回 null,
+    // 但这并不代表真的没有应用能打开它 —— 所以这里只用它「尽量取一个应用名/图标」,
+    // 绝不用它来判定「无法打开」(否则就会出现明明装了 UC 却提示打不开的情况)。
+    val resolved = runCatching { pm.resolveActivity(intent, PackageManager.MATCH_ALL) }.getOrNull()
+        ?: runCatching { pm.queryIntentActivities(intent, PackageManager.MATCH_ALL).firstOrNull() }
+            .getOrNull()
     val pkg = intent.`package` ?: resolved?.activityInfo?.packageName
-    val label = if (pkg != null) {
-        runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }
-            .getOrDefault("外部应用")
-    } else {
-        "外部应用"
-    }
-    val host = runCatching { intent.data?.host }.getOrNull()
-        ?: if (url.startsWith("intent://")) "intent" else scheme
+    val label = runCatching {
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg!!, 0)).toString()
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+        ?: SCHEME_APP_NAMES[scheme]
+        ?: "外部应用"
+    val host = uri.host?.takeIf { it.isNotBlank() }
+        ?: if (scheme == "intent") "intent" else scheme
 
     return ExternalJumpTarget(
-        url = url,
+        url = link,
         appLabel = label,
         intent = intent,
         host = host,
         packageName = pkg,
-        hasApp = resolved != null || intent.`package` != null,
+        hasApp = resolved != null || intent.`package` != null || SCHEME_APP_NAMES.containsKey(scheme),
     )
 }
 
@@ -158,14 +179,18 @@ fun ExternalJumpDialog(
                 }
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    text = if (target.hasApp) "即将打开外部应用" else "无法打开此链接",
+                    text = "要打开外部应用吗？",
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = MiuixTheme.colorScheme.onBackground,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = if (target.hasApp) "将离开风铃分享，跳转到其他应用" else "未检测到可处理该链接的应用",
+                    text = if (target.hasApp) {
+                        "将离开风铃分享，跳转到「${target.appLabel}」"
+                    } else {
+                        "系统未检测到已安装的对应应用，仍可尝试打开"
+                    },
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
@@ -226,23 +251,21 @@ fun ExternalJumpDialog(
                         .padding(horizontal = 18.dp),
                     horizontalArrangement = Arrangement.spacedBy(11.dp),
                 ) {
-                    if (target.hasApp) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(MiuixTheme.colorScheme.surfaceVariant)
-                                .clickable(onClick = onDismiss)
-                                .padding(vertical = 13.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "取消",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MiuixTheme.colorScheme.onBackground,
-                            )
-                        }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MiuixTheme.colorScheme.surfaceVariant)
+                            .clickable(onClick = onDismiss)
+                            .padding(vertical = 13.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "取消",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
                     }
                     Box(
                         modifier = Modifier
@@ -253,12 +276,12 @@ fun ExternalJumpDialog(
                                     listOf(primary, primary.copy(alpha = 0.82f))
                                 )
                             )
-                            .clickable(onClick = if (target.hasApp) onConfirm else onDismiss)
+                            .clickable(onClick = onConfirm)
                             .padding(vertical = 13.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = if (target.hasApp) "打开" else "知道了",
+                            text = "打开",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MiuixTheme.colorScheme.onPrimary,

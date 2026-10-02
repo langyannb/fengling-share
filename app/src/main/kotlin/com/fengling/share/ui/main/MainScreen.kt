@@ -2,6 +2,7 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -79,6 +80,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.window.DialogProperties
+import android.widget.Toast
 import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
@@ -221,7 +223,14 @@ fun MainScreen(
         ExternalJumpDialog(
             target = target,
             onConfirm = {
-                runCatching { context.startActivity(target.intent) }
+                val opened = runCatching { context.startActivity(target.intent) }.isSuccess
+                if (!opened) {
+                    Toast.makeText(
+                        context,
+                        "没有找到可以打开该链接的应用",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
                 pendingExternal = null
             },
             onDismiss = { pendingExternal = null },
@@ -406,18 +415,18 @@ private fun NoticeDialog(
     val isDark = isSystemInDarkTheme()
     val scheme = MiuixTheme.colorScheme
 
-    // 进出场动画: 缩放 + 淡入 (Dialog 自身没有转场)
+    // 进场动画: 只做极轻缩放, dampingRatio = 1f 表示「不过冲」
+    // —— 旧版 alpha 从 0 淡入 + 欠阻尼 spring 会回弹, 表现为「弹窗抖一下才出现」;
+    //    同时去掉 alpha 淡入, 避免遮罩已出现而卡片还透明的空窗感
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
     val scale by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (shown) 1f else 0.90f,
-        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.72f, stiffness = 460f),
+        targetValue = if (shown) 1f else 0.97f,
+        animationSpec = androidx.compose.animation.core.spring(
+            dampingRatio = 1f,
+            stiffness = 700f,
+        ),
         label = "noticeScale",
-    )
-    val alpha by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (shown) 1f else 0f,
-        animationSpec = androidx.compose.animation.core.tween(durationMillis = 180),
-        label = "noticeAlpha",
     )
 
     Dialog(
@@ -434,7 +443,7 @@ private fun NoticeDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .scale(scale)
-                    .alpha(alpha)
+                    .animateContentSize()
                     .clip(RoundedCornerShape(28.dp))
                     .background(scheme.surface),
             ) {
