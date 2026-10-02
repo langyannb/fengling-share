@@ -549,6 +549,31 @@ fun MyScreen(
                     },
                 )
                 SettingDivider()
+                // QQ 频道 (内置浏览器打开频道主页)
+                SettingRow(
+                    title = "加入QQ频道",
+                    summary = if (aboutConfig.qqChannel.isNotEmpty()) "官方频道 · 最新动态" else "获取最新版本与专属福利",
+                    leading = {
+                        if (aboutConfig.qqChannel.isNotEmpty()) {
+                            QqBrandIcon()
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    },
+                    onClick = {
+                        if (aboutConfig.qqChannel.isNotEmpty()) {
+                            onOpenWeb(aboutConfig.qqChannel, "加入QQ频道")
+                        } else {
+                            Toast.makeText(context, "官方频道暂未配置", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
+                SettingDivider()
                 SettingRow(
                     title = "意见反馈",
                     summary = "遇到问题告诉我们",
