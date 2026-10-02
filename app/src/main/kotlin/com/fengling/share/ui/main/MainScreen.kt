@@ -2,7 +2,6 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -17,6 +16,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -74,8 +74,6 @@ import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
 import com.fengling.share.ui.components.AppScaffold
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.filled.Check
@@ -92,6 +90,8 @@ import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MyScreen
 import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.text.SimpleDateFormat
@@ -415,19 +415,10 @@ private fun NoticeDialog(
     val isDark = isSystemInDarkTheme()
     val scheme = MiuixTheme.colorScheme
 
-    // 进场动画: 只做极轻缩放, dampingRatio = 1f 表示「不过冲」
-    // —— 旧版 alpha 从 0 淡入 + 欠阻尼 spring 会回弹, 表现为「弹窗抖一下才出现」;
-    //    同时去掉 alpha 淡入, 避免遮罩已出现而卡片还透明的空窗感
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val scale by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (shown) 1f else 0.97f,
-        animationSpec = androidx.compose.animation.core.spring(
-            dampingRatio = 1f,
-            stiffness = 700f,
-        ),
-        label = "noticeScale",
-    )
+    // 不做任何入场动画: Dialog 遮罩一出现, 卡片就是最终状态。
+    // 历史坑: ①欠阻尼 spring 缩放 + alpha 淡入 → 回弹 + 遮罩空窗;
+    //         ②animateContentSize 跟随 WebView 加载时的高度多帧变化,
+    //           默认 spring(StiffnessMediumLow) 会让卡片缓慢弹性伸缩 —— 用户反馈的「很抖很抖慢慢的」。
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -439,13 +430,11 @@ private fun NoticeDialog(
                 .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .scale(scale)
-                    .animateContentSize()
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(scheme.surface),
+            // Miuix 官方 Card (自带正确的圆角与配色, 不再手搓 clip+background)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 26.dp,
+                insideMargin = PaddingValues(0.dp),
             ) {
                 // ── 头部: 浅色圆形图标 + 标题 + 轻量关闭按钮 ──
                 Box(modifier = Modifier.fillMaxWidth()) {
@@ -591,20 +580,18 @@ private fun NoticeDialog(
                         )
                     }
                     Spacer(Modifier.height(10.dp))
-                    Box(
+                    // Miuix 官方 Button (自带按压反馈与涟漪, 不再手搓 Box + clickable)
+                    Button(
+                        onClick = onDismiss,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
-                            .clip(RoundedCornerShape(23.dp))
-                            .background(scheme.primary)
-                            .clickable(onClick = onDismiss),
-                        contentAlignment = Alignment.Center,
+                            .height(46.dp),
+                        cornerRadius = 23.dp,
                     ) {
                         Text(
                             text = "我知道了",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = scheme.onPrimary,
                         )
                     }
                 }
