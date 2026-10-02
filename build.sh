@@ -78,8 +78,10 @@ in_container() {
     local cmd="$*"
     local proot_cmd
     local bind_home=""
-    if echo "$PROJECT_DIR" | grep -q "^/data/user/0/com.termux/files/home"; then
-        bind_home="-b /data/user/0/com.termux/files/home:/data/user/0/com.termux/files/home"
+    # Termux home 存在两种等价路径视图: /data/user/0/com.termux/... 和 /data/data/com.termux/...
+    # (后者是真实路径, 前者是 per-user 视图)。容器内绑定真实路径保证可访问。
+    if echo "$PROJECT_DIR" | grep -qE "^/data/(user/0/)?data/com.termux/files/home"; then
+        bind_home="-b /data/data/com.termux/files/home:/data/data/com.termux/files/home"
     fi
     proot_cmd="export JAVA_HOME=${JAVA_HOME_CONTAINER}; "
     proot_cmd="${proot_cmd}export ANDROID_HOME=/home/Android/Sdk; "
