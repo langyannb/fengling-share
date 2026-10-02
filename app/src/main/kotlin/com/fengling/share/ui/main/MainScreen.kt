@@ -1,5 +1,7 @@
 package com.fengling.share.ui.main
 
+import android.content.Intent
+import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.core.Spring
@@ -157,11 +159,28 @@ fun MainScreen(
      */
     fun openLink(url: String, title: String, password: String = "") {
         val target = resolveExternalJump(context, url)
-        if (target == null) {
-            navController.navigate(Routes.webview(url, title, password))
-        } else {
+        if (target != null) {
             pendingExternal = target
+            return
         }
+        // 腾讯频道 / QQ群 网页版在 WebView 里只渲染外壳 (频道信息 + 加入按钮), 内容列表要 QQ 登录态,
+        // 内置浏览器永远空白一片 → 直接交系统, 由 QQ 客户端接管 (2026-10-03 用户反馈)
+        if (isTencentChannelUrl(url)) {
+            val uri = Uri.parse(url)
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            pendingExternal = ExternalJumpTarget(
+                url = url,
+                appLabel = "QQ",
+                intent = intent,
+                host = uri.host ?: "pd.qq.com",
+                packageName = null,
+                hasApp = true,
+            )
+            return
+        }
+        navController.navigate(Routes.webview(url, title, password))
     }
 
     // ===== 公告 (首页弹窗: 每日一次 / 每次打开 + 今日不再提示) =====
@@ -225,11 +244,16 @@ fun MainScreen(
             onConfirm = {
                 val opened = runCatching { context.startActivity(target.intent) }.isSuccess
                 if (!opened) {
-                    Toast.makeText(
-                        context,
-                        "没有找到可以打开该链接的应用",
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                    // 没有应用能接管 → http(s) 回退内置浏览器, 不让用户卡住 (2026-10-03)
+                    if (target.url.startsWith("http")) {
+                        navController.navigate(Routes.webview(target.url, target.appLabel))
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "没有找到可以打开该链接的应用",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
                 }
                 pendingExternal = null
             },
@@ -579,4 +603,11 @@ private fun NoticeDialog(
             }
         }
     }
+}
+
+/** 腾讯频道 / QQ群 分享链接 (内置浏览器显示不全, 需交 QQ 客户端) */
+private fun isTencentChannelUrl(url: String): Boolean {
+    val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull() ?: return false
+    return host == "pd.qq.com" || host.endsWith(".pd.qq.com") ||
+        host == "qun.qq.com" || host.endsWith(".qun.qq.com")
 }
