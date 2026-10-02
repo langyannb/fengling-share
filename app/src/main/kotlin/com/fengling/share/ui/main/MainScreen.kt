@@ -1,7 +1,5 @@
 package com.fengling.share.ui.main
 
-import android.content.Intent
-import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.core.Spring
@@ -163,23 +161,9 @@ fun MainScreen(
             pendingExternal = target
             return
         }
-        // 腾讯频道 / QQ群 网页版在 WebView 里只渲染外壳 (频道信息 + 加入按钮), 内容列表要 QQ 登录态,
-        // 内置浏览器永远空白一片 → 直接交系统, 由 QQ 客户端接管 (2026-10-03 用户反馈)
-        if (isTencentChannelUrl(url)) {
-            val uri = Uri.parse(url)
-            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            pendingExternal = ExternalJumpTarget(
-                url = url,
-                appLabel = "QQ",
-                intent = intent,
-                host = uri.host ?: "pd.qq.com",
-                packageName = null,
-                hasApp = true,
-            )
-            return
-        }
+        // 腾讯频道 / QQ群 一律保持在内置浏览器打开 (2026-10-03 用户明确要求)。
+        // 之前「交 QQ 客户端打开」的方案已撤销; 页面完整渲染改由 WebView 侧保障
+        // (CookieManager 放开第三方 cookie + 反爬挑战页等待 + 渲染能力补齐), 见 WebViewScreen.kt。
         navController.navigate(Routes.webview(url, title, password))
     }
 
@@ -603,11 +587,4 @@ private fun NoticeDialog(
             }
         }
     }
-}
-
-/** 腾讯频道 / QQ群 分享链接 (内置浏览器显示不全, 需交 QQ 客户端) */
-private fun isTencentChannelUrl(url: String): Boolean {
-    val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull() ?: return false
-    return host == "pd.qq.com" || host.endsWith(".pd.qq.com") ||
-        host == "qun.qq.com" || host.endsWith(".qun.qq.com")
 }

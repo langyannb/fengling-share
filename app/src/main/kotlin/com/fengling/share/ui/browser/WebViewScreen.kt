@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Message
 import android.util.Log
 import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -138,6 +139,8 @@ fun WebViewScreen(
         }
     }
 
+    var challengeCount by remember { mutableIntStateOf(0) }
+
     remember(webView) {
         val settings = webView.settings
         settings.javaScriptEnabled = true
@@ -156,6 +159,27 @@ fun WebViewScreen(
         // 禁用深色反色: ColorOS/系统深色模式会强制 WebView 反色页面 (algorithmic darkening),
         // 深色背景页面被反色后内容不可见 (link3.cc 空白实测); 正常浏览器不强制反色
         settings.setAlgorithmicDarkeningAllowed(false)
+        // ===== Cookie / 渲染能力补齐 (2026-10-03, 用户要求频道类页面必须完整显示) =====
+        // pd.qq.com 的 TADs 反爬会先下发 PoW 挑战页, 靠 document.cookie 下发 EO-Bot-Js-Token
+        // (domain=.qq.com, 跨站) 再重载; 若第三方 cookie 被禁 → 挑战过不了 → 后续 trpc 接口全空,
+        // 症状正是「频道外壳(名称/成员数/标签)显示了, 内容列表一片空白」。
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, true)
+        }
+        settings.loadsImagesAutomatically = true
+        settings.blockNetworkImage = false
+        settings.allowContentAccess = true
+        settings.setSupportZoom(true)
+        settings.builtInZoomControls = true
+        settings.displayZoomControls = false
+        Log.i(
+            "FLWebView",
+            "WebView 内核: " + (
+                WebView.getCurrentWebViewPackage()?.let { it.packageName + " " + it.versionName }
+                    ?: "unknown"
+                )
+        )
         // UA 伪装: 去掉 WebView 标识, 伪装成手机 Chrome (UC网盘等站点检测 WebView UA 会拦截)
         settings.userAgentString =
             WebSettings.getDefaultUserAgent(context)
@@ -187,6 +211,23 @@ fun WebViewScreen(
             override fun onPageFinished(view: WebView?, url: String?) {
                 // 加载完成后更新 (goBack 后 canGoBack 可能变 false)
                 canGoBack = view?.canGoBack() ?: false
+                // 反爬 (TADs) 挑战页检测: 该页只有一行 PoW 脚本, 会写 cookie 后自行重载;
+                // 记录次数便于诊断「内容空白」, 供 logcat -s FLWebView 排查
+                if (url?.startsWith("http") == true) {
+                    runCatching {
+                        view?.evaluateJavascript(
+                            "(function(){try{return typeof window.solveChallenge==='function'}catch(e){return false}})()"
+                        ) { r ->
+                            if (r == "true") {
+                                challengeCount++
+                                Log.w("FLWebView", "反爬挑战页 第 $challengeCount 次, 等待 PoW 后自动重载: $url")
+                            } else if (challengeCount != 0) {
+                                Log.i("FLWebView", "已通过反爬挑战 (共 $challengeCount 次)")
+                                challengeCount = 0
+                            }
+                        }
+                    }
+                }
                 // 修复 SPA 页面在 WebView 中「内容空白只剩 fixed 元素」的两大元凶:
                 // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0 不可见
                 // 2) 首屏 loading 遮罩 (#index_loading) 应用挂载后未移除 → 一直盖在白屏上
