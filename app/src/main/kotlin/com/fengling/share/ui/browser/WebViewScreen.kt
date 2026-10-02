@@ -67,6 +67,9 @@ import android.app.DownloadManager
 import android.os.Environment
 import android.widget.Toast
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.ExternalJumpDialog
+import com.fengling.share.ui.components.ExternalJumpTarget
+import com.fengling.share.ui.components.resolveExternalJump
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -101,6 +104,20 @@ fun WebViewScreen(
     // WebViewClient 未设置 → 页面加载绕过 shouldOverrideUrlLoading 拦截)
     // 文件上传回调 (onShowFileChooser)
     var filePathCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+
+    // ===== 外部应用跳转确认 (2026-10-02: 用户要求跳转前先问) =====
+    // 非 http(s) 链接 (uclink:// weixin:// intent:// mailto: 等) 不再直接 startActivity,
+    // 先记下来弹确认框, 用户点「打开」才真正跳转。http(s) 返回 false 放行给 WebView。
+    var pendingExternal by remember { mutableStateOf<ExternalJumpTarget?>(null) }
+    val interceptExternal: (String) -> Boolean = { u ->
+        val target = resolveExternalJump(context, u)
+        if (target == null) {
+            false
+        } else {
+            pendingExternal = target
+            true
+        }
+    }
     val fileChooserLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -156,11 +173,11 @@ fun WebViewScreen(
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean = handleProtocolUrl(view, request.url.toString())
+            ): Boolean = interceptExternal(request.url.toString())
 
             @Deprecated("Deprecated in Java")
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
-                handleProtocolUrl(view, url)
+                interceptExternal(url)
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
@@ -249,7 +266,7 @@ fun WebViewScreen(
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView?, request: WebResourceRequest?): Boolean {
                         val u = request?.url?.toString() ?: return false
-                        if (handleProtocolUrl(view, u)) return true
+                        if (interceptExternal(u)) return true
                         view.loadUrl(u)
                         return true
                     }
@@ -466,36 +483,20 @@ fun WebViewScreen(
                     }
                 }
             }
+
+            // 外部应用跳转确认框 (点击非 http(s) 链接时弹出)
+            pendingExternal?.let { target ->
+                ExternalJumpDialog(
+                    target = target,
+                    onConfirm = {
+                        runCatching { context.startActivity(target.intent) }
+                        pendingExternal = null
+                    },
+                    onDismiss = { pendingExternal = null },
+                )
+            }
         }
     }
-}
-
-/**
- * 处理协议跳转链接: http(s) 放行给 WebView 正常加载;
- * 非 http(s) scheme (intent:// / uclink:// 等) 正常跳转交给系统处理
- * (Intent.parseUri 或 ACTION_VIEW, 系统会路由到注册了对应 scheme 的应用, 如 UC 浏览器),
- * 不做任何拦截/重写。无法处理的 scheme 吞掉, 防止 WebView 显示乱码。
- */
-private fun handleProtocolUrl(view: WebView, url: String): Boolean {
-    val scheme = try { Uri.parse(url).scheme?.lowercase() ?: "" } catch (_: Exception) { "" }
-    if (scheme == "http" || scheme == "https") return false
-
-    // intent:// 用 Intent.parseUri 解析后正常启动 (系统路由到对应 App)
-    if (url.startsWith("intent://")) {
-        try {
-            val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-            view.context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return true
-        } catch (_: Exception) { }
-    }
-
-    // 其他 scheme (uclink:// 等): ACTION_VIEW 正常跳转
-    try {
-        view.context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    } catch (_: Exception) { }
-    return true
 }
 
 /** 从下载 URL / Content-Disposition / MIME 推断文件名 (DownloadManager 落盘用) */
