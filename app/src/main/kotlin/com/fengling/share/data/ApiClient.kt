@@ -375,6 +375,22 @@ object ApiClient {
             }
         }
 
+    /**
+     * 下载聊天图片的原图字节 — 「保存到相册」用。
+     * 复用同一个 OkHttpClient (带 10s/15s 超时), 不额外引依赖。
+     */
+    suspend fun downloadChatImage(url: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        apiCall {
+            val req = Request.Builder().url(url).get().build()
+            client.newCall(req).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw ApiException("图片下载失败 (HTTP " + response.code + ")")
+                }
+                response.body?.bytes()?.takeIf { it.isNotEmpty() } ?: throw ApiException("图片内容为空")
+            }
+        }
+    }
+
     /** 退出登录 (通知后端作废 token, 本地登录态由调用方 UserStore.clear()) */
     suspend fun logoutAccount(): Result<Unit> = withContext(Dispatchers.IO) {
         apiCall {
@@ -534,6 +550,20 @@ object ApiClient {
     suspend fun socialRecall(id: Int): Result<Unit> = withContext(Dispatchers.IO) {
         apiCall {
             request("social_recall", mapOf("id" to id), UserStore.token)
+            Unit
+        }
+    }
+
+    /**
+     * 把某个群标记为已读 (进群定位到第一条未读之后调一次)
+     * @param lastId 不传 (0) = 标记到最新; 传更小的 last_id 服务端也不会让已读位置回退
+     */
+    suspend fun socialRead(groupId: Int, lastId: Int = 0): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId)
+            // last_id 是可选的: 不传才表示「标记到最新」, 所以 0 时不带这个键
+            if (lastId > 0) params["last_id"] = lastId
+            request("social_read", params, UserStore.token)
             Unit
         }
     }
@@ -769,6 +799,10 @@ data class SocialGroup(
     val messageCount: Int = 0,
     /** 我是否对这个世界开了消息免打扰 */
     val muted: Boolean = false,
+    /** 该群未读条数 (只算别人发的、未撤回的消息; 0 = 全部已读) */
+    val unread: Int = 0,
+    /** 第一条未读消息 id (无未读为 0); 进群时拿它当 around_id 定位 */
+    val firstUnreadId: Int = 0,
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
@@ -780,6 +814,8 @@ data class SocialGroup(
             memberCount = j.optInt("member_count", 0),
             messageCount = j.optInt("message_count", 0),
             muted = j.optInt("muted", 0) == 1,
+            unread = j.optInt("unread", 0),
+            firstUnreadId = j.optInt("first_unread_id", 0),
         )
     }
 }
