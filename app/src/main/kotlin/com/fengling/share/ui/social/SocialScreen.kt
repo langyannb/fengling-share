@@ -1,6 +1,9 @@
 package com.fengling.share.ui.social
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,6 +33,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Menu
@@ -92,6 +96,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -226,6 +233,20 @@ fun SocialScreen(
 
     LaunchedEffect(Unit) { loadGroups(false) }
 
+    /** 进群标记已读后调: 立刻把本地未读数清零, 返回群列表时角标就消失了 */
+    fun clearUnread(groupId: Int) {
+        groups = groups.map { if (it.id == groupId) it.copy(unread = 0, firstUnreadId = 0) else it }
+        val cur = currentGroup
+        if (cur != null && cur.id == groupId) currentGroup = cur.copy(unread = 0, firstUnreadId = 0)
+    }
+
+    // 回到群组列表 (从聊天页返回 / 切回本 tab) 时重新拉一次群列表:
+    // 未读角标要立刻反映服务端最新状态 (进群标记已读后角标必须消失)
+    val listForeground = rememberIsForeground()
+    LaunchedEffect(listForeground, currentGroup) {
+        if (listForeground && currentGroup == null && !loading) loadGroups(false)
+    }
+
     // 从「群组」tab 指定群进入: 列表加载完成后自动打开该群
     LaunchedEffect(groups) {
         val pid = initialGroupId ?: return@LaunchedEffect
@@ -354,6 +375,8 @@ fun SocialScreen(
                     locateMessageId = initialMessageId,
                     onOpenWeb = onOpenWeb,
                     onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                    // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
+                    onMarkRead = { clearUnread(group.id) },
                 )
             }
         }
@@ -402,8 +425,12 @@ private fun GroupList(
                 contentPadding = PaddingValues(bottom = 100.dp),
             ) {
                 item {
+                    // 顺手汇总一下未读总数 (免打扰的群也算在里面)
+                    val totalUnread = groups.sumOf { it.unread }
+                    val listHint = "点击群组进入聊天 · 群公告与消息实时同步" +
+                        (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
                     Text(
-                        text = "点击群组进入聊天 · 群公告与消息实时同步",
+                        text = listHint,
                         fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
@@ -512,7 +539,44 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
                     }
                 }
             }
+            // 未读角标: 免打扰的群用灰点 (不打扰), 正常的用红底数字, >99 显示 99+
+            if (group.unread > 0) {
+                Spacer(Modifier.width(10.dp))
+                UnreadBadge(count = group.unread, muted = group.muted)
+            }
         }
+    }
+}
+
+/** 群列表右侧的未读角标 (count <= 0 不显示; 免打扰只给一个灰点) */
+@Composable
+private fun UnreadBadge(count: Int, muted: Boolean) {
+    if (count <= 0) return
+    if (muted) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)),
+        )
+        return
+    }
+    val label = if (count > 99) "99+" else count.toString()
+    Box(
+        modifier = Modifier
+            .heightIn(min = 18.dp)
+            .widthIn(min = 18.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFE5484D))
+            .padding(horizontal = if (label.length > 1) 6.dp else 0.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+        )
     }
 }
 
@@ -528,6 +592,8 @@ private fun ChatView(
     locateMessageId: Int = 0,
     onOpenWeb: ((url: String, title: String) -> Unit)?,
     onToast: (String) -> Unit,
+    /** 进群定位/首次加载完成后标记已读, 用于清掉群列表上的未读角标 */
+    onMarkRead: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
@@ -543,6 +609,8 @@ private fun ChatView(
     var sending by remember { mutableStateOf(false) }
     // 图片上传中: 上传期间禁用发送/选图, 防止重复上传
     var uploading by remember { mutableStateOf(false) }
+    // 输入框左侧「+」菜单是否展开 (图片 / @某人 / 群公告)
+    var plusMenuOpen by remember { mutableStateOf(false) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
     // 点空白处取消文本选中用的 key: 本仓库 Compose 版本的 SelectionContainer 只公开
@@ -570,10 +638,24 @@ private fun ChatView(
     var mentionQuery by remember { mutableStateOf("") }
     /** 通过选择器 @ 到的人: 直接记 userId (昵称可能重名) */
     var pickedAt by remember { mutableStateOf<List<Int>>(emptyList()) }
+    /**
+     * 首次要定位的消息 id:
+     * - 从通知 / 引用点进来: 用通知带过来的 messageId (保持原行为, 不被未读覆盖)
+     * - 否则群里还有未读: 用 first_unread_id, 让「第一条未读」落在屏幕上方, 往下滑就能读完
+     */
+    val initialLocateId = when {
+        locateMessageId > 0 -> locateMessageId
+        group.unread > 0 && group.firstUnreadId > 0 -> group.firstUnreadId
+        else -> 0
+    }
     /** 待定位的消息 id: 首次加载会以它为中心取一屏, 定位完清零 (避免每次刷新都跳) */
-    var locateId by remember { mutableStateOf(locateMessageId) }
+    var locateId by remember(group.id) { mutableStateOf(initialLocateId) }
     /** 正在高亮闪烁的消息 id (定位到的消息会给个底色) */
     var highlightId by remember { mutableStateOf(0) }
+    /** 第一条未读那条消息: 底色一直留到离开这个群 (只有按未读定位时才用) */
+    var unreadAnchorId by remember(group.id) {
+        mutableStateOf(if (locateMessageId <= 0 && initialLocateId > 0) initialLocateId else 0)
+    }
     // 点击头像: 管理员打开成员操作面板 (可以 @他 / 禁言 / 解除禁言)
     var memberTarget by remember { mutableStateOf<SocialMessage?>(null) }
     var memberInfo by remember { mutableStateOf<SocialGroupMember?>(null) }
@@ -631,7 +713,8 @@ private fun ChatView(
         }
     }
 
-    // 从通知点进来: 滚到那条消息并高亮一下, 然后恢复正常
+    // 从通知点进来 / 未读定位: 滚到那条消息并高亮一下, 然后恢复正常
+    // (未读定位的那条另有 unreadAnchorId 常驻底色, 见 MessageRow 的 highlight)
     LaunchedEffect(messages.size, locateId) {
         val target = locateId
         if (target <= 0 || messages.isEmpty()) return@LaunchedEffect
@@ -642,6 +725,16 @@ private fun ChatView(
         locateId = 0
         kotlinx.coroutines.delay(2800)
         highlightId = 0
+    }
+
+    // 定位/首次加载完成后标记已读 (只调一次):
+    // 从通知进来、自动定位第一条未读、直接进群, 三种情况都标记;
+    // 服务端保证传更小的 last_id 不会让已读位置回退
+    var readMarked by remember(group.id) { mutableStateOf(false) }
+    LaunchedEffect(group.id, loading, messages.size) {
+        if (readMarked || loading || messages.isEmpty()) return@LaunchedEffect
+        readMarked = true
+        ApiClient.socialRead(group.id).onSuccess { onMarkRead() }
     }
 
     /** 昵称 → userId 映射 (只用当前已加载的消息构建, 对应 @ 解析的简单实现) */
@@ -961,7 +1054,7 @@ private fun ChatView(
                                 mine = mine,
                                 canRecall = !msg.isRecalled && (mine || isAdmin),
                                 onLongPress = { actionTarget = msg },
-                                highlight = highlightId == msg.id,
+                                highlight = highlightId == msg.id || unreadAnchorId == msg.id,
                                 // 消息里的链接: 用内置浏览器打开
                                 onOpenLink = { url ->
                                     if (onOpenWeb != null) {
@@ -1036,7 +1129,7 @@ private fun ChatView(
             }
         }
 
-        // ===== 底部输入区 =====
+        // ===== 底部输入区 (QQ 那种布局: 左边「+」, 中间输入框占满, 右边发送) =====
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1044,17 +1137,59 @@ private fun ChatView(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 管理员: 没有公告时也能从这里写一条
-            if (isAdmin && noticeText.isBlank()) {
-                SmallActionButton(
-                    text = "公告",
-                    onClick = {
-                        menu.draft = ""
-                        menu.showNoticeEditor = true
-                    },
-                )
-                Spacer(Modifier.width(6.dp))
+            // 「+」: 图片 / @某人 / (管理员) 群公告 都收进这个菜单。
+            // 原来「公告」「图片」「@」三个按钮并排摆着, 把输入框挤得又窄又不齐 (用户反馈布局有问题)
+            Box {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .clickable { plusMenuOpen = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = "图片 / @某人 / 群公告",
+                        tint = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = plusMenuOpen,
+                    onDismissRequest = { plusMenuOpen = false },
+                ) {
+                    // 图片: 系统相册选图 → 上传 → 发送 (上传/发送期间禁用, 避免重复上传)
+                    DropdownMenuItem(
+                        text = { Text(if (uploading) "图片 (上传中…)" else "图片") },
+                        enabled = !uploading && !sending,
+                        onClick = {
+                            plusMenuOpen = false
+                            pickChatImage.launch("image/*")
+                        },
+                    )
+                    // @某人: 只是入口从原来的「@」按钮挪进了这里, 功能不变
+                    DropdownMenuItem(
+                        text = { Text("@某人") },
+                        onClick = {
+                            plusMenuOpen = false
+                            openMentionPicker()
+                        },
+                    )
+                    // 管理员: 顺手把群公告的入口也收进来
+                    if (isAdmin) {
+                        DropdownMenuItem(
+                            text = { Text(if (noticeText.isBlank()) "发布群公告" else "编辑群公告") },
+                            onClick = {
+                                plusMenuOpen = false
+                                menu.draft = noticeText
+                                menu.showNoticeEditor = true
+                            },
+                        )
+                    }
+                }
             }
+            Spacer(Modifier.width(8.dp))
             Box(Modifier.weight(1f)) {
                 OutlinedTextField(
                     value = input,
@@ -1086,21 +1221,28 @@ private fun ChatView(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            // 图片: 打开系统相册选图; 上传期间按钮变成「上传中」并禁用, 避免重复上传
-            SmallActionButton(
-                text = if (uploading) "上传中" else "图片",
-                onClick = { if (!uploading && !sending) pickChatImage.launch("image/*") },
-            )
-            Spacer(Modifier.width(6.dp))
-            SmallActionButton(
-                text = "@",
-                onClick = { openMentionPicker() },
-            )
-            Spacer(Modifier.width(6.dp))
-            SmallActionButton(
-                text = if (uploading) "上传中" else if (sending) "发送中" else "发送",
-                onClick = { if (!uploading) doSend() },
-            )
+            // 发送: 发送中/上传中都给文案反馈, 上传期间不允许重复发送
+            Card(
+                onClick = { if (!uploading && !sending) doSend() },
+                modifier = Modifier,
+                cornerRadius = 12.dp,
+            ) {
+                Box(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = when {
+                            uploading -> "上传中"
+                            sending -> "发送中"
+                            else -> "发送"
+                        },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 
@@ -1358,39 +1500,46 @@ private fun ChatView(
         )
     }
 
-    // ===== 长按消息: 引用 / 撤回 =====
+    // ===== 长按消息: 引用 / 复制 / 放大 / 保存到相册 / 撤回 =====
+    // 竖排菜单 (原来横着塞在 dismissButton 里, 图片消息加了「放大」「保存」之后放不下)
     val acting = actionTarget
     if (acting != null) {
         val canRecall = !acting.isRecalled && (me != null && acting.userId == me.id || isAdmin)
+        val isImage = acting.image.isNotBlank()
         AlertDialog(
             onDismissRequest = { actionTarget = null },
             title = {
                 Text(text = "消息操作", color = MiuixTheme.colorScheme.onBackground)
             },
             text = {
-                Text(
-                    text = acting.nickname.ifBlank { "群成员" } + ": " +
-                        (acting.content.ifBlank { "[图片]" }).replace('\n', ' ').take(60),
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
-            confirmButton = {
-                M3TextButton(onClick = {
-                    actionTarget = null
-                    quoteMessage(acting)
-                }) {
-                    Text(text = "引用", color = MiuixTheme.colorScheme.primary)
-                }
-            },
-            dismissButton = {
-                Row {
-                    // 复制: 直接把这句原文放进系统剪贴板 (长按消息 → 复制, 和 QQ 一样)
-                    // 纯图片消息没有文字, 不显示「复制」(用户 要求)
+                Column {
+                    Text(
+                        text = acting.nickname.ifBlank { "群成员" } + ": " +
+                            (acting.content.ifBlank { "[图片]" }).replace('\n', ' ').take(60),
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    MessageActionRow(text = "引用") {
+                        actionTarget = null
+                        quoteMessage(acting)
+                    }
+                    // 图片消息才有: 全屏看大图 / 存进系统相册
+                    if (isImage) {
+                        MessageActionRow(text = "放大查看") {
+                            actionTarget = null
+                            previewImage = acting.image
+                        }
+                        MessageActionRow(text = "保存到相册") {
+                            actionTarget = null
+                            saveImageToGallery(acting.image)
+                        }
+                    }
+                    // 复制: 把这句原文放进系统剪贴板。纯图片消息没有文字, 不显示「复制」
                     if (acting.content.isNotBlank()) {
-                        M3TextButton(onClick = {
+                        MessageActionRow(text = "复制") {
                             actionTarget = null
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
                             if (cm != null) {
@@ -1399,21 +1548,20 @@ private fun ChatView(
                             } else {
                                 onToast("复制失败")
                             }
-                        }) {
-                            Text(text = "复制", color = MiuixTheme.colorScheme.primary)
                         }
                     }
+                    // 撤回权限: 自己的消息 or 管理员, 已撤回的不再给入口
                     if (canRecall) {
-                        M3TextButton(onClick = {
+                        MessageActionRow(text = if (isImage) "删除图片" else "撤回", danger = true) {
                             actionTarget = null
                             recallTarget = acting
-                        }) {
-                            Text(text = "撤回", color = Color(0xFFE5484D))
                         }
                     }
-                    M3TextButton(onClick = { actionTarget = null }) {
-                        Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                    }
+                }
+            },
+            confirmButton = {
+                M3TextButton(onClick = { actionTarget = null }) {
+                    Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             },
         )
@@ -1603,6 +1751,52 @@ private fun ChatView(
         )
     }
 
+    /**
+     * 保存图片到系统相册 (targetSdk 34 / minSdk 33 → MediaStore + RELATIVE_PATH, 不需要任何存储权限)。
+     * 下载走 OkHttp (ApiClient.downloadChatImage), 写盘在 IO 线程, Toast 回主线程再弹。
+     */
+    fun saveImageToGallery(url: String) {
+        if (url.isBlank()) return
+        scope.launch {
+            val bytes = ApiClient.downloadChatImage(url).getOrElse { e ->
+                onToast(e.message?.takeIf { it.isNotBlank() } ?: "图片下载失败")
+                return@launch
+            }
+            val mime = when {
+                url.endsWith(".png", true) -> "image/png"
+                url.endsWith(".webp", true) -> "image/webp"
+                else -> "image/jpeg"
+            }
+            val ext = when (mime) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            // 在 IO 线程 insert + 写字节; 出错只把文案带回来, Toast 一定在主线程弹
+            val errMsg = withContext(Dispatchers.IO) {
+                runCatching {
+                    val values = ContentValues().apply {
+                        put(
+                            MediaStore.Images.Media.DISPLAY_NAME,
+                            "fl_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "." + ext,
+                        )
+                        put(MediaStore.Images.Media.MIME_TYPE, mime)
+                        // 相册里的「风铃分享库」相簿
+                        put(
+                            MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES + "/风铃分享库",
+                        )
+                    }
+                    val cr = context.contentResolver
+                    val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: error("相册写入失败")
+                    cr.openOutputStream(uri)?.use { out -> out.write(bytes) } ?: error("相册写入失败")
+                }.exceptionOrNull()?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: "未知错误" }
+            }
+            if (errMsg == null) onToast("已保存到相册") else onToast("保存失败: " + errMsg)
+        }
+    }
+
     // ===== 全屏查看图片 (点气泡里的图打开, 点任意处 / 右上角关闭) =====
     if (previewImage.isNotBlank()) {
         Dialog(
@@ -1626,18 +1820,52 @@ private fun ChatView(
                         .padding(12.dp)
                         .align(Alignment.Center),
                 )
-                Text(
-                    text = "关闭",
-                    fontSize = 14.sp,
-                    color = Color.White,
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                        .clickable { previewImage = "" },
-                )
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 保存: 把当前这张原图写进系统相册 (自己点自己的图也能存)
+                    Text(
+                        text = "保存",
+                        fontSize = 14.sp,
+                        color = Color.White,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x33FFFFFF))
+                            .clickable { saveImageToGallery(previewImage) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "关闭",
+                        fontSize = 14.sp,
+                        color = Color.White,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x33FFFFFF))
+                            .clickable { previewImage = "" }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
     }
+}
+
+/** 「消息操作」菜单里的一行 (整行可点, 左对齐; danger = 撤回这类删除性操作) */
+@Composable
+private fun MessageActionRow(text: String, danger: Boolean = false, onClick: () -> Unit) {
+    Text(
+        text = text,
+        fontSize = 15.sp,
+        color = if (danger) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackground,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 9.dp),
+    )
 }
 
 /** 单条消息: 自己靠右 (主色气泡), 别人靠左 (灰色气泡 + 头像 + 昵称 + 时间) */
@@ -1787,6 +2015,11 @@ private fun MessageRow(
                             MiuixTheme.colorScheme.surfaceContainerHigh
                         },
                     )
+                    // 长按气泡的任意位置都弹「消息操作」: 图片 / 引用块 / 留白都算,
+                    // 原来只有文字那一小块能长按, 图片消息长按没反应 (用户反馈)
+                    .pointerInput(msg.id) {
+                        detectTapGestures(onLongPress = { onLongPress() })
+                    }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Column {
@@ -1806,7 +2039,13 @@ private fun MessageRow(
                                 .width(if (ratio >= 1f) 200.dp else (200f * ratio).dp)
                                 .aspectRatio(ratio)
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable { onImageTap(msg.image) },
+                                // 点一下 = 全屏看大图, 长按 = 消息操作 (引用 / 保存到相册 / 撤回)
+                                .pointerInput(msg.id) {
+                                    detectTapGestures(
+                                        onTap = { onImageTap(msg.image) },
+                                        onLongPress = { onLongPress() },
+                                    )
+                                },
                         )
                         if (msg.content.isNotBlank()) Spacer(Modifier.height(6.dp))
                     }
