@@ -218,16 +218,24 @@ fun SocialScreen(
     LaunchedEffect(Unit) { if (openNotice) chatMenu.showNoticeViewer = true }
     var refreshTick by remember { mutableStateOf(0) }
 
-    fun loadGroups(isRefresh: Boolean) {
+    /**
+     * 拉群列表。
+     * - silent = true 时不显示任何加载态、失败也不打扰用户, 用于后台自动刷新未读数
+     */
+    fun loadGroups(isRefresh: Boolean, silent: Boolean = false) {
         scope.launch {
-            if (isRefresh) refreshing = true else loading = true
+            if (!silent) {
+                if (isRefresh) refreshing = true else loading = true
+            }
             ApiClient.socialGroups()
                 .onSuccess {
                     groups = it
                     error = ""
                 }
-                .onFailure { e -> error = e.message ?: "加载失败" }
-            if (isRefresh) refreshing = false else loading = false
+                .onFailure { e -> if (!silent) error = e.message ?: "加载失败" }
+            if (!silent) {
+                if (isRefresh) refreshing = false else loading = false
+            }
         }
     }
 
@@ -243,8 +251,18 @@ fun SocialScreen(
     // 回到群组列表 (从聊天页返回 / 切回本 tab) 时重新拉一次群列表:
     // 未读角标要立刻反映服务端最新状态 (进群标记已读后角标必须消失)
     val listForeground = rememberIsForeground()
+    // 回到群列表 / App 回到前台: 立刻静默刷新一次未读数
     LaunchedEffect(listForeground, currentGroup) {
-        if (listForeground && currentGroup == null && !loading) loadGroups(false)
+        if (listForeground && currentGroup == null && !loading) loadGroups(false, silent = true)
+    }
+
+    // 群列表自动刷新: 停在列表页时每 8 秒静默拉一次 (未读红标自己就更新了, 不用手动下拉)
+    LaunchedEffect(listForeground, currentGroup) {
+        if (!listForeground || currentGroup != null) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(8000L)
+            loadGroups(true, silent = true)
+        }
     }
 
     // 从「群组」tab 指定群进入: 列表加载完成后自动打开该群
