@@ -1,5 +1,6 @@
 package com.fengling.share.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -25,12 +26,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -104,6 +105,23 @@ fun CaptchaDialog(
                 )
                 Spacer(Modifier.height(10.dp))
 
+                // 服务端返回的是 data:image/png;base64,... 形式; Coil 2.x 不识别 data: URI,
+                // 直接交给 AsyncImage 只会渲染出一块灰底(用户反馈「验证码看不清, 是个灰色的」),
+                // 所以这里自己把 base64 解码成 Bitmap 再显示。
+                val captchaBitmap = remember(image) {
+                    if (image.isBlank()) {
+                        null
+                    } else {
+                        runCatching {
+                            val b64 = image.substringAfter("base64,", image)
+                            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                            android.graphics.BitmapFactory
+                                .decodeByteArray(bytes, 0, bytes.size)
+                                ?.asImageBitmap()
+                        }.getOrNull()
+                    }
+                }
+
                 // 图形验证码图片: 点一下换一张
                 Box(
                     modifier = Modifier
@@ -113,12 +131,18 @@ fun CaptchaDialog(
                         .clickable { loadCaptcha() },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (image.isNotBlank()) {
-                        AsyncImage(
-                            model = image,
+                    if (captchaBitmap != null) {
+                        Image(
+                            bitmap = captchaBitmap,
                             contentDescription = "图形验证码",
                             modifier = Modifier.fillMaxWidth(),
                             contentScale = ContentScale.Fit,
+                        )
+                    } else if (image.isNotBlank() && !loading) {
+                        Text(
+                            text = "图片解析失败, 点我重试",
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.primary,
                         )
                     } else if (loading) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp))
