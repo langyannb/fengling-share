@@ -340,6 +340,41 @@ object ApiClient {
             }
         }
 
+    /**
+     * 上传群聊图片 (multipart, 字段名固定 file, action=social_image_upload)
+     *
+     * 服务端已压缩到最长边 1600 / 质量 82; 返回的 width/height 是**原图**尺寸,
+     * 客户端按它算气泡里的显示比例。失败时抛 ApiException(服务端 msg)。
+     */
+    suspend fun uploadChatImage(bytes: ByteArray, filename: String, mime: String): Result<ChatImage> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val safeMime = if (mime.contains("/")) mime else "image/*"
+                val body = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, bytes.toRequestBody(safeMime.toMediaType()))
+                    .build()
+                val req = Request.Builder()
+                    .url(StringBuilder(BASE_URL).append("?action=social_image_upload").toString())
+                    .header("Authorization", "Bearer ${UserStore.token}")
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { response ->
+                    val text = response.body?.string() ?: "{}"
+                    val obj = JSONObject(text)
+                    if (obj.optInt("code", -1) != 0) {
+                        throw ApiException(obj.optString("msg", "请求失败"))
+                    }
+                    val d = obj.optJSONObject("data") ?: JSONObject()
+                    ChatImage(
+                        url = jsonStr(d, "url"),
+                        width = jsonInt(d, "width"),
+                        height = jsonInt(d, "height"),
+                    )
+                }
+            }
+        }
+
     /** 退出登录 (通知后端作废 token, 本地登录态由调用方 UserStore.clear()) */
     suspend fun logoutAccount(): Result<Unit> = withContext(Dispatchers.IO) {
         apiCall {
@@ -470,6 +505,12 @@ object ApiClient {
         atAll: Boolean = false,
         /** 引用回复: 被引用的消息 id (0 = 不引用) */
         quoteId: Int = 0,
+        /** 图片消息: 上传接口拿到的直链 (必须以 https://fenglin.cn-nb1.rains3.com/chat/ 开头) */
+        image: String = "",
+        /** 原图宽 (用于客户端排版, 0 = 未知) */
+        imageW: Int = 0,
+        /** 原图高 (0 = 未知) */
+        imageH: Int = 0,
     ): Result<Int> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
@@ -478,6 +519,12 @@ object ApiClient {
             }
             if (atAll) params["at_all"] = 1
             if (quoteId > 0) params["quote_id"] = quoteId
+            // 纯图片消息: content 传空串 + 带上 image 三件套; 纯文字时不带这三个键(保持老行为)
+            if (image.isNotBlank()) {
+                params["image"] = image
+                params["image_w"] = imageW
+                params["image_h"] = imageH
+            }
             request("social_send", params, UserStore.token)
                 .optJSONObject("data")?.optInt("id", 0) ?: 0
         }
@@ -689,6 +736,22 @@ private fun jsonBool(j: JSONObject, key: String): Boolean {
     }
 }
 
+/** 兼容后端返回 int / 字符串数字 / null 三种写法 */
+private fun jsonInt(j: JSONObject, key: String, def: Int = 0): Int {
+    if (j.isNull(key)) return def
+    return when (val v = j.opt(key)) {
+        is Number -> v.toInt()
+        else -> v?.toString()?.trim()?.toIntOrNull() ?: def
+    }
+}
+
+/** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
+data class ChatImage(
+    val url: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+)
+
 /** 图形验证码: image 是 data:image/png;base64,... 可直接给 Coil */
 data class Captcha(
     val token: String = "",
@@ -757,6 +820,12 @@ data class SocialMessage(
     val avatar: String = "",
     val role: String = "user",
     val content: String = "",
+    /** 图片消息: 对象存储直链 (空串 = 没图; 撤回后也是空串) */
+    val image: String = "",
+    /** 原图宽 (0 = 没有图或未知) */
+    val imageW: Int = 0,
+    /** 原图高 */
+    val imageH: Int = 0,
     val at: List<Int> = emptyList(),
     /** 引用的原消息 (0 = 不是引用) */
     val quoteId: Int = 0,
@@ -777,6 +846,9 @@ data class SocialMessage(
                 avatar = jsonStr(j, "avatar"),
                 role = jsonStr(j, "role").ifBlank { "user" },
                 content = jsonStr(j, "content"),
+                image = jsonStr(j, "image"),
+                imageW = jsonInt(j, "image_w"),
+                imageH = jsonInt(j, "image_h"),
                 at = if (atArr == null) {
                     emptyList()
                 } else {

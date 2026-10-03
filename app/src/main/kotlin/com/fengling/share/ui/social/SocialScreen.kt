@@ -3,10 +3,13 @@ package com.fengling.share.ui.social
 import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -71,6 +74,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -82,7 +87,9 @@ import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.ui.components.AppTopBar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.PullToRefresh
@@ -533,6 +540,10 @@ private fun ChatView(
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
+    // 图片上传中: 上传期间禁用发送/选图, 防止重复上传
+    var uploading by remember { mutableStateOf(false) }
+    // 全屏查看的图片地址 (空串 = 不显示)
+    var previewImage by remember { mutableStateOf("") }
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
     // 长按消息弹出的操作菜单 (引用 / 撤回)
     var actionTarget by remember { mutableStateOf<SocialMessage?>(null) }
@@ -796,6 +807,56 @@ private fun ChatView(
         }
     }
 
+    /**
+     * 相册选图 → 读字节 → 上传对象存储 → 立刻作为图片消息发出。
+     * 纯图片消息 content 传空串; 上传/发送失败都不动用户已经打好的文字。
+     */
+    val pickChatImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            uploading = true
+            scope.launch {
+                val bytes = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }.getOrNull()
+                }
+                if (bytes == null || bytes.isEmpty()) {
+                    uploading = false
+                    onToast("读取图片失败, 请换一张")
+                } else {
+                    val mime = context.contentResolver.getType(uri) ?: "image/*"
+                    // 相册 URI 常常没有扩展名, 按 MIME 给规范文件名 (后端只收 jpg / png / webp)
+                    val ext = when {
+                        mime.contains("png") -> "png"
+                        mime.contains("webp") -> "webp"
+                        else -> "jpg"
+                    }
+                    ApiClient.uploadChatImage(bytes, "chat.$ext", mime)
+                        .onSuccess { img ->
+                            ApiClient.socialSend(
+                                group.id,
+                                "",
+                                at = emptyList(),
+                                quoteId = quoteTarget?.id ?: 0,
+                                image = img.url,
+                                imageW = img.width,
+                                imageH = img.height,
+                            )
+                                .onSuccess {
+                                    quoteTarget = null
+                                    val after = messages.maxOfOrNull { it.id } ?: 0
+                                    ApiClient.socialMessages(group.id, afterId = after)
+                                        .onSuccess { new -> mergeNew(new) }
+                                }
+                                .onFailure { e -> onToast(e.message ?: "图片发送失败") }
+                        }
+                        .onFailure { e -> onToast(e.message ?: "图片上传失败") }
+                    uploading = false
+                }
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         // ===== 群公告 (管理员设置, 成员进群就能看到, 点击展开全文) =====
         if (noticeText.isNotBlank()) {
@@ -885,6 +946,8 @@ private fun ChatView(
                                     }
                                 },
                                 onAvatarTap = { openMemberPanel(msg) },
+                                // 点图片: 全屏查看大图
+                                onImageTap = { url -> previewImage = url },
                                 // 长按对方头像 = @ 他
                                 onAvatarLongPress = {
                                     insertMention(
@@ -998,14 +1061,20 @@ private fun ChatView(
                 )
             }
             Spacer(Modifier.width(8.dp))
+            // 图片: 打开系统相册选图; 上传期间按钮变成「上传中」并禁用, 避免重复上传
+            SmallActionButton(
+                text = if (uploading) "上传中" else "图片",
+                onClick = { if (!uploading && !sending) pickChatImage.launch("image/*") },
+            )
+            Spacer(Modifier.width(6.dp))
             SmallActionButton(
                 text = "@",
                 onClick = { openMentionPicker() },
             )
             Spacer(Modifier.width(6.dp))
             SmallActionButton(
-                text = if (sending) "发送中" else "发送",
-                onClick = { doSend() },
+                text = if (uploading) "上传中" else if (sending) "发送中" else "发送",
+                onClick = { if (!uploading) doSend() },
             )
         }
     }
@@ -1264,7 +1333,7 @@ private fun ChatView(
             text = {
                 Text(
                     text = acting.nickname.ifBlank { "群成员" } + ": " +
-                        acting.content.replace('\n', ' ').take(60),
+                        (acting.content.ifBlank { "[图片]" }).replace('\n', ' ').take(60),
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     maxLines = 3,
@@ -1282,17 +1351,20 @@ private fun ChatView(
             dismissButton = {
                 Row {
                     // 复制: 直接把这句原文放进系统剪贴板 (长按消息 → 复制, 和 QQ 一样)
-                    M3TextButton(onClick = {
-                        actionTarget = null
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                        if (cm != null) {
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("群消息", acting.content))
-                            onToast("已复制")
-                        } else {
-                            onToast("复制失败")
+                    // 纯图片消息没有文字, 不显示「复制」(用户 要求)
+                    if (acting.content.isNotBlank()) {
+                        M3TextButton(onClick = {
+                            actionTarget = null
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            if (cm != null) {
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("群消息", acting.content))
+                                onToast("已复制")
+                            } else {
+                                onToast("复制失败")
+                            }
+                        }) {
+                            Text(text = "复制", color = MiuixTheme.colorScheme.primary)
                         }
-                    }) {
-                        Text(text = "复制", color = MiuixTheme.colorScheme.primary)
                     }
                     if (canRecall) {
                         M3TextButton(onClick = {
@@ -1493,6 +1565,42 @@ private fun ChatView(
             },
         )
     }
+
+    // ===== 全屏查看图片 (点气泡里的图打开, 点任意处 / 右上角关闭) =====
+    if (previewImage.isNotBlank()) {
+        Dialog(
+            onDismissRequest = { previewImage = "" },
+            // usePlatformDefaultWidth = false: 让 Dialog 窗口铺满屏幕, 不然只能占中间一小块
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .clickable { previewImage = "" },
+            ) {
+                AsyncImage(
+                    model = previewImage,
+                    contentDescription = "查看大图",
+                    contentScale = ContentScale.Fit,
+                    // fillMaxSize + Fit: 无论横竖图都完整显示在屏幕内, 不会被裁掉
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp)
+                        .align(Alignment.Center),
+                )
+                Text(
+                    text = "关闭",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .clickable { previewImage = "" },
+                )
+            }
+        }
+    }
 }
 
 /** 单条消息: 自己靠右 (主色气泡), 别人靠左 (灰色气泡 + 头像 + 昵称 + 时间) */
@@ -1505,6 +1613,8 @@ private fun MessageRow(
     onAvatarLongPress: () -> Unit = {},
     onAvatarTap: () -> Unit = {},
     onOpenLink: (String) -> Unit = {},
+    /** 点气泡里的图片: 上层打开全屏查看 */
+    onImageTap: (String) -> Unit = {},
     /** 从通知定位过来的那条消息: 给个底色方便一眼看到 */
     highlight: Boolean = false,
 ) {
@@ -1642,46 +1752,70 @@ private fun MessageRow(
                     )
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                // 链接要能点(走内置浏览器), 又不能抢掉长按撤回 —— 所以手势自己做在文本上:
-                // onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 URL 注解
-                var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-                val shown = highlightMentions(
-                    content = msg.content,
-                    mentionColor = if (mine) {
-                        Color(0xFFFFE082)
-                    } else {
-                        MiuixTheme.colorScheme.primary
-                    },
-                    linkColor = if (mine) {
-                        Color(0xFFFFF3C4)
-                    } else {
-                        MiuixTheme.colorScheme.primary
-                    },
-                )
-                Text(
-                    text = shown,
-                    fontSize = 14.sp,
-                    color = if (mine) {
-                        MiuixTheme.colorScheme.onPrimary
-                    } else {
-                        MiuixTheme.colorScheme.onBackground
-                    },
-                    onTextLayout = { textLayout = it },
-                    modifier = Modifier.pointerInput(msg.id, canRecall) {
-                        detectTapGestures(
-                            onLongPress = { onLongPress() },
-                            onTap = { pos ->
-                                val lr = textLayout
-                                if (lr != null) {
-                                    val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
-                                    shown.getStringAnnotations("URL", off, off)
-                                        .firstOrNull()
-                                        ?.let { ann -> onOpenLink(ann.item) }
-                                }
-                            },
+                Column {
+                    // 图片消息: 按 image_w/image_h 比例排版 (最长边 200dp, 竖图不会撑满屏幕),
+                    // 只传 http 地址给 Coil (Coil 2.x 不支持 base64 data URI)
+                    if (msg.image.isNotBlank()) {
+                        val ratio = if (msg.imageW > 0 && msg.imageH > 0) {
+                            msg.imageW.toFloat() / msg.imageH.toFloat()
+                        } else {
+                            4f / 3f
+                        }
+                        AsyncImage(
+                            model = msg.image,
+                            contentDescription = "图片消息",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .width(if (ratio >= 1f) 200.dp else (200f * ratio).dp)
+                                .aspectRatio(ratio)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onImageTap(msg.image) },
                         )
-                    },
-                )
+                        if (msg.content.isNotBlank()) Spacer(Modifier.height(6.dp))
+                    }
+                    // 链接要能点(走内置浏览器), 又不能抢掉长按撤回 —— 所以手势自己做在文本上:
+                    // onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 URL 注解
+                    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+                    val shown = highlightMentions(
+                        content = msg.content,
+                        mentionColor = if (mine) {
+                            Color(0xFFFFE082)
+                        } else {
+                            MiuixTheme.colorScheme.primary
+                        },
+                        linkColor = if (mine) {
+                            Color(0xFFFFF3C4)
+                        } else {
+                            MiuixTheme.colorScheme.primary
+                        },
+                    )
+                    if (msg.content.isNotBlank()) {
+                    Text(
+                        text = shown,
+                        fontSize = 14.sp,
+                        color = if (mine) {
+                            MiuixTheme.colorScheme.onPrimary
+                        } else {
+                            MiuixTheme.colorScheme.onBackground
+                        },
+                        onTextLayout = { textLayout = it },
+                        modifier = Modifier.pointerInput(msg.id, canRecall) {
+                            detectTapGestures(
+                                onLongPress = { onLongPress() },
+                                onTap = { pos ->
+                                    val lr = textLayout
+                                    if (lr != null) {
+                                        val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
+                                        shown.getStringAnnotations("URL", off, off)
+                                            .firstOrNull()
+                                            ?.let { ann -> onOpenLink(ann.item) }
+                                    }
+                                },
+                            )
+                        },
+                    )
+                    }
+                }
             }
         }
         if (mine) {
