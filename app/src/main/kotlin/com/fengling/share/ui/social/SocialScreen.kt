@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.Selection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -545,11 +546,10 @@ private fun ChatView(
     var uploading by remember { mutableStateOf(false) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
-    // 公告/消息文字是否处于「长按选中」状态
-    var hasSelection by remember { mutableStateOf(false) }
-    // 改这个 key 会重建 SelectionContainer, 选中状态随之被清掉
-    // (Compose 没有公开的「清除选中」API, 重挂载是最稳的做法)
-    var selectionReset by remember { mutableStateOf(0) }
+    // 公告条 / 「查看群公告」弹框里文字的选中态: 交给新版 SelectionContainer 托管,
+    // 把它置回 null 就是「取消选中」(两个容器各一份, 避免弹框和页面互相干扰)
+    var noticeSelection by remember { mutableStateOf<Selection?>(null) }
+    var dialogSelection by remember { mutableStateOf<Selection?>(null) }
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
     // 长按消息弹出的操作菜单 (引用 / 撤回)
     var actionTarget by remember { mutableStateOf<SocialMessage?>(null) }
@@ -789,9 +789,9 @@ private fun ChatView(
      * 没有选中就不动, 返回是否真的清了。
      */
     fun clearSelectionIfAny(): Boolean {
-        if (!hasSelection) return false
-        hasSelection = false
-        selectionReset++
+        if (noticeSelection == null && dialogSelection == null) return false
+        noticeSelection = null
+        dialogSelection = null
         return true
     }
 
@@ -880,7 +880,7 @@ private fun ChatView(
             // 长按选中公告/消息文字后, 点页面空白处取消选中。
             // 子控件 (按钮/输入框/图片/气泡文字) 会先消费点击, 所以这里只吃掉「真正空白处」的点击,
             // 不会影响滚动、展开收起、长按菜单等既有交互 (拖拽会让 tap 检测自动取消)。
-            .pointerInput(hasSelection) {
+            .pointerInput(Unit) {
                 detectTapGestures { clearSelectionIfAny() }
             },
     ) {
@@ -923,28 +923,29 @@ private fun ChatView(
                 Spacer(Modifier.height(4.dp))
                 // 公告里的链接也能点开 (走内置浏览器); 点空白处仍然是展开/收起
                 // SelectionContainer: 公告文字可以长按选中复制 (用户 2026-10-04 要求)
-                // key(selectionReset): 点空白处取消选中 = 重建这段文本, 选中状态随之清掉
-                key(selectionReset) {
-                    SelectionContainer(onSelectionChange = { hasSelection = it != null }) {
-                        LinkText(
-                            content = noticeText,
-                            color = MiuixTheme.colorScheme.onBackground,
-                            linkColor = MiuixTheme.colorScheme.primary,
-                            fontSize = 12.sp,
-                            maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
-                            onTap = { url ->
-                                if (url != null) {
-                                    if (onOpenWeb != null) {
-                                        onOpenWeb(url, group.name)
-                                    } else {
-                                        onToast("没有可用的内置浏览器")
-                                    }
+                // 选中态托管在 noticeSelection 上: 点空白处把它置 null 即取消选中
+                SelectionContainer(
+                    selection = noticeSelection,
+                    onSelectionChange = { noticeSelection = it },
+                ) {
+                    LinkText(
+                        content = noticeText,
+                        color = MiuixTheme.colorScheme.onBackground,
+                        linkColor = MiuixTheme.colorScheme.primary,
+                        fontSize = 12.sp,
+                        maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
+                        onTap = { url ->
+                            if (url != null) {
+                                if (onOpenWeb != null) {
+                                    onOpenWeb(url, group.name)
                                 } else {
-                                    noticeExpanded = !noticeExpanded
+                                    onToast("没有可用的内置浏览器")
                                 }
-                            },
-                        )
-                    }
+                            } else {
+                                noticeExpanded = !noticeExpanded
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -1131,31 +1132,32 @@ private fun ChatView(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .pointerInput(hasSelection) {
+                        .pointerInput(Unit) {
                             detectTapGestures { clearSelectionIfAny() }
                         },
                 ) {
-                    key(selectionReset) {
-                        SelectionContainer(onSelectionChange = { hasSelection = it != null }) {
-                            LinkText(
-                                content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
-                                color = if (noticeText.isBlank()) {
-                                    MiuixTheme.colorScheme.onBackgroundVariant
-                                } else {
-                                    MiuixTheme.colorScheme.onBackground
-                                },
-                                linkColor = MiuixTheme.colorScheme.primary,
-                                fontSize = 14.sp,
-                                onTap = { url ->
-                                    if (url != null && onOpenWeb != null) {
-                                        menu.showNoticeViewer = false
-                                        onOpenWeb(url, group.name)
-                                    } else if (url != null) {
-                                        onToast("没有可用的内置浏览器")
-                                    }
-                                },
-                            )
-                        }
+                    SelectionContainer(
+                        selection = dialogSelection,
+                        onSelectionChange = { dialogSelection = it },
+                    ) {
+                        LinkText(
+                            content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
+                            color = if (noticeText.isBlank()) {
+                                MiuixTheme.colorScheme.onBackgroundVariant
+                            } else {
+                                MiuixTheme.colorScheme.onBackground
+                            },
+                            linkColor = MiuixTheme.colorScheme.primary,
+                            fontSize = 14.sp,
+                            onTap = { url ->
+                                if (url != null && onOpenWeb != null) {
+                                    menu.showNoticeViewer = false
+                                    onOpenWeb(url, group.name)
+                                } else if (url != null) {
+                                    onToast("没有可用的内置浏览器")
+                                }
+                            },
+                        )
                     }
                 }
             },
