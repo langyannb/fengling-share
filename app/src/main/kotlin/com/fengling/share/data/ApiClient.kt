@@ -3,6 +3,7 @@ package com.fengling.share.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -25,8 +26,15 @@ object ApiClient {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    /** 通用请求: 校验 code, 返回整个响应 JSONObject (含 data) */
-    private fun request(action: String, params: Map<String, Any?> = emptyMap()): JSONObject {
+    /**
+     * 通用请求: 校验 code, 返回整个响应 JSONObject (含 data)
+     * @param token 非空时附加 `Authorization: Bearer <token>` (现有调用不传, 行为不变)
+     */
+    private fun request(
+        action: String,
+        params: Map<String, Any?> = emptyMap(),
+        token: String? = null,
+    ): JSONObject {
         val url = StringBuilder(BASE_URL).append("?action=").append(action)
         val body: okhttp3.RequestBody?
 
@@ -41,6 +49,9 @@ object ApiClient {
                     is Long -> json.put(k, v)
                     is Double -> json.put(k, v)
                     is Boolean -> json.put(k, v)
+                    // 数组参数 (如 social_send 的 at 用户 id 列表) 必须原样提交成 JSON 数组,
+                    // 走 else 分支会变成字符串 "[6, 7]" 导致后端解析不到
+                    is JSONArray -> json.put(k, v)
                     else -> json.put(k, v.toString())
                 }
             }
@@ -48,6 +59,9 @@ object ApiClient {
         }
 
         val builder = Request.Builder().url(url.toString())
+        if (!token.isNullOrBlank()) {
+            builder.header("Authorization", "Bearer $token")
+        }
         if (body != null) {
             builder.post(body)
         }
@@ -180,6 +194,509 @@ object ApiClient {
             )
         }
     }
+    // ===================== 账号系统 (接口契约 v1.0.10) =====================
+
+    /**
+     * Result 包装: 业务失败用服务端 msg, 网络失败用统一文案 (绝不泄露服务器地址)
+     * token 失效 (code=401 / msg=登录已失效) 时顺手清掉本地登录态
+     */
+    private inline fun <T> apiCall(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: ApiException) {
+        if (e.message?.contains("登录已失效") == true) UserStore.clear()
+        Result.failure(Exception(e.message?.takeIf { it.isNotBlank() } ?: "请求失败"))
+    } catch (e: Exception) {
+        Result.failure(Exception(e.userFriendlyMessage()))
+    }
+
+    /** 解析 {"token":"...","user":{...}} */
+    private fun parseTokenUser(obj: JSONObject): Pair<String, User> {
+        val d = obj.optJSONObject("data") ?: JSONObject()
+        val token = d.optString("token", "")
+        val user = d.optJSONObject("user")?.let { User.fromJson(it) } ?: User()
+        return token to user
+    }
+
+    /** 解析 data 里的单个 user 对象 */
+    private fun parseUserData(obj: JSONObject): User =
+        obj.optJSONObject("data")?.let { User.fromJson(it) } ?: User()
+
+    /**
+     * 发送邮箱验证码 (purpose: register=注册 / reset=找回密码)
+     * 契约 v1 起必须带图形验证码: captchaToken / captchaCode 由 getCaptcha() 取得
+     */
+    suspend fun sendCode(
+        email: String,
+        purpose: String = "register",
+        captchaToken: String = "",
+        captchaCode: String = "",
+    ): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                request(
+                    "send_code",
+                    mapOf(
+                        "email" to email,
+                        "purpose" to purpose,
+                        "captcha_token" to captchaToken,
+                        "captcha_code" to captchaCode,
+                    ),
+                )
+                Unit
+            }
+        }
+
+    /** 注册: 成功返回 (token, user) */
+    suspend fun register(
+        username: String,
+        password: String,
+        nickname: String,
+        email: String,
+        code: String,
+    ): Result<Pair<String, User>> = withContext(Dispatchers.IO) {
+        apiCall {
+            parseTokenUser(
+                request(
+                    "register",
+                    mapOf(
+                        "username" to username,
+                        "password" to password,
+                        "nickname" to nickname,
+                        "email" to email,
+                        "code" to code,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** 登录 (account 可填用户名或邮箱) */
+    suspend fun loginAccount(account: String, password: String): Result<Pair<String, User>> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                parseTokenUser(request("login", mapOf("username" to account, "password" to password)))
+            }
+        }
+
+    /** 当前登录用户资料 */
+    suspend fun getMe(): Result<User> = withContext(Dispatchers.IO) {
+        apiCall { parseUserData(request("user_me", token = UserStore.token)) }
+    }
+
+    /** 更新资料 (只提交非 null 字段: 昵称≤20 / 简介≤100 / 头像 URL) */
+    suspend fun updateProfile(
+        nickname: String? = null,
+        bio: String? = null,
+        avatar: String? = null,
+    ): Result<User> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>()
+            if (nickname != null) params["nickname"] = nickname
+            if (bio != null) params["bio"] = bio
+            if (avatar != null) params["avatar"] = avatar
+            parseUserData(request("user_update", params, UserStore.token))
+        }
+    }
+
+    /** 修改密码 (成功后后端不返回数据, 需重新登录) */
+    suspend fun changePassword(old: String, new: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                request(
+                    "user_password",
+                    mapOf("old_password" to old, "new_password" to new),
+                    UserStore.token,
+                )
+                Unit
+            }
+        }
+
+    /**
+     * 上传头像 (multipart, 字段名固定 file, action=user_avatar)
+     * 后端会同时把 users.avatar 写成新 URL, 成功返回该 URL
+     */
+    suspend fun uploadAvatar(bytes: ByteArray, filename: String, mime: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val safeMime = if (mime.contains("/")) mime else "image/*"
+                val body = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, bytes.toRequestBody(safeMime.toMediaType()))
+                    .build()
+                // 注意: 局部变量不能叫 request, 会遮蔽上面的 private fun request
+                val req = Request.Builder()
+                    .url(StringBuilder(BASE_URL).append("?action=user_avatar").toString())
+                    .header("Authorization", "Bearer ${UserStore.token}")
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { response ->
+                    val text = response.body?.string() ?: "{}"
+                    val obj = JSONObject(text)
+                    if (obj.optInt("code", -1) != 0) {
+                        throw ApiException(obj.optString("msg", "请求失败"))
+                    }
+                    obj.optJSONObject("data")?.optString("url", "") ?: ""
+                }
+            }
+        }
+
+    /**
+     * 上传群聊图片 (multipart, 字段名固定 file, action=social_image_upload)
+     *
+     * 服务端已压缩到最长边 1600 / 质量 82; 返回的 width/height 是**原图**尺寸,
+     * 客户端按它算气泡里的显示比例。失败时抛 ApiException(服务端 msg)。
+     */
+    suspend fun uploadChatImage(bytes: ByteArray, filename: String, mime: String): Result<ChatImage> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val safeMime = if (mime.contains("/")) mime else "image/*"
+                val body = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, bytes.toRequestBody(safeMime.toMediaType()))
+                    .build()
+                val req = Request.Builder()
+                    .url(StringBuilder(BASE_URL).append("?action=social_image_upload").toString())
+                    .header("Authorization", "Bearer ${UserStore.token}")
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { response ->
+                    val text = response.body?.string() ?: "{}"
+                    val obj = JSONObject(text)
+                    if (obj.optInt("code", -1) != 0) {
+                        throw ApiException(obj.optString("msg", "请求失败"))
+                    }
+                    val d = obj.optJSONObject("data") ?: JSONObject()
+                    ChatImage(
+                        url = jsonStr(d, "url"),
+                        width = jsonInt(d, "width"),
+                        height = jsonInt(d, "height"),
+                    )
+                }
+            }
+        }
+
+    /**
+     * 下载聊天图片的原图字节 — 「保存到相册」用。
+     * 复用同一个 OkHttpClient (带 10s/15s 超时), 不额外引依赖。
+     */
+    suspend fun downloadChatImage(url: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        apiCall {
+            val req = Request.Builder().url(url).get().build()
+            client.newCall(req).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw ApiException("图片下载失败 (HTTP " + response.code + ")")
+                }
+                response.body?.bytes()?.takeIf { it.isNotEmpty() } ?: throw ApiException("图片内容为空")
+            }
+        }
+    }
+
+    /** 退出登录 (通知后端作废 token, 本地登录态由调用方 UserStore.clear()) */
+    suspend fun logoutAccount(): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("logout", mapOf("token" to UserStore.token), UserStore.token)
+            Unit
+        }
+    }
+
+    // ===================== 社交 / 消息中心 / 邮箱验证 (接口契约 v1 第一~四节) =====================
+
+    /** 图形验证码 (公开): 返回 token + base64 data URI 图片, 可直接交给 Coil 渲染 */
+    suspend fun getCaptcha(): Result<Captcha> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("captcha").optJSONObject("data") ?: JSONObject()
+            Captcha(token = d.optString("token", ""), image = d.optString("image", ""))
+        }
+    }
+
+    /** 社交群组列表 (公开, 只含 is_active=1 的群) */
+    suspend fun socialGroups(): Result<List<SocialGroup>> = withContext(Dispatchers.IO) {
+        apiCall {
+            // 必须带 token: social_groups 只有登录后才返回 unread / first_unread_id,
+            // 之前漏传 token, 服务端当访客处理 → 未读数恒为 0, 群列表没有红标
+            val arr = request("social_groups", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data")?.optJSONArray("list")
+            if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { SocialGroup.fromJson(arr.getJSONObject(it)) }
+            }
+        }
+    }
+
+    /** 消息中心一页数据: 列表 + 总数 + 未读 + 分类未读数 (type -> count) */
+    data class NotifyPage(
+        val list: List<NotifyItem>,
+        val total: Int = 0,
+        val unread: Int = 0,
+        val unreadByType: Map<String, Int> = emptyMap(),
+    )
+
+    /** 开启/关闭某个群的消息免打扰 (只对自己生效, @我 与群公告仍然提醒) */
+    suspend fun socialMuteSet(groupId: Int, muted: Boolean): Result<Boolean> = withContext(Dispatchers.IO) {
+        apiCall {
+            val body = request(
+                "social_mute_set",
+                mapOf<String, Any?>("group_id" to groupId, "muted" to if (muted) 1 else 0),
+                UserStore.token,
+            )
+            body.optJSONObject("data")?.optInt("muted", 0)?.let { it == 1 } ?: muted
+        }
+    }
+
+    /** 群成员候选 (可 @ 的人): 该群发过言的活跃用户 + 管理员, 已排除自己 */
+    suspend fun socialGroupMembers(groupId: Int): Result<List<SocialGroupMember>> = withContext(Dispatchers.IO) {
+        apiCall {
+            val arr = request("social_group_members", mapOf<String, Any?>("group_id" to groupId), UserStore.token)
+                .optJSONObject("data")?.optJSONArray("list")
+            if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { SocialGroupMember.fromJson(arr.getJSONObject(it)) }
+            }
+        }
+    }
+
+    /**
+     * 管理员: 禁言某个用户 (group_id = 0 表示全站禁言)
+     * @param minutes 禁言分钟数, 0 表示永久 (服务端上限 300 天)
+     * @return 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」
+     */
+    suspend fun adminUserMute(userId: Int, minutes: Int, groupId: Int = 0, reason: String = ""): Result<String> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val d = request(
+                    "admin_user_mute",
+                    mapOf<String, Any?>(
+                        "user_id" to userId,
+                        "group_id" to groupId,
+                        "minutes" to minutes,
+                        "reason" to reason,
+                    ),
+                    UserStore.token,
+                ).optJSONObject("data")
+                jsonStr(d ?: org.json.JSONObject(), "left_text")
+            }
+        }
+
+    /** 管理员: 解除禁言, 返回实际解除的记录数 (0 = 该用户本来就没被禁言) */
+    suspend fun adminUserUnmute(userId: Int, groupId: Int = 0): Result<Int> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                request(
+                    "admin_user_unmute",
+                    mapOf<String, Any?>("user_id" to userId, "group_id" to groupId),
+                    UserStore.token,
+                ).optJSONObject("data")?.optInt("removed", 0) ?: 0
+            }
+        }
+
+    /** 群消息一页数据: 消息列表 + 该群未读条数 + 第一条未读消息 id */
+    data class SocialMessagesPage(
+        val list: List<SocialMessage> = emptyList(),
+        val unread: Int = 0,
+        val firstUnreadId: Int = 0,
+        val myId: Int = 0,
+    )
+
+    /**
+     * 群消息列表 + 未读信息 (需登录)
+     * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
+     * @param aroundId >0 时以该消息为中心取一屏 (定位用)
+     */
+    suspend fun socialMessagesPage(
+        groupId: Int,
+        afterId: Int = 0,
+        limit: Int = 30,
+        aroundId: Int = 0,
+    ): Result<SocialMessagesPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
+            if (aroundId > 0) params["around_id"] = aroundId
+            if (afterId > 0) params["after_id"] = afterId
+            val d = request("social_messages", params, UserStore.token).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            SocialMessagesPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { SocialMessage.fromJson(arr.getJSONObject(it)) },
+                unread = d?.optInt("unread", 0) ?: 0,
+                firstUnreadId = d?.optInt("first_unread_id", 0) ?: 0,
+                myId = d?.optInt("my_id", 0) ?: 0,
+            )
+        }
+    }
+
+    /**
+     * 群消息列表 (需登录)
+     * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
+     */
+    suspend fun socialMessages(
+        groupId: Int,
+        afterId: Int = 0,
+        limit: Int = 30,
+        aroundId: Int = 0,
+    ): Result<List<SocialMessage>> =
+        socialMessagesPage(groupId, afterId, limit, aroundId).map { it.list }
+
+    /** 发送群消息, 成功返回新消息 id (同一用户同一群 2 秒 1 条) */
+    suspend fun socialSend(
+        groupId: Int,
+        content: String,
+        at: List<Int> = emptyList(),
+        /** 管理员专用: @所有人 (全体提醒) */
+        atAll: Boolean = false,
+        /** 引用回复: 被引用的消息 id (0 = 不引用) */
+        quoteId: Int = 0,
+        /** 图片消息: 上传接口拿到的直链 (必须以 https://fenglin.cn-nb1.rains3.com/chat/ 开头) */
+        image: String = "",
+        /** 原图宽 (用于客户端排版, 0 = 未知) */
+        imageW: Int = 0,
+        /** 原图高 (0 = 未知) */
+        imageH: Int = 0,
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
+            if (at.isNotEmpty()) {
+                params["at"] = JSONArray().apply { at.forEach { put(it) } }
+            }
+            if (atAll) params["at_all"] = 1
+            if (quoteId > 0) params["quote_id"] = quoteId
+            // 纯图片消息: content 传空串 + 带上 image 三件套; 纯文字时不带这三个键(保持老行为)
+            if (image.isNotBlank()) {
+                params["image"] = image
+                params["image_w"] = imageW
+                params["image_h"] = imageH
+            }
+            request("social_send", params, UserStore.token)
+                .optJSONObject("data")?.optInt("id", 0) ?: 0
+        }
+    }
+
+    /** 撤回消息 (管理员可撤任何人, 普通用户只能撤自己 5 分钟内的) */
+    suspend fun socialRecall(id: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("social_recall", mapOf("id" to id), UserStore.token)
+            Unit
+        }
+    }
+
+    /**
+     * 把某个群标记为已读 (进群定位到第一条未读之后调一次)
+     * @param lastId 不传 (0) = 标记到最新; 传更小的 last_id 服务端也不会让已读位置回退
+     */
+    suspend fun socialRead(groupId: Int, lastId: Int = 0): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId)
+            // last_id 是可选的: 不传才表示「标记到最新」, 所以 0 时不带这个键
+            if (lastId > 0) params["last_id"] = lastId
+            request("social_read", params, UserStore.token)
+            Unit
+        }
+    }
+
+    /**
+     * 设置群公告 (仅管理员)。最长 500 字, 传空串即清空公告。
+     */
+    suspend fun socialSetNotice(groupId: Int, notice: String): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request(
+                "social_group_notice_set",
+                mapOf("group_id" to groupId, "notice" to notice),
+                UserStore.token,
+            )
+            Unit
+        }
+    }
+
+    /**
+     * 消息通知列表 (需登录)
+     * @return Triple(list, total, unread)
+     */
+    suspend fun notifications(
+        page: Int = 1,
+        pageSize: Int = 20,
+    ): Result<NotifyPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "notifications",
+                mapOf("page" to page, "page_size" to pageSize),
+                UserStore.token,
+            ).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            val list = if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { NotifyItem.fromJson(arr.getJSONObject(it)) }
+            }
+            val byType = mutableMapOf<String, Int>()
+            d?.optJSONObject("unread_by_type")?.let { obj ->
+                obj.keys().forEach { k -> byType[k] = obj.optInt(k, 0) }
+            }
+            NotifyPage(
+                list = list,
+                total = d?.optInt("total", list.size) ?: list.size,
+                unread = d?.optInt("unread", 0) ?: 0,
+                unreadByType = byType,
+            )
+        }
+    }
+
+    /**
+     * 标记通知已读 (all=true 时全部已读, 否则按 id 单条)
+     * @return 服务端返回的新未读数
+     */
+    suspend fun notificationRead(id: Int = 0, all: Boolean = false): Result<Int> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val params: Map<String, Any?> =
+                    if (all) mapOf("all" to 1) else mapOf("id" to id)
+                request("notification_read", params, UserStore.token)
+                    .optJSONObject("data")?.optInt("unread", 0) ?: 0
+            }
+        }
+
+    /** 删除单条通知 */
+    suspend fun notificationDelete(id: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("notification_delete", mapOf("id" to id), UserStore.token)
+            Unit
+        }
+    }
+
+    /**
+     * 给当前账号邮箱发验证码 (需登录, 需图形验证码)
+     * @param email 传空串表示用当前账号邮箱
+     * @return 实际发送到的邮箱
+     */
+    suspend fun emailVerifySend(
+        email: String,
+        captchaToken: String,
+        captchaCode: String,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>(
+                "captcha_token" to captchaToken,
+                "captcha_code" to captchaCode,
+            )
+            if (email.isNotBlank()) params["email"] = email
+            request("email_verify_send", params, UserStore.token)
+                .optJSONObject("data")?.optString("email", "") ?: ""
+        }
+    }
+
+    /** 提交邮箱验证码, 成功后 email_verified=1 并返回最新 user */
+    suspend fun emailVerify(email: String, code: String): Result<User> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val u = request(
+                    "email_verify",
+                    mapOf("email" to email, "code" to code),
+                    UserStore.token,
+                ).optJSONObject("data")?.optJSONObject("user")
+                if (u == null) User() else User.fromJson(u)
+            }
+        }
+
 }
 
 /** 版本信息 */
@@ -254,4 +771,181 @@ fun Throwable.userFriendlyMessage(): String = when (this) {
     is java.net.SocketTimeoutException,
     is java.io.IOException -> "网络连接失败，请检查网络后重试"
     else -> "加载失败，请稍后重试"
+}
+
+// ===================== 社交 / 消息中心 数据模型 (接口契约 v1) =====================
+
+/**
+ * org.json 的 JSONObject.NULL 用 optString 会得到字符串 "null", 统一挡掉
+ * (与 UserStore 内部同名私有函数互不影响)
+ */
+private fun jsonStr(j: JSONObject, key: String, def: String = ""): String =
+    if (j.isNull(key)) def else j.optString(key, def)
+
+/** 兼容后端返回 int(0/1) / bool / 字符串三种写法 */
+private fun jsonBool(j: JSONObject, key: String): Boolean {
+    if (j.isNull(key)) return false
+    return when (val v = j.opt(key)) {
+        is Boolean -> v
+        is Number -> v.toInt() == 1
+        else -> v?.toString() == "1" || v?.toString() == "true"
+    }
+}
+
+/** 兼容后端返回 int / 字符串数字 / null 三种写法 */
+private fun jsonInt(j: JSONObject, key: String, def: Int = 0): Int {
+    if (j.isNull(key)) return def
+    return when (val v = j.opt(key)) {
+        is Number -> v.toInt()
+        else -> v?.toString()?.trim()?.toIntOrNull() ?: def
+    }
+}
+
+/** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
+data class ChatImage(
+    val url: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+)
+
+/** 图形验证码: image 是 data:image/png;base64,... 可直接给 Coil */
+data class Captcha(
+    val token: String = "",
+    val image: String = "",
+)
+
+/** 社交群组 (社交页列表卡片) */
+data class SocialGroup(
+    val id: Int = 0,
+    val name: String = "",
+    val icon: String = "",
+    val description: String = "",
+    val notice: String = "",
+    val memberCount: Int = 0,
+    val messageCount: Int = 0,
+    /** 我是否对这个世界开了消息免打扰 */
+    val muted: Boolean = false,
+    /** 该群未读条数 (只算别人发的、未撤回的消息; 0 = 全部已读) */
+    val unread: Int = 0,
+    /** 第一条未读消息 id (无未读为 0); 进群时拿它当 around_id 定位 */
+    val firstUnreadId: Int = 0,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
+            id = j.optInt("id", 0),
+            name = jsonStr(j, "name"),
+            icon = jsonStr(j, "icon"),
+            description = jsonStr(j, "description"),
+            notice = jsonStr(j, "notice"),
+            memberCount = j.optInt("member_count", 0),
+            messageCount = j.optInt("message_count", 0),
+            muted = j.optInt("muted", 0) == 1,
+            unread = j.optInt("unread", 0),
+            firstUnreadId = j.optInt("first_unread_id", 0),
+        )
+    }
+}
+
+/** 群消息 (isRecalled 时 content 为空串, 前端显示「该消息已撤回」) */
+/** 群成员候选 (用于 @ 选择) */
+data class SocialGroupMember(
+    val id: Int = 0,
+    val nickname: String = "",
+    val username: String = "",
+    val avatar: String = "",
+    val role: String = "",
+    /** 是否被管理员禁言 (禁言只影响发言, 仍然能看消息) */
+    val muted: Boolean = false,
+    /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
+    val muteLeft: String = "",
+    val muteReason: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
+            id = j.optInt("id", 0),
+            nickname = jsonStr(j, "nickname"),
+            username = jsonStr(j, "username"),
+            avatar = jsonStr(j, "avatar"),
+            role = jsonStr(j, "role"),
+            muted = j.optInt("muted", 0) == 1,
+            muteLeft = jsonStr(j, "mute_left"),
+            muteReason = jsonStr(j, "mute_reason"),
+        )
+    }
+}
+
+data class SocialMessage(
+    val id: Int = 0,
+    val groupId: Int = 0,
+    val userId: Int = 0,
+    val nickname: String = "",
+    val avatar: String = "",
+    val role: String = "user",
+    val content: String = "",
+    /** 图片消息: 对象存储直链 (空串 = 没图; 撤回后也是空串) */
+    val image: String = "",
+    /** 原图宽 (0 = 没有图或未知) */
+    val imageW: Int = 0,
+    /** 原图高 */
+    val imageH: Int = 0,
+    val at: List<Int> = emptyList(),
+    /** 引用的原消息 (0 = 不是引用) */
+    val quoteId: Int = 0,
+    val quoteNickname: String = "",
+    val quoteContent: String = "",
+    val isRecalled: Boolean = false,
+    val createdAt: String = "",
+    val timeText: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): SocialMessage {
+            val atArr = j.optJSONArray("at")
+            return SocialMessage(
+                id = j.optInt("id", 0),
+                groupId = j.optInt("group_id", 0),
+                userId = j.optInt("user_id", 0),
+                nickname = jsonStr(j, "nickname"),
+                avatar = jsonStr(j, "avatar"),
+                role = jsonStr(j, "role").ifBlank { "user" },
+                content = jsonStr(j, "content"),
+                image = jsonStr(j, "image"),
+                imageW = jsonInt(j, "image_w"),
+                imageH = jsonInt(j, "image_h"),
+                at = if (atArr == null) {
+                    emptyList()
+                } else {
+                    (0 until atArr.length()).map { atArr.optInt(it, 0) }
+                },
+                quoteId = j.optInt("quote_id", 0),
+                quoteNickname = jsonStr(j, "quote_nickname"),
+                quoteContent = jsonStr(j, "quote_content"),
+                isRecalled = jsonBool(j, "is_recalled"),
+                createdAt = jsonStr(j, "created_at"),
+                timeText = jsonStr(j, "time_text"),
+            )
+        }
+    }
+}
+
+/** 消息通知 (type: system=系统 / admin=管理员 / social=社交) */
+data class NotifyItem(
+    val id: Int = 0,
+    val title: String = "",
+    val content: String = "",
+    val type: String = "system",
+    val link: String = "",
+    val isRead: Boolean = false,
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): NotifyItem = NotifyItem(
+            id = j.optInt("id", 0),
+            title = jsonStr(j, "title"),
+            content = jsonStr(j, "content"),
+            type = jsonStr(j, "type").ifBlank { "system" },
+            link = jsonStr(j, "link"),
+            isRead = jsonBool(j, "is_read"),
+            createdAt = jsonStr(j, "created_at"),
+        )
+    }
 }

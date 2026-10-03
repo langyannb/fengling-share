@@ -46,6 +46,7 @@ import com.fengling.share.data.AppVersion
 import com.fengling.share.data.CrashReporter
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
@@ -62,6 +63,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { CrashReporter.uploadPending(applicationContext) }
         super.onCreate(savedInstanceState)
         Settings.init(applicationContext)
+        // 账号系统: 初始化本地 token/user 存储 (未登录时为空, 不联网)
+        UserStore.init(applicationContext)
         // OShin 同款: 状态栏 + 导航栏全透明, 关闭导航栏对比度强制 (浅色主题下默认白色 scrim 会盖住玻璃底栏下方!)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(

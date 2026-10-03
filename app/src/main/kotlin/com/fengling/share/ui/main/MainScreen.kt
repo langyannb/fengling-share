@@ -1,7 +1,5 @@
 package com.fengling.share.ui.main
 
-import android.content.Intent
-import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.core.Spring
@@ -36,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Checkbox
@@ -71,6 +70,7 @@ import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.Settings
+import com.fengling.share.data.UserStore
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
@@ -88,8 +88,11 @@ import com.fengling.share.ui.components.navigation.LiquidBottomBar
 import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
+import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
+import com.fengling.share.ui.main.my.MessagesScreen
 import com.fengling.share.ui.main.my.MyScreen
+import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
@@ -103,6 +106,9 @@ import java.util.Locale
 /** 底部导航 tab */
 private data class NavTab(val label: String, val icon: ImageVector)
 
+/** 「群组」在底部 tab 里的下标 (未登录时会被拦到登录页) */
+private const val SOCIAL_TAB_PAGE = 2
+
 /** 导航路由 */
 object Routes {
     const val MAIN = "main"
@@ -110,8 +116,14 @@ object Routes {
     const val WEBVIEW = "webview?url={url}&title={title}&password={password}"
     const val UPDATE = "update?version={version}&url={url}&log={log}&mode={mode}&size={size}&date={date}"
     const val CONTRIBUTORS = "contributors"
+    const val ACCOUNT = "account"
+    // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
+    const val SOCIAL_GROUP = "social/group/{groupId}?messageId={messageId}&notice={notice}"
+    const val MESSAGES = "messages"
 
     fun detail(appId: Int) = "detail/$appId"
+    fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
+        "social/group/$groupId?messageId=$messageId&notice=" + if (notice) 1 else 0
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -143,11 +155,25 @@ fun MainScreen(
         listOf(
             NavTab("首页", Icons.Filled.Home),
             NavTab("分类", Icons.Filled.Category),
+            NavTab("群组", Icons.Filled.Forum),
             NavTab("关于", Icons.Filled.Info),
         )
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // 未登录时左右滑动也不许停在「群组」页 (3 = 0 首页 / 1 分类 / 2 群组 / 3 关于)
+    var lastAllowedPage by remember { mutableStateOf(0) }
+    LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress) {
+            if (pagerState.currentPage == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
+                navController.navigate(Routes.ACCOUNT)
+                pagerState.animateScrollToPage(lastAllowedPage)
+            } else {
+                lastAllowedPage = pagerState.currentPage
+            }
+        }
+    }
 
     // ===== 外部应用跳转确认 (2026-10-02: 用户要求跳转前先问一句) =====
     // 以前 mailto/tel/mqqwpa/uclink 等协议是直接 startActivity 抢跳, 现在一律先弹确认框
@@ -163,23 +189,9 @@ fun MainScreen(
             pendingExternal = target
             return
         }
-        // 腾讯频道 / QQ群 网页版在 WebView 里只渲染外壳 (频道信息 + 加入按钮), 内容列表要 QQ 登录态,
-        // 内置浏览器永远空白一片 → 直接交系统, 由 QQ 客户端接管 (2026-10-03 用户反馈)
-        if (isTencentChannelUrl(url)) {
-            val uri = Uri.parse(url)
-            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            pendingExternal = ExternalJumpTarget(
-                url = url,
-                appLabel = "QQ",
-                intent = intent,
-                host = uri.host ?: "pd.qq.com",
-                packageName = null,
-                hasApp = true,
-            )
-            return
-        }
+        // 腾讯频道 / QQ群 一律保持在内置浏览器打开 (2026-10-03 用户明确要求)。
+        // 之前「交 QQ 客户端打开」的方案已撤销; 页面完整渲染改由 WebView 侧保障
+        // (CookieManager 放开第三方 cookie + 反爬挑战页等待 + 渲染能力补齐), 见 WebViewScreen.kt。
         navController.navigate(Routes.webview(url, title, password))
     }
 
@@ -317,6 +329,14 @@ fun MainScreen(
                                 },
                             )
                             1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                            2 -> SocialScreen(
+                                // 「群组」tab: 常驻列表页, 无返回栏; 点群组进全屏聊天
+                                onBack = null,
+                                onOpenGroup = { g -> navController.navigate(Routes.socialGroup(g.id)) },
+                                // 群聊消息里的链接: 内置浏览器打开
+                                onOpenWeb = { url, title -> openLink(url, title) },
+                                onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
+                            )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
                                 onOpenWeb = { url, title ->
@@ -329,6 +349,12 @@ fun MainScreen(
                                 onOpenContributors = {
                                     navController.navigate(Routes.CONTRIBUTORS)
                                 },
+                                onOpenAccount = {
+                                    navController.navigate(Routes.ACCOUNT)
+                                },
+                                onOpenMessages = {
+                                    navController.navigate(Routes.MESSAGES)
+                                },
                             )
                         }
                     }
@@ -339,7 +365,12 @@ fun MainScreen(
                     tabs = tabs.map { it.label to it.icon },
                     pagerState = pagerState,
                     onTabSelected = { index ->
-                        scope.launch { pagerState.animateScrollToPage(index) }
+                        if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
+                            // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)
+                            navController.navigate(Routes.ACCOUNT)
+                        } else {
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        }
                     },
                     backdrop = backdrop,
                     modifier = Modifier.align(Alignment.BottomCenter),
@@ -390,6 +421,53 @@ fun MainScreen(
         composable(Routes.CONTRIBUTORS) {
             ContributorsScreen(
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 账号页 (登录 / 注册 / 个人资料)
+        composable(Routes.ACCOUNT) {
+            AccountScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 群组聊天页 (从「群组」tab 点进来, 直接进入指定群)
+        composable(
+            route = Routes.SOCIAL_GROUP,
+            arguments = listOf(
+                navArgument("groupId") { type = NavType.IntType },
+                // 从「消息」里的 @我 通知点进来时, 直接定位到那条消息
+                navArgument("messageId") { type = NavType.IntType; defaultValue = 0 },
+                // 群公告通知点进来时, 直接弹公告
+                navArgument("notice") { type = NavType.IntType; defaultValue = 0 },
+            ),
+        ) { backStackEntry ->
+            SocialScreen(
+                onBack = {
+                    // 返回时直接回到主界面(群组 tab 的列表页)。
+                    // 原来用 popBackStack() 会落到「我的-社交群组」那一页(现已移除), 用户反馈返回位置不对
+                    navController.popBackStack(Routes.MAIN, false)
+                },
+                initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
+                initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
+                openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
+                // 群聊消息里的链接: 内置浏览器打开
+                onOpenWeb = { url, title -> openLink(url, title) },
+            )
+        }
+
+        // 消息中心 (通知列表; link 走统一链接分流, http(s) 内置浏览器)
+        composable(Routes.MESSAGES) {
+            MessagesScreen(
+                onBack = { navController.popBackStack() },
+                onOpenWeb = { url, title ->
+                    openLink(url, title)
+                },
+                // @我 / 群消息通知: 跳进对应群聊并定位到那条消息; 群公告通知: 进群并弹出公告
+                onOpenGroup = { groupId, messageId, showNotice ->
+                    navController.navigate(Routes.socialGroup(groupId, messageId, showNotice))
+                },
             )
         }
 
@@ -603,11 +681,4 @@ private fun NoticeDialog(
             }
         }
     }
-}
-
-/** 腾讯频道 / QQ群 分享链接 (内置浏览器显示不全, 需交 QQ 客户端) */
-private fun isTencentChannelUrl(url: String): Boolean {
-    val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull() ?: return false
-    return host == "pd.qq.com" || host.endsWith(".pd.qq.com") ||
-        host == "qun.qq.com" || host.endsWith(".qun.qq.com")
 }

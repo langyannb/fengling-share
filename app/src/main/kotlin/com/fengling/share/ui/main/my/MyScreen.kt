@@ -70,6 +70,7 @@ import com.fengling.share.data.Contributor
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.data.userFriendlyMessage
@@ -95,6 +96,8 @@ fun MyScreen(
     onOpenWeb: (String, String) -> Unit = { _, _ -> },
     onOpenUpdate: (VersionInfo) -> Unit = {},
     onOpenContributors: () -> Unit = {},
+    onOpenAccount: () -> Unit = {},
+    onOpenMessages: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -113,7 +116,21 @@ fun MyScreen(
     var updateDate by remember { mutableStateOf("") }
 
     val currentVersion = AppVersion.CURRENT
+
+    // 消息中心未读数: 未登录清零, 登录后拉一次 (消息页内也会实时同步)
+    LaunchedEffect(UserStore.hasToken) {
+        if (UserStore.hasToken) {
+            ApiClient.notifications(page = 1, pageSize = 1).onSuccess { page ->
+                MessageBadge.update(page.unread)
+            }
+        } else {
+            MessageBadge.update(0)
+        }
+    }
     val updateVersion = checkResult.substringAfter("v")
+
+    // 登录态 (UserStore 内部是 mutableStateOf, 登录/退出/改资料后账号卡片自动重组刷新)
+    val account = UserStore.current
 
     // 关于页配置 (官方频道/链接, 后端可配)
     var aboutConfig by remember { mutableStateOf(AboutConfig()) }
@@ -208,6 +225,151 @@ fun MyScreen(
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     textAlign = TextAlign.Center,
+                )
+            }
+        }
+
+        // ===== 账号卡片 (页面最顶部) =====
+        item {
+            SmallTitle(text = "账号")
+        }
+        item {
+            Card(
+                onClick = { onOpenAccount() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                cornerRadius = 16.dp,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 头像: 已登录显示真实头像 (无头像显示昵称首字), 未登录显示灰色占位
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (account != null && account.avatarUrl.isNotEmpty()) {
+                            AsyncImage(
+                                model = account.avatarUrl,
+                                contentDescription = null,
+                                modifier = Modifier.size(52.dp),
+                                contentScale = ContentScale.Crop,
+                            )
+                        } else if (account != null && account.displayName.isNotBlank()) {
+                            Text(
+                                text = account.initial,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.size(26.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (account != null) account.displayName else "点击登录 / 注册",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MiuixTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            // 已登录但邮箱还没验证: 给个轻量提醒, 点进账号页可以自助验证
+                            if (account != null && account.email.isNotBlank() && !account.emailVerified) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "邮箱未验证",
+                                    fontSize = 10.sp,
+                                    color = MiuixTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .background(
+                                            color = MiuixTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(6.dp),
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = account?.let { u -> u.bio.ifBlank { u.email } }?.takeIf { it.isNotBlank() }
+                                ?: "登录后可同步收藏、评论与头像",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    // 已登录右侧显示「编辑」, 未登录只留箭头
+                    if (account != null) {
+                        Text(
+                            text = "编辑",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(2.dp))
+                    }
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+
+        // ===== 社交 =====
+        item {
+            SmallTitle(text = "社交")
+        }
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                cornerRadius = 16.dp,
+            ) {
+                SettingRow(
+                    title = "消息中心",
+                    summary = "系统通知 / 管理员公告 / 群聊提及",
+                    leading = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Email,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            if (MessageBadge.unread > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFE5484D)),
+                                )
+                            }
+                        }
+                    },
+                    value = if (MessageBadge.unread > 0) "${MessageBadge.unread} 条未读" else null,
+                    onClick = onOpenMessages,
                 )
             }
         }
