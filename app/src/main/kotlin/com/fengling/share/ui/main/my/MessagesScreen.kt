@@ -52,6 +52,63 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 private const val PAGE_SIZE = 20
 
 /**
+ * 顶部「新消息 N 条」汇总条
+ *
+ * 分类未读来自服务端 unread_by_type: system(系统通知) / admin(管理员) / social(群聊相关, 含 @我)
+ */
+@Composable
+private fun UnreadSummary(unread: Int, unreadByType: Map<String, Int>) {
+    val system = unreadByType["system"] ?: 0
+    val admin = unreadByType["admin"] ?: 0
+    val social = unreadByType["social"] ?: 0
+    val total = if (unread > 0) unread else system + admin + social
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (total > 0) {
+                    MiuixTheme.colorScheme.primary.copy(alpha = 0.10f)
+                } else {
+                    MiuixTheme.colorScheme.surfaceContainerHigh
+                },
+            )
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (total > 0) "新消息 " + total + " 条" else "暂时没有新消息",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (total > 0) {
+                MiuixTheme.colorScheme.primary
+            } else {
+                MiuixTheme.colorScheme.onBackgroundVariant
+            },
+        )
+        Spacer(Modifier.width(10.dp))
+        if (system > 0) UnreadChip("系统 " + system)
+        if (admin > 0) UnreadChip("管理员 " + admin)
+        if (social > 0) UnreadChip("@我/群聊 " + social)
+    }
+}
+
+@Composable
+private fun UnreadChip(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.sp,
+        color = MiuixTheme.colorScheme.primary,
+        modifier = Modifier
+            .padding(end = 6.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.14f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/**
  * 未读数的全局可观察单例
  *
  * 「我的」页的消息入口红点与消息中心内部状态共用同一份未读数, 避免两处显示不一致。
@@ -76,6 +133,8 @@ object MessageBadge {
 fun MessagesScreen(
     onBack: () -> Unit,
     onOpenWeb: (url: String, title: String) -> Unit,
+    /** 群聊类通知: 跳进对应群聊, messageId>0 时定位到那条消息, showNotice=true 时直接弹群公告 */
+    onOpenGroup: ((groupId: Int, messageId: Int, showNotice: Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -87,6 +146,8 @@ fun MessagesScreen(
     var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<NotifyItem?>(null) }
+    /** 分类未读数: type -> count (system / admin / social) */
+    var unreadByType by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
 
     val hasMore = items.size < total
 
@@ -94,11 +155,12 @@ fun MessagesScreen(
         scope.launch {
             if (append) loadingMore = true else loading = true
             ApiClient.notifications(page = targetPage, pageSize = PAGE_SIZE)
-                .onSuccess { (list, t, unread) ->
-                    items = if (append) (items + list).distinctBy { it.id } else list
-                    total = t
+                .onSuccess { res ->
+                    items = if (append) (items + res.list).distinctBy { it.id } else res.list
+                    total = res.total
                     page = targetPage
-                    MessageBadge.update(unread)
+                    MessageBadge.update(res.unread)
+                    if (!append) unreadByType = res.unreadByType
                     error = ""
                 }
                 .onFailure { e -> error = e.message ?: "加载失败" }
@@ -108,9 +170,39 @@ fun MessagesScreen(
 
     LaunchedEffect(Unit) { load(1, false) }
 
+    /**
+     * 点通知后的去向 (链接约定, 服务端写入 link 字段):
+     * - msg:<群id>:<消息id>  群消息/@我  -> 进群聊并定位到那条消息
+     * - notice:<群id>        群公告更新 -> 进群聊并弹出公告
+     * - group:<群id>         旧格式兼容 -> 只进群聊
+     * - http(s) 开头         普通链接   -> 内置浏览器
+     */
+    fun openLinkOf(item: NotifyItem) {
+        val link = item.link
+        when {
+            link.startsWith("msg:") -> {
+                val p = link.removePrefix("msg:").split(":")
+                val gid = p.getOrNull(0)?.toIntOrNull() ?: 0
+                val mid = p.getOrNull(1)?.toIntOrNull() ?: 0
+                if (gid > 0 && onOpenGroup != null) onOpenGroup(gid, mid, false)
+                else if (link.startsWith("http")) onOpenWeb(link, item.title)
+                else onOpenWeb(link, item.title)
+            }
+            link.startsWith("notice:") -> {
+                val gid = link.removePrefix("notice:").toIntOrNull() ?: 0
+                if (gid > 0 && onOpenGroup != null) onOpenGroup(gid, 0, true)
+            }
+            link.startsWith("group:") -> {
+                val gid = link.removePrefix("group:").toIntOrNull() ?: 0
+                if (gid > 0 && onOpenGroup != null) onOpenGroup(gid, 0, false)
+            }
+            else -> onOpenWeb(link, item.title)
+        }
+    }
+
     fun markRead(item: NotifyItem, thenOpen: Boolean) {
         if (item.isRead) {
-            if (thenOpen && item.link.isNotBlank()) onOpenWeb(item.link, item.title)
+            if (thenOpen && item.link.isNotBlank()) openLinkOf(item)
             return
         }
         scope.launch {
@@ -122,7 +214,7 @@ fun MessagesScreen(
                     }
                 }
                 .onFailure { /* 标记已读失败不打断阅读, 下次进入会重试 */ }
-            if (thenOpen && item.link.isNotBlank()) onOpenWeb(item.link, item.title)
+            if (thenOpen && item.link.isNotBlank()) openLinkOf(item)
         }
     }
 
@@ -188,6 +280,13 @@ fun MessagesScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = 6.dp, bottom = 96.dp),
                 ) {
+                    // 顶部汇总: 「新消息 N 条」+ 分类未读 (和 QQ / 微信的消息提醒一样)
+                    item(key = "summary") {
+                        UnreadSummary(
+                            unread = MessageBadge.unread,
+                            unreadByType = unreadByType,
+                        )
+                    }
                     items(items, key = { it.id }) { item ->
                         NotificationCard(
                             item = item,

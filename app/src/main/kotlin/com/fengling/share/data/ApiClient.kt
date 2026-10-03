@@ -370,6 +370,14 @@ object ApiClient {
         }
     }
 
+    /** 消息中心一页数据: 列表 + 总数 + 未读 + 分类未读数 (type -> count) */
+    data class NotifyPage(
+        val list: List<NotifyItem>,
+        val total: Int = 0,
+        val unread: Int = 0,
+        val unreadByType: Map<String, Int> = emptyMap(),
+    )
+
     /** 开启/关闭某个群的消息免打扰 (只对自己生效, @我 与群公告仍然提醒) */
     suspend fun socialMuteSet(groupId: Int, muted: Boolean): Result<Boolean> = withContext(Dispatchers.IO) {
         apiCall {
@@ -403,9 +411,11 @@ object ApiClient {
         groupId: Int,
         afterId: Int = 0,
         limit: Int = 30,
+        aroundId: Int = 0,
     ): Result<List<SocialMessage>> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
+            if (aroundId > 0) params["around_id"] = aroundId
             if (afterId > 0) params["after_id"] = afterId
             val arr = request("social_messages", params, UserStore.token)
                 .optJSONObject("data")?.optJSONArray("list")
@@ -465,7 +475,7 @@ object ApiClient {
     suspend fun notifications(
         page: Int = 1,
         pageSize: Int = 20,
-    ): Result<Triple<List<NotifyItem>, Int, Int>> = withContext(Dispatchers.IO) {
+    ): Result<NotifyPage> = withContext(Dispatchers.IO) {
         apiCall {
             val d = request(
                 "notifications",
@@ -478,7 +488,16 @@ object ApiClient {
             } else {
                 (0 until arr.length()).map { NotifyItem.fromJson(arr.getJSONObject(it)) }
             }
-            Triple(list, d?.optInt("total", list.size) ?: list.size, d?.optInt("unread", 0) ?: 0)
+            val byType = mutableMapOf<String, Int>()
+            d?.optJSONObject("unread_by_type")?.let { obj ->
+                obj.keys().forEach { k -> byType[k] = obj.optInt(k, 0) }
+            }
+            NotifyPage(
+                list = list,
+                total = d?.optInt("total", list.size) ?: list.size,
+                unread = d?.optInt("unread", 0) ?: 0,
+                unreadByType = byType,
+            )
         }
     }
 

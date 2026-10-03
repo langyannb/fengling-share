@@ -119,6 +119,10 @@ fun SocialScreen(
     initialGroupId: Int? = null,
     /** 非空时点群组交给外部导航 (tab 模式全屏打开聊天页); 为空则页内切换 */
     onOpenGroup: ((SocialGroup) -> Unit)? = null,
+    /** 从通知点进来时定位的消息 id (0 = 不定位) */
+    initialMessageId: Int = 0,
+    /** 从「群公告更新」通知点进来时直接弹出公告 */
+    openNotice: Boolean = false,
     /** 消息里的链接: 交给内置浏览器打开 */
     onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -133,6 +137,8 @@ fun SocialScreen(
     var currentGroup by remember { mutableStateOf<SocialGroup?>(null) }
     // 顶栏「三条横杠」菜单与公告弹框的状态 (聊天页顶栏在这里, 内容在 ChatView)
     val chatMenu = remember { ChatMenuState() }
+    // 群公告通知点进来: 直接把公告弹框打开
+    LaunchedEffect(Unit) { if (openNotice) chatMenu.showNoticeViewer = true }
     var refreshTick by remember { mutableStateOf(0) }
 
     fun loadGroups(isRefresh: Boolean) {
@@ -275,6 +281,7 @@ fun SocialScreen(
                     me = UserStore.current,
                     menu = chatMenu,
                     refreshTick = refreshTick,
+                    locateMessageId = initialMessageId,
                     onOpenWeb = onOpenWeb,
                     onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
                 )
@@ -447,6 +454,8 @@ private fun ChatView(
     me: User?,
     menu: ChatMenuState,
     refreshTick: Int,
+    /** 从通知点进来时要定位的消息 id (0 = 不定位) */
+    locateMessageId: Int = 0,
     onOpenWeb: ((url: String, title: String) -> Unit)?,
     onToast: (String) -> Unit,
 ) {
@@ -475,13 +484,18 @@ private fun ChatView(
     var mentionQuery by remember { mutableStateOf("") }
     /** 通过选择器 @ 到的人: 直接记 userId (昵称可能重名) */
     var pickedAt by remember { mutableStateOf<List<Int>>(emptyList()) }
+    /** 待定位的消息 id: 首次加载会以它为中心取一屏, 定位完清零 (避免每次刷新都跳) */
+    var locateId by remember { mutableStateOf(locateMessageId) }
+    /** 正在高亮闪烁的消息 id (定位到的消息会给个底色) */
+    var highlightId by remember { mutableStateOf(0) }
 
     val isAdmin = me != null && me.role == "admin"
 
     fun loadLatest(isRefresh: Boolean) {
         scope.launch {
             if (isRefresh) refreshing = true else loading = true
-            ApiClient.socialMessages(group.id, limit = 30)
+            val around = locateId
+            ApiClient.socialMessages(group.id, limit = 30, aroundId = around)
                 .onSuccess { list ->
                     messages = list.distinctBy { it.id }.sortedBy { it.id }
                 }
@@ -516,9 +530,24 @@ private fun ChatView(
 
     // 有新消息时滚到底部
     LaunchedEffect(messages.size) {
+        // 从通知点进来定位消息时不要抢滚动
+        if (locateId > 0) return@LaunchedEffect
         if (messages.isNotEmpty()) {
             runCatching { listState.animateScrollToItem(messages.lastIndex) }
         }
+    }
+
+    // 从通知点进来: 滚到那条消息并高亮一下, 然后恢复正常
+    LaunchedEffect(messages.size, locateId) {
+        val target = locateId
+        if (target <= 0 || messages.isEmpty()) return@LaunchedEffect
+        val idx = messages.indexOfFirst { it.id == target }
+        if (idx < 0) return@LaunchedEffect
+        highlightId = target
+        runCatching { listState.animateScrollToItem(idx) }
+        locateId = 0
+        kotlinx.coroutines.delay(2800)
+        highlightId = 0
     }
 
     /** 昵称 → userId 映射 (只用当前已加载的消息构建, 对应 @ 解析的简单实现) */
@@ -675,6 +704,7 @@ private fun ChatView(
                                 mine = mine,
                                 canRecall = !msg.isRecalled && (mine || isAdmin),
                                 onLongPress = { recallTarget = msg },
+                                highlight = highlightId == msg.id,
                                 // 消息里的链接: 用内置浏览器打开
                                 onOpenLink = { url ->
                                     if (onOpenWeb != null) {
@@ -1048,6 +1078,8 @@ private fun MessageRow(
     onLongPress: () -> Unit,
     onAvatarLongPress: () -> Unit = {},
     onOpenLink: (String) -> Unit = {},
+    /** 从通知定位过来的那条消息: 给个底色方便一眼看到 */
+    highlight: Boolean = false,
 ) {
     // 撤回的消息: 居中灰字提示, 不显示气泡
     if (msg.isRecalled) {
@@ -1069,6 +1101,7 @@ private fun MessageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(if (highlight) Color(0x33FFB300) else Color.Transparent)
             .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {

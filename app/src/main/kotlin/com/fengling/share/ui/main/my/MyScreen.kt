@@ -120,8 +120,8 @@ fun MyScreen(
     // 消息中心未读数: 未登录清零, 登录后拉一次 (消息页内也会实时同步)
     LaunchedEffect(UserStore.hasToken) {
         if (UserStore.hasToken) {
-            ApiClient.notifications(page = 1, pageSize = 1).onSuccess { (_, _, unread) ->
-                MessageBadge.update(unread)
+            ApiClient.notifications(page = 1, pageSize = 1).onSuccess { page ->
+                MessageBadge.update(page.unread)
             }
         } else {
             MessageBadge.update(0)

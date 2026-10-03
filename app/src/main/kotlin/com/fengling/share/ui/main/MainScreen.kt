@@ -114,11 +114,12 @@ object Routes {
     const val CONTRIBUTORS = "contributors"
     const val ACCOUNT = "account"
     // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
-    const val SOCIAL_GROUP = "social/group/{groupId}"
+    const val SOCIAL_GROUP = "social/group/{groupId}?messageId={messageId}&notice={notice}"
     const val MESSAGES = "messages"
 
     fun detail(appId: Int) = "detail/$appId"
-    fun socialGroup(groupId: Int) = "social/group/$groupId"
+    fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
+        "social/group/$groupId?messageId=$messageId&notice=" + if (notice) 1 else 0
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -410,7 +411,13 @@ fun MainScreen(
         // 群组聊天页 (从「群组」tab 点进来, 直接进入指定群)
         composable(
             route = Routes.SOCIAL_GROUP,
-            arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
+            arguments = listOf(
+                navArgument("groupId") { type = NavType.IntType },
+                // 从「消息」里的 @我 通知点进来时, 直接定位到那条消息
+                navArgument("messageId") { type = NavType.IntType; defaultValue = 0 },
+                // 群公告通知点进来时, 直接弹公告
+                navArgument("notice") { type = NavType.IntType; defaultValue = 0 },
+            ),
         ) { backStackEntry ->
             SocialScreen(
                 onBack = {
@@ -419,6 +426,8 @@ fun MainScreen(
                     navController.popBackStack(Routes.MAIN, false)
                 },
                 initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
+                openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
                 // 群聊消息里的链接: 内置浏览器打开
                 onOpenWeb = { url, title -> openLink(url, title) },
             )
@@ -430,6 +439,10 @@ fun MainScreen(
                 onBack = { navController.popBackStack() },
                 onOpenWeb = { url, title ->
                     openLink(url, title)
+                },
+                // @我 / 群消息通知: 跳进对应群聊并定位到那条消息; 群公告通知: 进群并弹出公告
+                onOpenGroup = { groupId, messageId, showNotice ->
+                    navController.navigate(Routes.socialGroup(groupId, messageId, showNotice))
                 },
             )
         }
