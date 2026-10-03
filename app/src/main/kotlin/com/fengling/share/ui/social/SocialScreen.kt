@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.text.selection.Selection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -546,10 +545,10 @@ private fun ChatView(
     var uploading by remember { mutableStateOf(false) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
-    // 公告条 / 「查看群公告」弹框里文字的选中态: 交给新版 SelectionContainer 托管,
-    // 把它置回 null 就是「取消选中」(两个容器各一份, 避免弹框和页面互相干扰)
-    var noticeSelection by remember { mutableStateOf<Selection?>(null) }
-    var dialogSelection by remember { mutableStateOf<Selection?>(null) }
+    // 点空白处取消文本选中用的 key: 本仓库 Compose 版本的 SelectionContainer 只公开
+    // (modifier, content) 这一个重载, 既没有选中态回调也没有清除选中的 API,
+    // 所以「取消选中」靠改这个 key 重建被选中的那段文本 (用户 2026-10-04 反馈的问题)
+    var selectionReset by remember { mutableStateOf(0) }
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
     // 长按消息弹出的操作菜单 (引用 / 撤回)
     var actionTarget by remember { mutableStateOf<SocialMessage?>(null) }
@@ -784,17 +783,6 @@ private fun ChatView(
         }
     }
 
-    /**
-     * 点空白处时清掉文本选中 (用户 2026-10-04 反馈: 长按选中公告后点空白处取消不了选中)。
-     * 没有选中就不动, 返回是否真的清了。
-     */
-    fun clearSelectionIfAny(): Boolean {
-        if (noticeSelection == null && dialogSelection == null) return false
-        noticeSelection = null
-        dialogSelection = null
-        return true
-    }
-
     fun doSend() {
         val text = input.text.trim()
         if (text.isEmpty() || sending) return
@@ -877,11 +865,11 @@ private fun ChatView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            // 长按选中公告/消息文字后, 点页面空白处取消选中。
+            // 长按选中公告/消息文字后, 点页面空白处取消选中 (重建公告文本 = 清掉选中态)。
             // 子控件 (按钮/输入框/图片/气泡文字) 会先消费点击, 所以这里只吃掉「真正空白处」的点击,
             // 不会影响滚动、展开收起、长按菜单等既有交互 (拖拽会让 tap 检测自动取消)。
             .pointerInput(Unit) {
-                detectTapGestures { clearSelectionIfAny() }
+                detectTapGestures { selectionReset++ }
             },
     ) {
         // ===== 群公告 (管理员设置, 成员进群就能看到, 点击展开全文) =====
@@ -890,8 +878,11 @@ private fun ChatView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
-                    // 有选中时点公告条: 先取消选中, 不展开/收起 (和点空白处一致)
-                    .clickable { if (!clearSelectionIfAny()) noticeExpanded = !noticeExpanded }
+                    // 点公告条本身也顺手清一次选中 (和点空白处一致), 再展开/收起
+                    .clickable {
+                        selectionReset++
+                        noticeExpanded = !noticeExpanded
+                    }
                     .padding(horizontal = 14.dp, vertical = 9.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -923,29 +914,28 @@ private fun ChatView(
                 Spacer(Modifier.height(4.dp))
                 // 公告里的链接也能点开 (走内置浏览器); 点空白处仍然是展开/收起
                 // SelectionContainer: 公告文字可以长按选中复制 (用户 2026-10-04 要求)
-                // 选中态托管在 noticeSelection 上: 点空白处把它置 null 即取消选中
-                SelectionContainer(
-                    selection = noticeSelection,
-                    onSelectionChange = { noticeSelection = it },
-                ) {
-                    LinkText(
-                        content = noticeText,
-                        color = MiuixTheme.colorScheme.onBackground,
-                        linkColor = MiuixTheme.colorScheme.primary,
-                        fontSize = 12.sp,
-                        maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
-                        onTap = { url ->
-                            if (url != null) {
-                                if (onOpenWeb != null) {
-                                    onOpenWeb(url, group.name)
+                // key(selectionReset): 重建这段文本即可清掉长按选中状态, 见上面状态声明处的说明
+                key(selectionReset) {
+                    SelectionContainer {
+                        LinkText(
+                            content = noticeText,
+                            color = MiuixTheme.colorScheme.onBackground,
+                            linkColor = MiuixTheme.colorScheme.primary,
+                            fontSize = 12.sp,
+                            maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
+                            onTap = { url ->
+                                if (url != null) {
+                                    if (onOpenWeb != null) {
+                                        onOpenWeb(url, group.name)
+                                    } else {
+                                        onToast("没有可用的内置浏览器")
+                                    }
                                 } else {
-                                    onToast("没有可用的内置浏览器")
+                                    noticeExpanded = !noticeExpanded
                                 }
-                            } else {
-                                noticeExpanded = !noticeExpanded
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -1133,31 +1123,31 @@ private fun ChatView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .pointerInput(Unit) {
-                            detectTapGestures { clearSelectionIfAny() }
+                            // 弹框里点空白处同样清掉长按选中 (弹框是独立窗口, 要单独挂一份)
+                            detectTapGestures { selectionReset++ }
                         },
                 ) {
-                    SelectionContainer(
-                        selection = dialogSelection,
-                        onSelectionChange = { dialogSelection = it },
-                    ) {
-                        LinkText(
-                            content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
-                            color = if (noticeText.isBlank()) {
-                                MiuixTheme.colorScheme.onBackgroundVariant
-                            } else {
-                                MiuixTheme.colorScheme.onBackground
-                            },
-                            linkColor = MiuixTheme.colorScheme.primary,
-                            fontSize = 14.sp,
-                            onTap = { url ->
-                                if (url != null && onOpenWeb != null) {
-                                    menu.showNoticeViewer = false
-                                    onOpenWeb(url, group.name)
-                                } else if (url != null) {
-                                    onToast("没有可用的内置浏览器")
-                                }
-                            },
-                        )
+                    key(selectionReset) {
+                        SelectionContainer {
+                            LinkText(
+                                content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
+                                color = if (noticeText.isBlank()) {
+                                    MiuixTheme.colorScheme.onBackgroundVariant
+                                } else {
+                                    MiuixTheme.colorScheme.onBackground
+                                },
+                                linkColor = MiuixTheme.colorScheme.primary,
+                                fontSize = 14.sp,
+                                onTap = { url ->
+                                    if (url != null && onOpenWeb != null) {
+                                        menu.showNoticeViewer = false
+                                        onOpenWeb(url, group.name)
+                                    } else if (url != null) {
+                                        onToast("没有可用的内置浏览器")
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             },
