@@ -88,7 +88,12 @@ private val MENTION_REGEX = Regex("@[^\\s@]{1,20}")
  */
 @Composable
 fun SocialScreen(
-    onBack: () -> Unit,
+    /** 为 null 时作为底部 tab 常驻页使用 (顶部不显示返回按钮) */
+    onBack: (() -> Unit)? = null,
+    /** 指定群 id: 进入后自动打开该群 (从「群组」tab 点进来时用) */
+    initialGroupId: Int? = null,
+    /** 非空时点群组交给外部导航 (tab 模式全屏打开聊天页); 为空则页内切换 */
+    onOpenGroup: ((SocialGroup) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -115,18 +120,28 @@ fun SocialScreen(
 
     LaunchedEffect(Unit) { loadGroups(false) }
 
+    // 从「群组」tab 指定群进入: 列表加载完成后自动打开该群
+    LaunchedEffect(groups) {
+        val pid = initialGroupId ?: return@LaunchedEffect
+        if (currentGroup == null) {
+            groups.firstOrNull { it.id == pid }?.let { currentGroup = it }
+        }
+    }
+
     // 聊天页里系统返回键先回群组列表, 不直接退出社交页
     BackHandler(enabled = currentGroup != null) { currentGroup = null }
 
     Scaffold(
         modifier = modifier,
         topBar = {
-            AppTopBar(
-                title = if (currentGroup != null) currentGroup!!.name else "社交",
-                onBack = {
-                    if (currentGroup != null) currentGroup = null else onBack()
-                },
-            )
+            val g = currentGroup
+            when {
+                // 聊天页: 返回先回群组列表
+                g != null -> AppTopBar(title = g.name, onBack = { currentGroup = null })
+                onBack != null -> AppTopBar(title = "群组", onBack = onBack)
+                // tab 常驻页: 无返回按钮
+                else -> AppTopBar(title = "群组")
+            }
         },
     ) { innerPadding ->
         Box(
@@ -143,7 +158,9 @@ fun SocialScreen(
                     error = error,
                     onRefresh = { loadGroups(true) },
                     onRetry = { loadGroups(false) },
-                    onOpen = { currentGroup = it },
+                    onOpen = { g ->
+                        if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                    },
                 )
             } else {
                 ChatView(

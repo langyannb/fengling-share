@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Checkbox
@@ -112,11 +113,13 @@ object Routes {
     const val UPDATE = "update?version={version}&url={url}&log={log}&mode={mode}&size={size}&date={date}"
     const val CONTRIBUTORS = "contributors"
     const val ACCOUNT = "account"
-    // 社交群组聊天 / 消息中心 (从「我的」页入口进入, 不占用底部 tab)
+    // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
     const val SOCIAL = "social"
+    const val SOCIAL_GROUP = "social/group/{groupId}"
     const val MESSAGES = "messages"
 
     fun detail(appId: Int) = "detail/$appId"
+    fun socialGroup(groupId: Int) = "social/group/$groupId"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -148,6 +151,7 @@ fun MainScreen(
         listOf(
             NavTab("首页", Icons.Filled.Home),
             NavTab("分类", Icons.Filled.Category),
+            NavTab("群组", Icons.Filled.Forum),
             NavTab("关于", Icons.Filled.Info),
         )
     }
@@ -308,6 +312,11 @@ fun MainScreen(
                                 },
                             )
                             1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                            2 -> SocialScreen(
+                                // 「群组」tab: 常驻列表页, 无返回栏; 点群组进全屏聊天
+                                onBack = null,
+                                onOpenGroup = { g -> navController.navigate(Routes.socialGroup(g.id)) },
+                            )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
                                 onOpenWeb = { url, title ->
@@ -397,6 +406,17 @@ fun MainScreen(
         composable(Routes.ACCOUNT) {
             AccountScreen(
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 群组聊天页 (从「群组」tab 点进来, 直接进入指定群)
+        composable(
+            route = Routes.SOCIAL_GROUP,
+            arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
+        ) { backStackEntry ->
+            SocialScreen(
+                onBack = { navController.popBackStack() },
+                initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
             )
         }
 
