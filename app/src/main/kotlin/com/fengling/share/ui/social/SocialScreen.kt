@@ -1,5 +1,6 @@
 package com.fengling.share.ui.social
 
+import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -107,16 +109,6 @@ private class ChatMenuState {
 }
 
 /**
- * SocialScreen - 社交页 (群组列表 → 群聊)
- *
- * 结构:
- * - 首页: PullToRefresh + 群组卡片列表 (群名/简介/公告摘要/消息数), 空状态可重试
- * - 聊天页: 消息气泡 (自己靠右主色 / 别人靠左灰色) + @高亮 + 3 秒轮询 + 长按撤回
- *
- * 轮询只在页面处于前台 (ON_RESUME) 时进行, 页面退到后台自动停止。
- */
-@Composable
-/**
  * 未登录时的群组占位页: 图标 + 文案 + 「去登录 / 注册」按钮。
  *
  * 底部 tab 的「群组」在未登录时会被拦到登录页, 这里兜住
@@ -164,6 +156,16 @@ private fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?)
     }
 }
 
+/**
+ * SocialScreen - 社交页 (群组列表 → 群聊)
+ *
+ * 结构:
+ * - 首页: PullToRefresh + 群组卡片列表 (群名/简介/公告摘要/消息数), 空状态可重试
+ * - 聊天页: 消息气泡 (自己靠右主色 / 别人靠左灰色) + @高亮 + 3 秒轮询 + 长按撤回
+ *
+ * 轮询只在页面处于前台 (ON_RESUME) 时进行, 页面退到后台自动停止。
+ */
+@Composable
 fun SocialScreen(
     /** 为 null 时作为底部 tab 常驻页使用 (顶部不显示返回按钮) */
     onBack: (() -> Unit)? = null,
@@ -520,6 +522,8 @@ private fun ChatView(
     onToast: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    // 复制消息用得到系统剪贴板
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     val foreground = rememberIsForeground()
 
@@ -830,7 +834,9 @@ private fun ChatView(
                 }
                 Spacer(Modifier.height(4.dp))
                 // 公告里的链接也能点开 (走内置浏览器); 点空白处仍然是展开/收起
-                LinkText(
+                // SelectionContainer: 公告文字可以长按选中复制 (用户 2026-10-04 要求)
+                SelectionContainer {
+                    LinkText(
                     content = noticeText,
                     color = MiuixTheme.colorScheme.onBackground,
                     linkColor = MiuixTheme.colorScheme.primary,
@@ -843,7 +849,8 @@ private fun ChatView(
                             noticeExpanded = !noticeExpanded
                         }
                     },
-                )
+                    )
+                }
             }
         }
 
@@ -1017,8 +1024,9 @@ private fun ChatView(
                 )
             },
             text = {
-                LinkText(
-                    content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
+                SelectionContainer {
+                    LinkText(
+                        content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
                     color = if (noticeText.isBlank()) {
                         MiuixTheme.colorScheme.onBackgroundVariant
                     } else {
@@ -1034,7 +1042,8 @@ private fun ChatView(
                             onToast("没有可用的内置浏览器")
                         }
                     },
-                )
+                    )
+                }
             },
             confirmButton = {
                 M3TextButton(onClick = { menu.showNoticeViewer = false }) {
@@ -1272,6 +1281,19 @@ private fun ChatView(
             },
             dismissButton = {
                 Row {
+                    // 复制: 直接把这句原文放进系统剪贴板 (长按消息 → 复制, 和 QQ 一样)
+                    M3TextButton(onClick = {
+                        actionTarget = null
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        if (cm != null) {
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("群消息", acting.content))
+                            onToast("已复制")
+                        } else {
+                            onToast("复制失败")
+                        }
+                    }) {
+                        Text(text = "复制", color = MiuixTheme.colorScheme.primary)
+                    }
                     if (canRecall) {
                         M3TextButton(onClick = {
                             actionTarget = null
