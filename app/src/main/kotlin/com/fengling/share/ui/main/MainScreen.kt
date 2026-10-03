@@ -88,6 +88,7 @@ import com.fengling.share.ui.components.navigation.LiquidBottomBar
 import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
+import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MyScreen
 import com.fengling.share.ui.update.UpdateScreen
@@ -110,6 +111,7 @@ object Routes {
     const val WEBVIEW = "webview?url={url}&title={title}&password={password}"
     const val UPDATE = "update?version={version}&url={url}&log={log}&mode={mode}&size={size}&date={date}"
     const val CONTRIBUTORS = "contributors"
+    const val ACCOUNT = "account"
 
     fun detail(appId: Int) = "detail/$appId"
     fun webview(url: String, title: String, password: String = "") =
@@ -329,6 +331,9 @@ fun MainScreen(
                                 onOpenContributors = {
                                     navController.navigate(Routes.CONTRIBUTORS)
                                 },
+                                onOpenAccount = {
+                                    navController.navigate(Routes.ACCOUNT)
+                                },
                             )
                         }
                     }
@@ -389,6 +394,13 @@ fun MainScreen(
         // 投稿名单页
         composable(Routes.CONTRIBUTORS) {
             ContributorsScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 账号页 (登录 / 注册 / 个人资料)
+        composable(Routes.ACCOUNT) {
+            AccountScreen(
                 onBack = { navController.popBackStack() },
             )
         }

@@ -70,6 +70,7 @@ import com.fengling.share.data.Contributor
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.data.userFriendlyMessage
@@ -95,6 +96,7 @@ fun MyScreen(
     onOpenWeb: (String, String) -> Unit = { _, _ -> },
     onOpenUpdate: (VersionInfo) -> Unit = {},
     onOpenContributors: () -> Unit = {},
+    onOpenAccount: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -114,6 +116,9 @@ fun MyScreen(
 
     val currentVersion = AppVersion.CURRENT
     val updateVersion = checkResult.substringAfter("v")
+
+    // 登录态 (UserStore 内部是 mutableStateOf, 登录/退出/改资料后账号卡片自动重组刷新)
+    val account = UserStore.current
 
     // 关于页配置 (官方频道/链接, 后端可配)
     var aboutConfig by remember { mutableStateOf(AboutConfig()) }
@@ -209,6 +214,94 @@ fun MyScreen(
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     textAlign = TextAlign.Center,
                 )
+            }
+        }
+
+        // ===== 账号卡片 (页面最顶部) =====
+        item {
+            SmallTitle(text = "账号")
+        }
+        item {
+            Card(
+                onClick = { onOpenAccount() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                cornerRadius = 16.dp,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 头像: 已登录显示真实头像 (无头像显示昵称首字), 未登录显示灰色占位
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (account != null && account.avatar.isNotEmpty()) {
+                            AsyncImage(
+                                model = account.avatar,
+                                contentDescription = null,
+                                modifier = Modifier.size(52.dp),
+                                contentScale = ContentScale.Crop,
+                            )
+                        } else if (account != null && account.displayName.isNotBlank()) {
+                            Text(
+                                text = account.initial,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.size(26.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = if (account != null) account.displayName else "点击登录 / 注册",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = account?.let { u -> u.bio.ifBlank { u.email } }?.takeIf { it.isNotBlank() }
+                                ?: "登录后可同步收藏、评论与头像",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    // 已登录右侧显示「编辑」, 未登录只留箭头
+                    if (account != null) {
+                        Text(
+                            text = "编辑",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(2.dp))
+                    }
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
 
