@@ -347,6 +347,8 @@ private fun ChatView(
     var refreshing by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
+    // 群公告默认折叠两行, 点一下展开全文
+    var noticeExpanded by remember { mutableStateOf(false) }
     var showMentionPicker by remember { mutableStateOf(false) }
     var mentionMembers by remember { mutableStateOf<List<SocialGroupMember>>(emptyList()) }
     var mentionLoading by remember { mutableStateOf(false) }
@@ -439,6 +441,40 @@ private fun ChatView(
     }
 
     Column(Modifier.fillMaxSize()) {
+        // ===== 群公告 (管理员设置, 成员进群就能看到, 点击展开全文) =====
+        if (group.notice.isNotBlank()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
+                    .clickable { noticeExpanded = !noticeExpanded }
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "群公告",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = if (noticeExpanded) "收起" else "展开",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = group.notice,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackground,
+                    maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
         Box(Modifier.weight(1f)) {
             PullToRefresh(
                 isRefreshing = refreshing,
