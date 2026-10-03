@@ -497,6 +497,14 @@ private fun ChatView(
     var locateId by remember { mutableStateOf(locateMessageId) }
     /** 正在高亮闪烁的消息 id (定位到的消息会给个底色) */
     var highlightId by remember { mutableStateOf(0) }
+    // 点击头像: 管理员打开成员操作面板 (可以 @他 / 禁言 / 解除禁言)
+    var memberTarget by remember { mutableStateOf<SocialMessage?>(null) }
+    var memberInfo by remember { mutableStateOf<SocialGroupMember?>(null) }
+    var memberLoading by remember { mutableStateOf(false) }
+    /** 选择的禁言时长 (分钟), 0 表示永久 */
+    var muteMinutes by remember { mutableStateOf(60) }
+    var muteReason by remember { mutableStateOf("") }
+    var muteSaving by remember { mutableStateOf(false) }
 
     val isAdmin = me != null && me.role == "admin"
 
@@ -637,6 +645,66 @@ private fun ChatView(
         }
     }
 
+    /**
+     * 点击对方头像: 管理员打开「成员操作」面板可以禁言, 普通成员直接 @ 他。
+     * 禁言是全站生效 (group_id = 0), 被禁言的人仍然能看消息, 只是不能发言。
+     */
+    fun openMemberPanel(msg: SocialMessage) {
+        if (!isAdmin) {
+            insertMention(
+                SocialGroupMember(
+                    id = msg.userId,
+                    nickname = msg.nickname,
+                    username = "",
+                    avatar = msg.avatar,
+                    role = msg.role,
+                ),
+            )
+            focusInput()
+            onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
+            return
+        }
+        memberTarget = msg
+        memberInfo = null
+        muteMinutes = 60
+        muteReason = ""
+        memberLoading = true
+        scope.launch {
+            ApiClient.socialGroupMembers(group.id)
+                .onSuccess { list ->
+                    mentionMembers = list
+                    memberInfo = list.firstOrNull { it.id == msg.userId }
+                }
+                .onFailure { e -> onToast(e.message ?: "读取成员信息失败") }
+            memberLoading = false
+        }
+    }
+
+    /** 管理员禁言 / 解除禁言: minutes 传 null 表示解除禁言 */
+    fun doMute(target: SocialMessage, minutes: Int?) {
+        if (muteSaving) return
+        muteSaving = true
+        scope.launch {
+            if (minutes == null) {
+                ApiClient.adminUserUnmute(target.userId, 0)
+                    .onSuccess { n ->
+                        onToast(if (n > 0) "已解除禁言" else "该用户当前未被禁言")
+                        memberInfo = memberInfo?.copy(muted = false, muteLeft = "", muteReason = "")
+                    }
+                    .onFailure { e -> onToast(e.message ?: "操作失败") }
+            } else {
+                val why = muteReason.trim()
+                ApiClient.adminUserMute(target.userId, minutes, 0, why)
+                    .onSuccess { left ->
+                        onToast("已禁言 " + target.nickname.ifBlank { "该用户" } + " (" + left + ")")
+                        memberInfo = memberInfo?.copy(muted = true, muteLeft = left, muteReason = why)
+                    }
+                    .onFailure { e -> onToast(e.message ?: "操作失败") }
+            }
+            muteSaving = false
+        }
+    }
+
     fun doSend() {
         val text = input.text.trim()
         if (text.isEmpty() || sending) return
@@ -751,6 +819,7 @@ private fun ChatView(
                                         onToast("没有可用的内置浏览器")
                                     }
                                 },
+                                onAvatarTap = { openMemberPanel(msg) },
                                 // 长按对方头像 = @ 他
                                 onAvatarLongPress = {
                                     insertMention(
@@ -1092,6 +1161,15 @@ private fun ChatView(
                                             color = MiuixTheme.colorScheme.primary,
                                         )
                                     }
+                                    // 已被管理员禁言的成员: 标出来, 顺便显示还剩多久
+                                    if (m.muted) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "已禁言" + m.muteLeft.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
+                                            fontSize = 11.sp,
+                                            color = Color(0xFFE5484D),
+                                        )
+                                    }
                                 }
                             }
                             }
@@ -1152,6 +1230,146 @@ private fun ChatView(
         )
     }
 
+    // ===== 点击头像: 成员操作 (管理员可设置禁言时长) =====
+    val memberActing = memberTarget
+    if (memberActing != null) {
+        val info = memberInfo
+        val muted = info?.muted == true
+        AlertDialog(
+            onDismissRequest = { memberTarget = null },
+            title = {
+                Text(
+                    text = "成员操作",
+                    color = MiuixTheme.colorScheme.onBackground,
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = memberActing.nickname.ifBlank { "群成员" } +
+                            if (memberActing.role == "admin") " · 管理员" else "",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = when {
+                            memberLoading -> "读取禁言状态中…"
+                            muted -> "当前状态: 已禁言" +
+                                (info?.muteLeft?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") +
+                                (info?.muteReason?.takeIf { it.isNotBlank() }?.let { ", 原因: $it" } ?: "")
+                            else -> "当前状态: 正常"
+                        },
+                        fontSize = 12.sp,
+                        color = if (muted) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    if (memberActing.role == "admin") {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "管理员不能被禁言",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    } else {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "禁言时长 (全站生效)",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        MUTE_OPTIONS.chunked(3).forEach { rowItems ->
+                            Row {
+                                rowItems.forEach { item ->
+                                    val picked = muteMinutes == item.second
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (picked) {
+                                                    MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                                } else {
+                                                    MiuixTheme.colorScheme.surfaceContainerHigh
+                                                },
+                                            )
+                                            .clickable { muteMinutes = item.second }
+                                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                                    ) {
+                                        Text(
+                                            text = item.first,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (picked) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = if (picked) {
+                                                MiuixTheme.colorScheme.primary
+                                            } else {
+                                                MiuixTheme.colorScheme.onBackgroundVariant
+                                            },
+                                        )
+                                    }
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                            }
+                            Spacer(Modifier.height(6.dp))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = muteReason,
+                            onValueChange = { if (it.length <= 60) muteReason = it },
+                            label = { Text("禁言原因 (可选, 会告知对方)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (memberActing.role != "admin") {
+                    M3TextButton(
+                        enabled = !muteSaving,
+                        onClick = { doMute(memberActing, muteMinutes) },
+                    ) {
+                        Text(
+                            text = if (muteSaving) "处理中…" else if (muted) "重新禁言" else "禁言",
+                            color = Color(0xFFE5484D),
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                Row {
+                    if (muted && memberActing.role != "admin") {
+                        M3TextButton(
+                            enabled = !muteSaving,
+                            onClick = { doMute(memberActing, null) },
+                        ) {
+                            Text(text = "解除禁言", color = MiuixTheme.colorScheme.primary)
+                        }
+                    }
+                    M3TextButton(onClick = {
+                        val t = memberActing
+                        memberTarget = null
+                        insertMention(
+                            SocialGroupMember(
+                                id = t.userId,
+                                nickname = t.nickname,
+                                username = "",
+                                avatar = t.avatar,
+                                role = t.role,
+                            ),
+                        )
+                        focusInput()
+                    }) {
+                        Text(text = "@他", color = MiuixTheme.colorScheme.primary)
+                    }
+                    M3TextButton(onClick = { memberTarget = null }) {
+                        Text(text = "关闭", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                    }
+                }
+            },
+        )
+    }
+
     // ===== 长按撤回确认 =====
     val target = recallTarget
     if (target != null) {
@@ -1205,6 +1423,7 @@ private fun MessageRow(
     canRecall: Boolean,
     onLongPress: () -> Unit,
     onAvatarLongPress: () -> Unit = {},
+    onAvatarTap: () -> Unit = {},
     onOpenLink: (String) -> Unit = {},
     /** 从通知定位过来的那条消息: 给个底色方便一眼看到 */
     highlight: Boolean = false,
@@ -1234,10 +1453,13 @@ private fun MessageRow(
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         if (!mine) {
-            // 长按头像 @ 他
+            // 长按头像 @ 他; 点击头像 (管理员) 打开成员操作面板
             Box(
                 modifier = Modifier.pointerInput(msg.userId) {
-                    detectTapGestures(onLongPress = { onAvatarLongPress() })
+                    detectTapGestures(
+                        onLongPress = { onAvatarLongPress() },
+                        onTap = { onAvatarTap() },
+                    )
                 },
             ) {
                 MessageAvatar(url = msg.avatar, name = msg.nickname)
@@ -1474,6 +1696,16 @@ private fun CenterHint(text: String) {
 }
 
 /** 轻量操作按钮 (不依赖 AccountScreen 的私有按钮组件) */
+/** 禁言时长选项: 文案 → 分钟数 (0 = 永久) */
+private val MUTE_OPTIONS = listOf(
+    "10 分钟" to 10,
+    "1 小时" to 60,
+    "1 天" to 1440,
+    "7 天" to 10080,
+    "30 天" to 43200,
+    "永久" to 0,
+)
+
 @Composable
 private fun SmallActionButton(text: String, onClick: () -> Unit) {
     Card(

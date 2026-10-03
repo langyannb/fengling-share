@@ -404,6 +404,40 @@ object ApiClient {
     }
 
     /**
+     * 管理员: 禁言某个用户 (group_id = 0 表示全站禁言)
+     * @param minutes 禁言分钟数, 0 表示永久 (服务端上限 300 天)
+     * @return 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」
+     */
+    suspend fun adminUserMute(userId: Int, minutes: Int, groupId: Int = 0, reason: String = ""): Result<String> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val d = request(
+                    "admin_user_mute",
+                    mapOf<String, Any?>(
+                        "user_id" to userId,
+                        "group_id" to groupId,
+                        "minutes" to minutes,
+                        "reason" to reason,
+                    ),
+                    UserStore.token,
+                ).optJSONObject("data")
+                jsonStr(d ?: org.json.JSONObject(), "left_text")
+            }
+        }
+
+    /** 管理员: 解除禁言, 返回实际解除的记录数 (0 = 该用户本来就没被禁言) */
+    suspend fun adminUserUnmute(userId: Int, groupId: Int = 0): Result<Int> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                request(
+                    "admin_user_unmute",
+                    mapOf<String, Any?>("user_id" to userId, "group_id" to groupId),
+                    UserStore.token,
+                ).optJSONObject("data")?.optInt("removed", 0) ?: 0
+            }
+        }
+
+    /**
      * 群消息列表 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
      */
@@ -695,6 +729,11 @@ data class SocialGroupMember(
     val username: String = "",
     val avatar: String = "",
     val role: String = "",
+    /** 是否被管理员禁言 (禁言只影响发言, 仍然能看消息) */
+    val muted: Boolean = false,
+    /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
+    val muteLeft: String = "",
+    val muteReason: String = "",
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
@@ -703,6 +742,9 @@ data class SocialGroupMember(
             username = jsonStr(j, "username"),
             avatar = jsonStr(j, "avatar"),
             role = jsonStr(j, "role"),
+            muted = j.optInt("muted", 0) == 1,
+            muteLeft = jsonStr(j, "mute_left"),
+            muteReason = jsonStr(j, "mute_reason"),
         )
     }
 }
