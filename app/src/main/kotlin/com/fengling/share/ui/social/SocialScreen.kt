@@ -131,16 +131,22 @@ fun SocialScreen(
         }
     }
 
-    // 聊天页里系统返回键先回群组列表, 不直接退出社交页
-    BackHandler(enabled = currentGroup != null) { currentGroup = null }
+    // 返回键: 全屏路由模式(从「群组」tab 点进某个群)直接回上一页, 一次到位;
+    // 内嵌模式(群组列表 + 聊天同屏)则先回到群组列表。用户反馈原来要点两次才回去。
+    BackHandler(enabled = currentGroup != null || onBack != null) {
+        if (onBack != null) onBack() else currentGroup = null
+    }
 
     Scaffold(
         modifier = modifier,
         topBar = {
             val g = currentGroup
             when {
-                // 聊天页: 返回先回群组列表
-                g != null -> AppTopBar(title = g.name, onBack = { currentGroup = null })
+                // 聊天页: 全屏路由模式直接回上一页, 内嵌模式先回群组列表
+                g != null -> AppTopBar(
+                    title = g.name,
+                    onBack = { if (onBack != null) onBack() else currentGroup = null },
+                )
                 onBack != null -> AppTopBar(title = "群组", onBack = onBack)
                 // tab 常驻页: 无返回按钮
                 else -> AppTopBar(title = "群组")
