@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.AlertDialog
@@ -115,6 +116,54 @@ private class ChatMenuState {
  * 轮询只在页面处于前台 (ON_RESUME) 时进行, 页面退到后台自动停止。
  */
 @Composable
+/**
+ * 未登录时的群组占位页: 图标 + 文案 + 「去登录 / 注册」按钮。
+ *
+ * 底部 tab 的「群组」在未登录时会被拦到登录页, 这里兜住
+ * 「从通知点进某个群」这类直达路径, 避免出现一片空白。
+ */
+@Composable
+private fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        topBar = { if (onBack != null) AppTopBar(title = "群组", onBack = onBack) },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 36.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Forum,
+                contentDescription = null,
+                tint = MiuixTheme.colorScheme.primary,
+                modifier = Modifier.size(54.dp),
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "登录后加入群聊",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MiuixTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "登录后可以参与群聊、@ 提醒他人, 并接收群消息通知",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(22.dp))
+            if (onNeedLogin != null) {
+                SmallActionButton(text = "去登录 / 注册", onClick = onNeedLogin)
+            }
+        }
+    }
+}
+
 fun SocialScreen(
     /** 为 null 时作为底部 tab 常驻页使用 (顶部不显示返回按钮) */
     onBack: (() -> Unit)? = null,
@@ -128,10 +177,18 @@ fun SocialScreen(
     openNotice: Boolean = false,
     /** 消息里的链接: 交给内置浏览器打开 */
     onOpenWeb: ((url: String, title: String) -> Unit)? = null,
+    /** 未登录时点「去登录」的回调 (跳账号页登录/注册) */
+    onNeedLogin: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // 未登录: 群组内容一律不给看, 直接引导去登录 (用户 2026-10-04 要求)
+    if (!UserStore.isLoggedIn()) {
+        LoginRequiredView(onBack = onBack, onNeedLogin = onNeedLogin)
+        return
+    }
 
     var groups by remember { mutableStateOf<List<SocialGroup>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }

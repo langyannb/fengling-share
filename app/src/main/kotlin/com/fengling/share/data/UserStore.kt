@@ -27,6 +27,13 @@ data class User(
     /** 首字占位 (昵称/用户名都为空时给个默认字) */
     val initial: String get() = displayName.take(1).ifBlank { "铃" }
 
+    /**
+     * 头像地址: 服务端没给头像时, 用 QQ 邮箱里的 QQ 号取腾讯公开的 qlogo 头像兜底。
+     * (注册 / 邮箱验证时服务端也会把同一个地址写进 users.avatar, 这里只是双保险,
+     *  顺便兼容「以前就用 QQ 邮箱注册、当时还没有这个功能」的老账号)
+     */
+    val avatarUrl: String get() = avatar.ifBlank { qqAvatarOf(email) }
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("username", username)
@@ -72,6 +79,15 @@ data class User(
  * [current] / [hasToken] 是 mutableStateOf, 登录、改资料、退出时同步更新,
  * 所以相关页面 (关于页账号卡片 / 账号页) 会自动刷新, 不需要手动通知。
  */
+/** QQ 邮箱 -> QQ 号 (非 QQ 邮箱返回 null) */
+private val QQ_EMAIL_RE = Regex("^(\\d{5,12})@(qq\\.com|vip\\.qq\\.com)$", RegexOption.IGNORE_CASE)
+
+/** 用 QQ 号拼腾讯公开的 qlogo 头像地址 (服务端 qq_avatar_from_email 用的是同一个) */
+internal fun qqAvatarOf(email: String): String {
+    val qq = QQ_EMAIL_RE.find(email.trim())?.groupValues?.get(1) ?: return ""
+    return "https://q1.qlogo.cn/g?b=qq&nk=$qq&s=640"
+}
+
 object UserStore {
 
     private const val PREFS_NAME = "fengling_user"

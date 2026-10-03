@@ -70,6 +70,7 @@ import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.Settings
+import com.fengling.share.data.UserStore
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
@@ -104,6 +105,9 @@ import java.util.Locale
 
 /** 底部导航 tab */
 private data class NavTab(val label: String, val icon: ImageVector)
+
+/** 「群组」在底部 tab 里的下标 (未登录时会被拦到登录页) */
+private const val SOCIAL_TAB_PAGE = 2
 
 /** 导航路由 */
 object Routes {
@@ -157,6 +161,19 @@ fun MainScreen(
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // 未登录时左右滑动也不许停在「群组」页 (3 = 0 首页 / 1 分类 / 2 群组 / 3 关于)
+    var lastAllowedPage by remember { mutableStateOf(0) }
+    LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress) {
+            if (pagerState.currentPage == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
+                navController.navigate(Routes.ACCOUNT)
+                pagerState.animateScrollToPage(lastAllowedPage)
+            } else {
+                lastAllowedPage = pagerState.currentPage
+            }
+        }
+    }
 
     // ===== 外部应用跳转确认 (2026-10-02: 用户要求跳转前先问一句) =====
     // 以前 mailto/tel/mqqwpa/uclink 等协议是直接 startActivity 抢跳, 现在一律先弹确认框
@@ -318,6 +335,7 @@ fun MainScreen(
                                 onOpenGroup = { g -> navController.navigate(Routes.socialGroup(g.id)) },
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
+                                onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
                             )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
@@ -347,7 +365,12 @@ fun MainScreen(
                     tabs = tabs.map { it.label to it.icon },
                     pagerState = pagerState,
                     onTabSelected = { index ->
-                        scope.launch { pagerState.animateScrollToPage(index) }
+                        if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
+                            // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)
+                            navController.navigate(Routes.ACCOUNT)
+                        } else {
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        }
                     },
                     backdrop = backdrop,
                     modifier = Modifier.align(Alignment.BottomCenter),
@@ -426,6 +449,7 @@ fun MainScreen(
                     navController.popBackStack(Routes.MAIN, false)
                 },
                 initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
                 initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
                 openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
                 // 群聊消息里的链接: 内置浏览器打开

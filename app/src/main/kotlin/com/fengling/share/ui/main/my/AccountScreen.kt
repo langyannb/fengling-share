@@ -459,7 +459,7 @@ private fun ProfileView(me: User) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(contentAlignment = Alignment.Center) {
-                AvatarCircle(url = me.avatar, name = me.displayName, size = 88.dp)
+                AvatarCircle(url = me.avatarUrl, name = me.displayName, size = 88.dp)
                 if (uploading) {
                     Box(
                         modifier = Modifier

@@ -255,9 +255,9 @@ fun MyScreen(
                             .background(MiuixTheme.colorScheme.surfaceContainerHigh),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (account != null && account.avatar.isNotEmpty()) {
+                        if (account != null && account.avatarUrl.isNotEmpty()) {
                             AsyncImage(
-                                model = account.avatar,
+                                model = account.avatarUrl,
                                 contentDescription = null,
                                 modifier = Modifier.size(52.dp),
                                 contentScale = ContentScale.Crop,
