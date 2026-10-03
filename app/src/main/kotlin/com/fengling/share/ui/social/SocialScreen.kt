@@ -46,10 +46,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -470,6 +473,12 @@ private fun ChatView(
     var refreshing by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
+    // 长按消息弹出的操作菜单 (引用 / 撤回)
+    var actionTarget by remember { mutableStateOf<SocialMessage?>(null) }
+    // 正在引用回复的那条消息 (null = 普通发送)
+    var quoteTarget by remember { mutableStateOf<SocialMessage?>(null) }
+    val inputFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     // 群公告默认折叠两行, 点一下展开全文
     var noticeExpanded by remember { mutableStateOf(false) }
     // 群公告本地副本: 管理员在客户端改完立刻生效, 不必等下次拉群资料
@@ -593,6 +602,27 @@ private fun ChatView(
         atAllPicked = true
     }
 
+    /** 让输入框拿到焦点并弹出键盘 (长按头像 @ / 引用回复之后直接就能打字) */
+    fun focusInput() {
+        inputFocus.requestFocus()
+        keyboard?.show()
+    }
+
+    /** 引用回复: 记住被引用的消息, 自动 @ 对方, 并把焦点交给输入框 */
+    fun quoteMessage(m: SocialMessage) {
+        quoteTarget = m
+        insertMention(
+            SocialGroupMember(
+                id = m.userId,
+                nickname = m.nickname,
+                username = "",
+                avatar = m.avatar,
+                role = m.role,
+            ),
+        )
+        focusInput()
+    }
+
     /** 打开 @ 选择器 (首次打开时拉取成员候选) */
     fun openMentionPicker() {
         mentionQuery = ""
@@ -614,11 +644,19 @@ private fun ChatView(
         scope.launch {
             // 管理员 + (选过「所有人」或内容里写了 @所有人) -> 全体提醒
             val wantAll = isAdmin && (atAllPicked || text.contains("@所有人"))
-            ApiClient.socialSend(group.id, text, (resolveMentionIds(text) + pickedAt).distinct(), atAll = wantAll)
+            val quoteId = quoteTarget?.id ?: 0
+            ApiClient.socialSend(
+                group.id,
+                text,
+                (resolveMentionIds(text) + pickedAt).distinct(),
+                atAll = wantAll,
+                quoteId = quoteId,
+            )
                 .onSuccess {
                     input = TextFieldValue("")
                     pickedAt = emptyList()
                     atAllPicked = false
+                    quoteTarget = null
                     val after = messages.maxOfOrNull { it.id } ?: 0
                     ApiClient.socialMessages(group.id, afterId = after)
                         .onSuccess { new -> mergeNew(new) }
@@ -703,7 +741,7 @@ private fun ChatView(
                                 msg = msg,
                                 mine = mine,
                                 canRecall = !msg.isRecalled && (mine || isAdmin),
-                                onLongPress = { recallTarget = msg },
+                                onLongPress = { actionTarget = msg },
                                 highlight = highlightId == msg.id,
                                 // 消息里的链接: 用内置浏览器打开
                                 onOpenLink = { url ->
@@ -724,12 +762,55 @@ private fun ChatView(
                                             role = msg.role,
                                         ),
                                     )
+                                    focusInput()
                                     onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
                                 },
                             )
                         }
                     }
                 }
+            }
+        }
+
+        // ===== 引用预览 (长按消息 -> 引用) =====
+        val quoting = quoteTarget
+        if (quoting != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .height(30.dp)
+                        .background(MiuixTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "回复 " + quoting.nickname.ifBlank { "群成员" },
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = quoting.content.replace('\n', ' '),
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "取消",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.clickable { quoteTarget = null },
+                )
             }
         }
 
@@ -777,7 +858,9 @@ private fun ChatView(
                         color = MiuixTheme.colorScheme.onBackground,
                     ),
                     maxLines = 4,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(inputFocus),
                 )
             }
             Spacer(Modifier.width(8.dp))
@@ -1024,6 +1107,51 @@ private fun ChatView(
         )
     }
 
+    // ===== 长按消息: 引用 / 撤回 =====
+    val acting = actionTarget
+    if (acting != null) {
+        val canRecall = !acting.isRecalled && (me != null && acting.userId == me.id || isAdmin)
+        AlertDialog(
+            onDismissRequest = { actionTarget = null },
+            title = {
+                Text(text = "消息操作", color = MiuixTheme.colorScheme.onBackground)
+            },
+            text = {
+                Text(
+                    text = acting.nickname.ifBlank { "群成员" } + ": " +
+                        acting.content.replace('\n', ' ').take(60),
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            confirmButton = {
+                M3TextButton(onClick = {
+                    actionTarget = null
+                    quoteMessage(acting)
+                }) {
+                    Text(text = "引用", color = MiuixTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                Row {
+                    if (canRecall) {
+                        M3TextButton(onClick = {
+                            actionTarget = null
+                            recallTarget = acting
+                        }) {
+                            Text(text = "撤回", color = Color(0xFFE5484D))
+                        }
+                    }
+                    M3TextButton(onClick = { actionTarget = null }) {
+                        Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                    }
+                }
+            },
+        )
+    }
+
     // ===== 长按撤回确认 =====
     val target = recallTarget
     if (target != null) {
@@ -1167,6 +1295,39 @@ private fun MessageRow(
                 )
             }
             Spacer(Modifier.height(3.dp))
+            // 引用回复: 被引用的原消息 (昵称 + 内容)
+            if (msg.quoteNickname.isNotBlank() || msg.quoteContent.isNotBlank()) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 250.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (mine) {
+                                MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+                            } else {
+                                MiuixTheme.colorScheme.surfaceContainerHigh
+                            },
+                        )
+                        .padding(horizontal = 9.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = msg.quoteNickname.ifBlank { "群成员" },
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = msg.quoteContent.replace('\n', ' '),
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+            }
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
@@ -1206,7 +1367,7 @@ private fun MessageRow(
                     onTextLayout = { textLayout = it },
                     modifier = Modifier.pointerInput(msg.id, canRecall) {
                         detectTapGestures(
-                            onLongPress = { if (canRecall) onLongPress() },
+                            onLongPress = { onLongPress() },
                             onTap = { pos ->
                                 val lr = textLayout
                                 if (lr != null) {

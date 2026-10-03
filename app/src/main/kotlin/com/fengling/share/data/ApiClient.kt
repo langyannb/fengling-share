@@ -434,6 +434,8 @@ object ApiClient {
         at: List<Int> = emptyList(),
         /** 管理员专用: @所有人 (全体提醒) */
         atAll: Boolean = false,
+        /** 引用回复: 被引用的消息 id (0 = 不引用) */
+        quoteId: Int = 0,
     ): Result<Int> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
@@ -441,6 +443,7 @@ object ApiClient {
                 params["at"] = JSONArray().apply { at.forEach { put(it) } }
             }
             if (atAll) params["at_all"] = 1
+            if (quoteId > 0) params["quote_id"] = quoteId
             request("social_send", params, UserStore.token)
                 .optJSONObject("data")?.optInt("id", 0) ?: 0
         }
@@ -713,6 +716,10 @@ data class SocialMessage(
     val role: String = "user",
     val content: String = "",
     val at: List<Int> = emptyList(),
+    /** 引用的原消息 (0 = 不是引用) */
+    val quoteId: Int = 0,
+    val quoteNickname: String = "",
+    val quoteContent: String = "",
     val isRecalled: Boolean = false,
     val createdAt: String = "",
     val timeText: String = "",
@@ -733,6 +740,9 @@ data class SocialMessage(
                 } else {
                     (0 until atArr.length()).map { atArr.optInt(it, 0) }
                 },
+                quoteId = j.optInt("quote_id", 0),
+                quoteNickname = jsonStr(j, "quote_nickname"),
+                quoteContent = jsonStr(j, "quote_content"),
                 isRecalled = jsonBool(j, "is_recalled"),
                 createdAt = jsonStr(j, "created_at"),
                 timeText = jsonStr(j, "time_text"),
