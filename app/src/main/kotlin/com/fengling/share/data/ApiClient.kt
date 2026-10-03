@@ -430,6 +430,20 @@ object ApiClient {
     }
 
     /**
+     * 设置群公告 (仅管理员)。最长 500 字, 传空串即清空公告。
+     */
+    suspend fun socialSetNotice(groupId: Int, notice: String): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request(
+                "social_group_notice_set",
+                mapOf("group_id" to groupId, "notice" to notice),
+                UserStore.token,
+            )
+            Unit
+        }
+    }
+
+    /**
      * 消息通知列表 (需登录)
      * @return Triple(list, total, unread)
      */

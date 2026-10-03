@@ -349,6 +349,11 @@ private fun ChatView(
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
     // 群公告默认折叠两行, 点一下展开全文
     var noticeExpanded by remember { mutableStateOf(false) }
+    // 群公告本地副本: 管理员在客户端改完立刻生效, 不必等下次拉群资料
+    var noticeText by remember(group.id) { mutableStateOf(group.notice) }
+    var showNoticeEditor by remember { mutableStateOf(false) }
+    var noticeDraft by remember { mutableStateOf("") }
+    var noticeSaving by remember { mutableStateOf(false) }
     var showMentionPicker by remember { mutableStateOf(false) }
     var mentionMembers by remember { mutableStateOf<List<SocialGroupMember>>(emptyList()) }
     var mentionLoading by remember { mutableStateOf(false) }
@@ -442,7 +447,7 @@ private fun ChatView(
 
     Column(Modifier.fillMaxSize()) {
         // ===== 群公告 (管理员设置, 成员进群就能看到, 点击展开全文) =====
-        if (group.notice.isNotBlank()) {
+        if (noticeText.isNotBlank()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -458,6 +463,18 @@ private fun ChatView(
                         color = MiuixTheme.colorScheme.primary,
                     )
                     Spacer(Modifier.weight(1f))
+                    if (isAdmin) {
+                        Text(
+                            text = "编辑",
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.clickable {
+                                noticeDraft = noticeText
+                                showNoticeEditor = true
+                            },
+                        )
+                        Spacer(Modifier.width(10.dp))
+                    }
                     Text(
                         text = if (noticeExpanded) "收起" else "展开",
                         fontSize = 11.sp,
@@ -466,7 +483,7 @@ private fun ChatView(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = group.notice,
+                    text = noticeText,
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onBackground,
                     maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
@@ -511,6 +528,17 @@ private fun ChatView(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 管理员: 没有公告时也能从这里写一条
+            if (isAdmin && noticeText.isBlank()) {
+                SmallActionButton(
+                    text = "公告",
+                    onClick = {
+                        noticeDraft = ""
+                        showNoticeEditor = true
+                    },
+                )
+                Spacer(Modifier.width(6.dp))
+            }
             Box(Modifier.weight(1f)) {
                 OutlinedTextField(
                     value = input,
@@ -541,6 +569,68 @@ private fun ChatView(
                 onClick = { doSend() },
             )
         }
+    }
+
+    // ===== 群公告编辑 (仅管理员) =====
+    if (showNoticeEditor) {
+        AlertDialog(
+            onDismissRequest = { showNoticeEditor = false },
+            title = {
+                Text(text = "群公告", color = MiuixTheme.colorScheme.onBackground)
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "发布后会显示在群聊顶部, 所有成员进群都能看到。留空则清空公告。",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = noticeDraft,
+                        onValueChange = { if (it.length <= 500) noticeDraft = it },
+                        placeholder = { Text(text = "写点群规、活动或者通知…", fontSize = 13.sp) },
+                        textStyle = TextStyle(
+                            fontSize = 14.sp,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        ),
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = noticeDraft.length.toString() + " / 500",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                M3TextButton(
+                    onClick = {
+                        if (noticeSaving) return@M3TextButton
+                        noticeSaving = true
+                        scope.launch {
+                            ApiClient.socialSetNotice(group.id, noticeDraft.trim())
+                                .onSuccess {
+                                    noticeText = noticeDraft.trim()
+                                    showNoticeEditor = false
+                                    onToast("公告已更新")
+                                }
+                                .onFailure { e -> onToast(e.message ?: "公告保存失败") }
+                            noticeSaving = false
+                        }
+                    },
+                ) {
+                    Text(text = if (noticeSaving) "保存中…" else "保存", color = MiuixTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                M3TextButton(onClick = { showNoticeEditor = false }) {
+                    Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                }
+            },
+        )
     }
 
     // ===== @ 成员选择 =====
