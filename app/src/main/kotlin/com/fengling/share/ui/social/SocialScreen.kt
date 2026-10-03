@@ -647,7 +647,8 @@ private fun ChatView(
 
     /**
      * 点击对方头像: 管理员打开「成员操作」面板可以禁言, 普通成员直接 @ 他。
-     * 禁言是全站生效 (group_id = 0), 被禁言的人仍然能看消息, 只是不能发言。
+     * 禁言和 QQ 群一致, 只对当前群生效 (后台「用户管理」里则是全站禁言);
+     * 被禁言的人仍然能看消息, 只是不能在本群发言。
      */
     fun openMemberPanel(msg: SocialMessage) {
         if (!isAdmin) {
@@ -686,7 +687,7 @@ private fun ChatView(
         muteSaving = true
         scope.launch {
             if (minutes == null) {
-                ApiClient.adminUserUnmute(target.userId, 0)
+                ApiClient.adminUserUnmute(target.userId, group.id)
                     .onSuccess { n ->
                         onToast(if (n > 0) "已解除禁言" else "该用户当前未被禁言")
                         memberInfo = memberInfo?.copy(muted = false, muteLeft = "", muteReason = "")
@@ -694,7 +695,7 @@ private fun ChatView(
                     .onFailure { e -> onToast(e.message ?: "操作失败") }
             } else {
                 val why = muteReason.trim()
-                ApiClient.adminUserMute(target.userId, minutes, 0, why)
+                ApiClient.adminUserMute(target.userId, minutes, group.id, why)
                     .onSuccess { left ->
                         onToast("已禁言 " + target.nickname.ifBlank { "该用户" } + " (" + left + ")")
                         memberInfo = memberInfo?.copy(muted = true, muteLeft = left, muteReason = why)
@@ -1274,7 +1275,7 @@ private fun ChatView(
                     } else {
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            text = "禁言时长 (全站生效)",
+                            text = "禁言时长 (只在本群生效)",
                             fontSize = 12.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
