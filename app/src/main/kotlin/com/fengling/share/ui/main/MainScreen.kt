@@ -88,7 +88,9 @@ import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
+import com.fengling.share.ui.main.my.MessagesScreen
 import com.fengling.share.ui.main.my.MyScreen
+import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
@@ -110,6 +112,9 @@ object Routes {
     const val UPDATE = "update?version={version}&url={url}&log={log}&mode={mode}&size={size}&date={date}"
     const val CONTRIBUTORS = "contributors"
     const val ACCOUNT = "account"
+    // 社交群组聊天 / 消息中心 (从「我的」页入口进入, 不占用底部 tab)
+    const val SOCIAL = "social"
+    const val MESSAGES = "messages"
 
     fun detail(appId: Int) = "detail/$appId"
     fun webview(url: String, title: String, password: String = "") =
@@ -318,6 +323,12 @@ fun MainScreen(
                                 onOpenAccount = {
                                     navController.navigate(Routes.ACCOUNT)
                                 },
+                                onOpenSocial = {
+                                    navController.navigate(Routes.SOCIAL)
+                                },
+                                onOpenMessages = {
+                                    navController.navigate(Routes.MESSAGES)
+                                },
                             )
                         }
                     }
@@ -386,6 +397,23 @@ fun MainScreen(
         composable(Routes.ACCOUNT) {
             AccountScreen(
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 社交页 (群组列表 + 群聊)
+        composable(Routes.SOCIAL) {
+            SocialScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 消息中心 (通知列表; link 走统一链接分流, http(s) 内置浏览器)
+        composable(Routes.MESSAGES) {
+            MessagesScreen(
+                onBack = { navController.popBackStack() },
+                onOpenWeb = { url, title ->
+                    openLink(url, title)
+                },
             )
         }
 

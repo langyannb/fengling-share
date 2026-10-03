@@ -97,6 +97,8 @@ fun MyScreen(
     onOpenUpdate: (VersionInfo) -> Unit = {},
     onOpenContributors: () -> Unit = {},
     onOpenAccount: () -> Unit = {},
+    onOpenSocial: () -> Unit = {},
+    onOpenMessages: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -115,6 +117,17 @@ fun MyScreen(
     var updateDate by remember { mutableStateOf("") }
 
     val currentVersion = AppVersion.CURRENT
+
+    // 消息中心未读数: 未登录清零, 登录后拉一次 (消息页内也会实时同步)
+    LaunchedEffect(UserStore.hasToken) {
+        if (UserStore.hasToken) {
+            ApiClient.notifications(page = 1, pageSize = 1).onSuccess { (_, _, unread) ->
+                MessageBadge.update(unread)
+            }
+        } else {
+            MessageBadge.update(0)
+        }
+    }
     val updateVersion = checkResult.substringAfter("v")
 
     // 登录态 (UserStore 内部是 mutableStateOf, 登录/退出/改资料后账号卡片自动重组刷新)
@@ -302,6 +315,52 @@ fun MyScreen(
                         modifier = Modifier.size(18.dp),
                     )
                 }
+            }
+        }
+
+        // ===== 社交 =====
+        item {
+            SmallTitle(text = "社交")
+        }
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                cornerRadius = 16.dp,
+            ) {
+                SettingRow(
+                    title = "社交群组",
+                    summary = "加入群聊, 和大家一起交流分享",
+                    icon = Icons.Filled.Favorite,
+                    onClick = onOpenSocial,
+                )
+                SettingDivider()
+                SettingRow(
+                    title = "消息中心",
+                    summary = "系统通知 / 管理员公告 / 群聊提及",
+                    leading = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Email,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            if (MessageBadge.unread > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFE5484D)),
+                                )
+                            }
+                        }
+                    },
+                    value = if (MessageBadge.unread > 0) "${MessageBadge.unread} 条未读" else null,
+                    onClick = onOpenMessages,
+                )
             }
         }
 

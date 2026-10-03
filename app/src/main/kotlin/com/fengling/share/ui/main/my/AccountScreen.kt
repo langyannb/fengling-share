@@ -55,6 +55,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.CaptchaDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -219,6 +220,10 @@ private fun RegisterView(onSwitchToLogin: () -> Unit) {
     var sending by remember { mutableStateOf(false) }
     var registering by remember { mutableStateOf(false) }
     var countdown by remember { mutableStateOf(0) }
+    // 图形验证码 (契约 v1: send_code 必带 captcha_token / captcha_code)
+    var showCaptcha by remember { mutableStateOf(false) }
+    var captchaError by remember { mutableStateOf("") }
+    var captchaRefresh by remember { mutableStateOf(0) }
 
     // 验证码倒计时: 每 60 秒只能发一次
     LaunchedEffect(countdown) {
@@ -228,22 +233,28 @@ private fun RegisterView(onSwitchToLogin: () -> Unit) {
         }
     }
 
-    fun doSendCode() {
-        if (email.isBlank()) {
-            Toast.makeText(context, "请先填写邮箱", Toast.LENGTH_SHORT).show()
-        } else {
-            sending = true
-            scope.launch {
-                ApiClient.sendCode(email.trim())
-                    .onSuccess {
-                        countdown = 60
-                        Toast.makeText(context, "验证码已发送，请查收邮件", Toast.LENGTH_SHORT).show()
-                    }
-                    .onFailure { e ->
-                        Toast.makeText(context, e.message ?: "发送失败", Toast.LENGTH_SHORT).show()
-                    }
-                sending = false
-            }
+    /** 真正发验证码: 需要图形验证码 token + code (由 CaptchaDialog 回调提供) */
+    fun doSendCode(captchaToken: String, captchaCode: String) {
+        sending = true
+        captchaError = ""
+        scope.launch {
+            ApiClient.sendCode(
+                email = email.trim(),
+                purpose = "register",
+                captchaToken = captchaToken,
+                captchaCode = captchaCode,
+            )
+                .onSuccess {
+                    countdown = 60
+                    showCaptcha = false
+                    Toast.makeText(context, "验证码已发送，请查收邮件", Toast.LENGTH_SHORT).show()
+                }
+                .onFailure { e ->
+                    // 图形验证码是一次性的, 失败后换一张让用户重填
+                    captchaError = e.message ?: "发送失败"
+                    captchaRefresh += 1
+                }
+            sending = false
         }
     }
 
@@ -318,7 +329,14 @@ private fun RegisterView(onSwitchToLogin: () -> Unit) {
                             else -> "获取验证码"
                         },
                         enabled = !sending && countdown == 0 && email.isNotBlank(),
-                    ) { doSendCode() }
+                    ) {
+                        if (email.isBlank()) {
+                            Toast.makeText(context, "请先填写邮箱", Toast.LENGTH_SHORT).show()
+                        } else {
+                            captchaError = ""
+                            showCaptcha = true
+                        }
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 AppTextField(
@@ -351,6 +369,19 @@ private fun RegisterView(onSwitchToLogin: () -> Unit) {
         }
         Spacer(Modifier.height(32.dp))
     }
+
+    // 图形验证码弹框 (确认后才真正调用 send_code)
+    if (showCaptcha) {
+        CaptchaDialog(
+            title = "图形验证码",
+            subtitle = "发送邮箱验证码前需要完成安全验证",
+            errorMessage = captchaError,
+            confirming = sending,
+            refreshKey = captchaRefresh,
+            onConfirm = { token, captchaCode -> doSendCode(token, captchaCode) },
+            onDismiss = { if (!sending) showCaptcha = false },
+        )
+    }
 }
 
 // ===================== 资料视图 =====================
@@ -366,6 +397,7 @@ private fun ProfileView(me: User) {
     var oldPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showEmailVerify by remember { mutableStateOf(false) }
 
     // 进页面拉一次最新资料 (昵称/头像可能在别处改过)
     LaunchedEffect(Unit) {
@@ -490,6 +522,51 @@ private fun ProfileView(me: User) {
             }
         }
 
+        // 邮箱未验证 / 未绑定: 醒目提示 + 验证入口 (契约 v1 第四节)
+        if (me.email.isBlank() || !me.emailVerified) {
+            Spacer(Modifier.height(14.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 16.dp,
+                colors = CardDefaults.defaultColors(
+                    color = DangerRed.copy(alpha = 0.10f),
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "邮箱未验证",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = DangerRed,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = if (me.email.isBlank()) {
+                                "还没有绑定邮箱, 验证后可用于找回密码"
+                            } else {
+                                "验证 " + me.email + " 后可用于找回密码与接收通知"
+                            },
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    SmallButton(text = "验证邮箱", enabled = true) {
+                        showEmailVerify = true
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(14.dp))
         SmallTitle(text = "安全与操作")
         Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 16.dp) {
@@ -516,6 +593,22 @@ private fun ProfileView(me: User) {
             )
         }
         Spacer(Modifier.height(32.dp))
+    }
+
+    // ===== 邮箱验证弹框 =====
+    if (showEmailVerify) {
+        EmailVerifyDialog(
+            initialEmail = me.email,
+            onDismiss = { showEmailVerify = false },
+            onVerified = { user ->
+                showEmailVerify = false
+                // 先用返回的 user 立刻刷新界面, 再拉一次资料保证与后端一致
+                UserStore.updateUser(user)
+                scope.launch {
+                    ApiClient.getMe().onSuccess { fresh -> UserStore.updateUser(fresh) }
+                }
+            },
+        )
     }
 
     // ===== 昵称 / 简介 编辑弹框 =====
@@ -667,6 +760,157 @@ private fun ProfileView(me: User) {
             },
         )
     }
+}
+
+/**
+ * 邮箱验证弹框 (契约 v1 第四节 email_verify_send / email_verify)
+ *
+ * - 邮箱 + 图形验证码 + 邮箱验证码
+ * - 图形验证码用单独的弹框展示 (showCaptcha 为真时只渲染 CaptchaDialog, 避免两层弹框叠加)
+ * - 提交成功后通过 onVerified 把最新的 user 交回调用方刷新资料
+ */
+@Composable
+private fun EmailVerifyDialog(
+    initialEmail: String,
+    onDismiss: () -> Unit,
+    onVerified: (User) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf(initialEmail) }
+    var code by remember { mutableStateOf("") }
+    var showCaptcha by remember { mutableStateOf(false) }
+    var captchaError by remember { mutableStateOf("") }
+    var captchaRefresh by remember { mutableStateOf(0) }
+    var sending by remember { mutableStateOf(false) }
+    var verifying by remember { mutableStateOf(false) }
+    var countdown by remember { mutableStateOf(0) }
+
+    // 60 秒内只能发一次
+    LaunchedEffect(countdown) {
+        if (countdown > 0) {
+            delay(1000L)
+            countdown -= 1
+        }
+    }
+
+    fun doSend(captchaToken: String, captchaCode: String) {
+        sending = true
+        captchaError = ""
+        scope.launch {
+            ApiClient.emailVerifySend(
+                email = email.trim(),
+                captchaToken = captchaToken,
+                captchaCode = captchaCode,
+            )
+                .onSuccess { sentTo ->
+                    if (sentTo.isNotBlank()) email = sentTo
+                    countdown = 60
+                    showCaptcha = false
+                    Toast.makeText(context, "验证码已发送，请查收邮件", Toast.LENGTH_SHORT).show()
+                }
+                .onFailure { e ->
+                    captchaError = e.message ?: "发送失败"
+                    captchaRefresh += 1
+                }
+            sending = false
+        }
+    }
+
+    fun doVerify() {
+        if (email.isBlank() || code.isBlank()) {
+            Toast.makeText(context, "请填写邮箱和邮箱验证码", Toast.LENGTH_SHORT).show()
+            return
+        }
+        verifying = true
+        scope.launch {
+            ApiClient.emailVerify(email.trim(), code.trim())
+                .onSuccess { user ->
+                    onVerified(user)
+                    Toast.makeText(context, "邮箱验证成功", Toast.LENGTH_SHORT).show()
+                }
+                .onFailure { e ->
+                    Toast.makeText(context, e.message ?: "验证失败", Toast.LENGTH_SHORT).show()
+                }
+            verifying = false
+        }
+    }
+
+    if (showCaptcha) {
+        CaptchaDialog(
+            title = "图形验证码",
+            subtitle = "发送邮箱验证码前需要完成安全验证",
+            errorMessage = captchaError,
+            confirming = sending,
+            refreshKey = captchaRefresh,
+            onConfirm = { token, captchaCode -> doSend(token, captchaCode) },
+            onDismiss = { if (!sending) showCaptcha = false },
+        )
+        return
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!verifying) onDismiss() },
+        title = {
+            Text(text = "验证邮箱", color = MiuixTheme.colorScheme.onBackground)
+        },
+        text = {
+            Column {
+                Text(
+                    text = "验证后可用于找回密码与接收通知",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                AppTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = "邮箱",
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        AppTextField(value = code, onValueChange = { code = it }, label = "邮箱验证码")
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    SmallButton(
+                        text = when {
+                            sending -> "发送中"
+                            countdown > 0 -> "${countdown}s"
+                            else -> "获取验证码"
+                        },
+                        enabled = !sending && countdown == 0 && email.isNotBlank(),
+                    ) {
+                        captchaError = ""
+                        showCaptcha = true
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            M3TextButton(
+                onClick = { doVerify() },
+                enabled = !verifying && email.isNotBlank() && code.isNotBlank(),
+            ) {
+                Text(
+                    text = if (verifying) "提交中…" else "提交验证",
+                    color = if (verifying) {
+                        MiuixTheme.colorScheme.onBackgroundVariant
+                    } else {
+                        MiuixTheme.colorScheme.primary
+                    },
+                )
+            }
+        },
+        dismissButton = {
+            M3TextButton(onClick = onDismiss) {
+                Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
+            }
+        },
+    )
 }
 
 // ===================== 复用小组件 =====================

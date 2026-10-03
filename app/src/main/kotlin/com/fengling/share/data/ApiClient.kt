@@ -49,6 +49,9 @@ object ApiClient {
                     is Long -> json.put(k, v)
                     is Double -> json.put(k, v)
                     is Boolean -> json.put(k, v)
+                    // 数组参数 (如 social_send 的 at 用户 id 列表) 必须原样提交成 JSON 数组,
+                    // 走 else 分支会变成字符串 "[6, 7]" 导致后端解析不到
+                    is JSONArray -> json.put(k, v)
                     else -> json.put(k, v.toString())
                 }
             }
@@ -218,11 +221,27 @@ object ApiClient {
     private fun parseUserData(obj: JSONObject): User =
         obj.optJSONObject("data")?.let { User.fromJson(it) } ?: User()
 
-    /** 发送邮箱验证码 (purpose: register=注册 / reset=找回密码) */
-    suspend fun sendCode(email: String, purpose: String = "register"): Result<Unit> =
+    /**
+     * 发送邮箱验证码 (purpose: register=注册 / reset=找回密码)
+     * 契约 v1 起必须带图形验证码: captchaToken / captchaCode 由 getCaptcha() 取得
+     */
+    suspend fun sendCode(
+        email: String,
+        purpose: String = "register",
+        captchaToken: String = "",
+        captchaCode: String = "",
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             apiCall {
-                request("send_code", mapOf("email" to email, "purpose" to purpose))
+                request(
+                    "send_code",
+                    mapOf(
+                        "email" to email,
+                        "purpose" to purpose,
+                        "captcha_token" to captchaToken,
+                        "captcha_code" to captchaCode,
+                    ),
+                )
                 Unit
             }
         }
@@ -329,6 +348,154 @@ object ApiClient {
         }
     }
 
+    // ===================== 社交 / 消息中心 / 邮箱验证 (接口契约 v1 第一~四节) =====================
+
+    /** 图形验证码 (公开): 返回 token + base64 data URI 图片, 可直接交给 Coil 渲染 */
+    suspend fun getCaptcha(): Result<Captcha> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("captcha").optJSONObject("data") ?: JSONObject()
+            Captcha(token = d.optString("token", ""), image = d.optString("image", ""))
+        }
+    }
+
+    /** 社交群组列表 (公开, 只含 is_active=1 的群) */
+    suspend fun socialGroups(): Result<List<SocialGroup>> = withContext(Dispatchers.IO) {
+        apiCall {
+            val arr = request("social_groups").optJSONObject("data")?.optJSONArray("list")
+            if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { SocialGroup.fromJson(arr.getJSONObject(it)) }
+            }
+        }
+    }
+
+    /**
+     * 群消息列表 (需登录)
+     * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
+     */
+    suspend fun socialMessages(
+        groupId: Int,
+        afterId: Int = 0,
+        limit: Int = 30,
+    ): Result<List<SocialMessage>> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
+            if (afterId > 0) params["after_id"] = afterId
+            val arr = request("social_messages", params, UserStore.token)
+                .optJSONObject("data")?.optJSONArray("list")
+            if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { SocialMessage.fromJson(arr.getJSONObject(it)) }
+            }
+        }
+    }
+
+    /** 发送群消息, 成功返回新消息 id (同一用户同一群 2 秒 1 条) */
+    suspend fun socialSend(
+        groupId: Int,
+        content: String,
+        at: List<Int> = emptyList(),
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
+            if (at.isNotEmpty()) {
+                params["at"] = JSONArray().apply { at.forEach { put(it) } }
+            }
+            request("social_send", params, UserStore.token)
+                .optJSONObject("data")?.optInt("id", 0) ?: 0
+        }
+    }
+
+    /** 撤回消息 (管理员可撤任何人, 普通用户只能撤自己 5 分钟内的) */
+    suspend fun socialRecall(id: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("social_recall", mapOf("id" to id), UserStore.token)
+            Unit
+        }
+    }
+
+    /**
+     * 消息通知列表 (需登录)
+     * @return Triple(list, total, unread)
+     */
+    suspend fun notifications(
+        page: Int = 1,
+        pageSize: Int = 20,
+    ): Result<Triple<List<NotifyItem>, Int, Int>> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "notifications",
+                mapOf("page" to page, "page_size" to pageSize),
+                UserStore.token,
+            ).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            val list = if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { NotifyItem.fromJson(arr.getJSONObject(it)) }
+            }
+            Triple(list, d?.optInt("total", list.size) ?: list.size, d?.optInt("unread", 0) ?: 0)
+        }
+    }
+
+    /**
+     * 标记通知已读 (all=true 时全部已读, 否则按 id 单条)
+     * @return 服务端返回的新未读数
+     */
+    suspend fun notificationRead(id: Int = 0, all: Boolean = false): Result<Int> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val params: Map<String, Any?> =
+                    if (all) mapOf("all" to 1) else mapOf("id" to id)
+                request("notification_read", params, UserStore.token)
+                    .optJSONObject("data")?.optInt("unread", 0) ?: 0
+            }
+        }
+
+    /** 删除单条通知 */
+    suspend fun notificationDelete(id: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("notification_delete", mapOf("id" to id), UserStore.token)
+            Unit
+        }
+    }
+
+    /**
+     * 给当前账号邮箱发验证码 (需登录, 需图形验证码)
+     * @param email 传空串表示用当前账号邮箱
+     * @return 实际发送到的邮箱
+     */
+    suspend fun emailVerifySend(
+        email: String,
+        captchaToken: String,
+        captchaCode: String,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>(
+                "captcha_token" to captchaToken,
+                "captcha_code" to captchaCode,
+            )
+            if (email.isNotBlank()) params["email"] = email
+            request("email_verify_send", params, UserStore.token)
+                .optJSONObject("data")?.optString("email", "") ?: ""
+        }
+    }
+
+    /** 提交邮箱验证码, 成功后 email_verified=1 并返回最新 user */
+    suspend fun emailVerify(email: String, code: String): Result<User> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val u = request(
+                    "email_verify",
+                    mapOf("email" to email, "code" to code),
+                    UserStore.token,
+                ).optJSONObject("data")?.optJSONObject("user")
+                if (u == null) User() else User.fromJson(u)
+            }
+        }
+
 }
 
 /** 版本信息 */
@@ -403,4 +570,113 @@ fun Throwable.userFriendlyMessage(): String = when (this) {
     is java.net.SocketTimeoutException,
     is java.io.IOException -> "网络连接失败，请检查网络后重试"
     else -> "加载失败，请稍后重试"
+}
+
+// ===================== 社交 / 消息中心 数据模型 (接口契约 v1) =====================
+
+/**
+ * org.json 的 JSONObject.NULL 用 optString 会得到字符串 "null", 统一挡掉
+ * (与 UserStore 内部同名私有函数互不影响)
+ */
+private fun jsonStr(j: JSONObject, key: String, def: String = ""): String =
+    if (j.isNull(key)) def else j.optString(key, def)
+
+/** 兼容后端返回 int(0/1) / bool / 字符串三种写法 */
+private fun jsonBool(j: JSONObject, key: String): Boolean {
+    if (j.isNull(key)) return false
+    return when (val v = j.opt(key)) {
+        is Boolean -> v
+        is Number -> v.toInt() == 1
+        else -> v?.toString() == "1" || v?.toString() == "true"
+    }
+}
+
+/** 图形验证码: image 是 data:image/png;base64,... 可直接给 Coil */
+data class Captcha(
+    val token: String = "",
+    val image: String = "",
+)
+
+/** 社交群组 (社交页列表卡片) */
+data class SocialGroup(
+    val id: Int = 0,
+    val name: String = "",
+    val icon: String = "",
+    val description: String = "",
+    val notice: String = "",
+    val memberCount: Int = 0,
+    val messageCount: Int = 0,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
+            id = j.optInt("id", 0),
+            name = jsonStr(j, "name"),
+            icon = jsonStr(j, "icon"),
+            description = jsonStr(j, "description"),
+            notice = jsonStr(j, "notice"),
+            memberCount = j.optInt("member_count", 0),
+            messageCount = j.optInt("message_count", 0),
+        )
+    }
+}
+
+/** 群消息 (isRecalled 时 content 为空串, 前端显示「该消息已撤回」) */
+data class SocialMessage(
+    val id: Int = 0,
+    val groupId: Int = 0,
+    val userId: Int = 0,
+    val nickname: String = "",
+    val avatar: String = "",
+    val role: String = "user",
+    val content: String = "",
+    val at: List<Int> = emptyList(),
+    val isRecalled: Boolean = false,
+    val createdAt: String = "",
+    val timeText: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): SocialMessage {
+            val atArr = j.optJSONArray("at")
+            return SocialMessage(
+                id = j.optInt("id", 0),
+                groupId = j.optInt("group_id", 0),
+                userId = j.optInt("user_id", 0),
+                nickname = jsonStr(j, "nickname"),
+                avatar = jsonStr(j, "avatar"),
+                role = jsonStr(j, "role").ifBlank { "user" },
+                content = jsonStr(j, "content"),
+                at = if (atArr == null) {
+                    emptyList()
+                } else {
+                    (0 until atArr.length()).map { atArr.optInt(it, 0) }
+                },
+                isRecalled = jsonBool(j, "is_recalled"),
+                createdAt = jsonStr(j, "created_at"),
+                timeText = jsonStr(j, "time_text"),
+            )
+        }
+    }
+}
+
+/** 消息通知 (type: system=系统 / admin=管理员 / social=社交) */
+data class NotifyItem(
+    val id: Int = 0,
+    val title: String = "",
+    val content: String = "",
+    val type: String = "system",
+    val link: String = "",
+    val isRead: Boolean = false,
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): NotifyItem = NotifyItem(
+            id = j.optInt("id", 0),
+            title = jsonStr(j, "title"),
+            content = jsonStr(j, "content"),
+            type = jsonStr(j, "type").ifBlank { "system" },
+            link = jsonStr(j, "link"),
+            isRead = jsonBool(j, "is_read"),
+            createdAt = jsonStr(j, "created_at"),
+        )
+    }
 }
