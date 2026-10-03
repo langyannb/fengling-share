@@ -91,6 +91,8 @@ fun AccountScreen(
     val loggedIn = UserStore.hasToken
     val me = UserStore.current
     var view by remember { mutableStateOf(AccountView.LOGIN) }
+    // 切换账号时把选中的用户名带进登录框
+    var switchPrefill by remember { mutableStateOf("") }
 
     Scaffold(
         modifier = modifier,
@@ -111,9 +113,20 @@ fun AccountScreen(
                 .padding(innerPadding),
         ) {
             if (loggedIn) {
-                ProfileView(me = me ?: User())
+                ProfileView(
+                    me = me ?: User(),
+                    onSwitchAccount = { username ->
+                        // 只清本地登录态, 不作废服务端会话, 方便随时切回
+                        switchPrefill = username
+                        UserStore.clear()
+                        view = AccountView.LOGIN
+                    },
+                )
             } else if (view == AccountView.LOGIN) {
-                LoginView(onSwitchToRegister = { view = AccountView.REGISTER })
+                LoginView(
+                    prefill = switchPrefill,
+                    onSwitchToRegister = { view = AccountView.REGISTER },
+                )
             } else {
                 RegisterView(onSwitchToLogin = { view = AccountView.LOGIN })
             }
@@ -124,12 +137,17 @@ fun AccountScreen(
 // ===================== 登录视图 =====================
 
 @Composable
-private fun LoginView(onSwitchToRegister: () -> Unit) {
+private fun LoginView(
+    prefill: String = "",
+    onSwitchToRegister: () -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var account by remember { mutableStateOf("") }
+    var account by remember(prefill) { mutableStateOf(prefill) }
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    // 最近登录过的账号 (切换账号后可一键回填)
+    val recents = remember(prefill) { UserStore.recentAccounts() }
 
     fun doLogin() {
         if (account.isBlank() || password.isBlank()) {
@@ -182,6 +200,43 @@ private fun LoginView(onSwitchToRegister: () -> Unit) {
                 )
                 Spacer(Modifier.height(20.dp))
                 PrimaryButton(text = if (loading) "登录中…" else "登录", enabled = !loading) { doLogin() }
+            }
+        }
+        if (recents.isNotEmpty()) {
+            Spacer(Modifier.height(18.dp))
+            SmallTitle(text = "切换账号 (最近登录)")
+            Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 16.dp) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    recents.forEachIndexed { index, name ->
+                        if (index > 0) ProfileDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { account = name; password = "" }
+                                .padding(horizontal = 16.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = name,
+                                fontSize = 14.sp,
+                                color = MiuixTheme.colorScheme.onBackground,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = "点击填入",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
             }
         }
         Spacer(Modifier.height(18.dp))
@@ -387,7 +442,10 @@ private fun RegisterView(onSwitchToLogin: () -> Unit) {
 // ===================== 资料视图 =====================
 
 @Composable
-private fun ProfileView(me: User) {
+private fun ProfileView(
+    me: User,
+    onSwitchAccount: (String) -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var uploading by remember { mutableStateOf(false) }
@@ -398,6 +456,9 @@ private fun ProfileView(me: User) {
     var newPassword by remember { mutableStateOf("") }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showEmailVerify by remember { mutableStateOf(false) }
+    // 切换账号: 弹框里选中的用户名
+    var showSwitchDialog by remember { mutableStateOf(false) }
+    var switchChoice by remember { mutableStateOf("") }
 
     // 进页面拉一次最新资料 (昵称/头像可能在别处改过)
     LaunchedEffect(Unit) {
@@ -587,6 +648,15 @@ private fun ProfileView(me: User) {
             )
             ProfileDivider()
             ProfileRow(
+                title = "切换账号",
+                value = "当前: ${me.username}",
+                onClick = {
+                    switchChoice = UserStore.recentAccounts().firstOrNull { it != me.username } ?: me.username
+                    showSwitchDialog = true
+                },
+            )
+            ProfileDivider()
+            ProfileRow(
                 title = "退出登录",
                 danger = true,
                 onClick = { showLogoutDialog = true },
@@ -720,6 +790,80 @@ private fun ProfileView(me: User) {
             },
             dismissButton = {
                 M3TextButton(onClick = { showPasswordDialog = false }) {
+                    Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                }
+            },
+        )
+    }
+
+    // ===== 切换账号 =====
+    if (showSwitchDialog) {
+        val others = UserStore.recentAccounts().filter { it != me.username }
+        AlertDialog(
+            onDismissRequest = { showSwitchDialog = false },
+            title = {
+                Text(text = "切换账号", color = MiuixTheme.colorScheme.onBackground)
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "切换后需要输入所选账号的密码。当前账号不会丢失，随时可以切回来。",
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (others.isEmpty()) {
+                        Text(
+                            text = "还没有其它登录过的账号，点「去登录」输入另一个账号。",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    } else {
+                        others.forEach { name ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .then(
+                                        if (switchChoice == name) {
+                                            Modifier.background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                    .clickable { switchChoice = name }
+                                    .padding(horizontal = 10.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = name,
+                                    fontSize = 14.sp,
+                                    color = MiuixTheme.colorScheme.onBackground,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (switchChoice == name) {
+                                    Text(
+                                        text = "已选择",
+                                        fontSize = 12.sp,
+                                        color = MiuixTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                M3TextButton(onClick = {
+                    showSwitchDialog = false
+                    onSwitchAccount(switchChoice)
+                    Toast.makeText(context, "请输入密码登录", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text(text = if (others.isEmpty()) "去登录" else "切换", color = MiuixTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                M3TextButton(onClick = { showSwitchDialog = false }) {
                     Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             },

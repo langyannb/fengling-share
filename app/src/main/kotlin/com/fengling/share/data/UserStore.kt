@@ -94,6 +94,10 @@ object UserStore {
     private const val KEY_TOKEN = "token"
     private const val KEY_USER = "user"
 
+    /** 最近登录过的用户名 (换行分隔), 用于「切换账号」 */
+    private const val KEY_RECENT = "recent_accounts"
+    private const val RECENT_MAX = 5
+
     /** 未 init 时为 null, 所有读写都做空保护, 不会因为漏调 init 崩溃 */
     private var prefs: SharedPreferences? = null
     private var cachedToken: String = ""
@@ -129,10 +133,29 @@ object UserStore {
         cachedToken = token
         current = user
         hasToken = token.isNotBlank()
+        if (user != null && user.username.isNotBlank()) addRecentAccount(user.username)
         prefs?.edit()
             ?.putString(KEY_TOKEN, token)
             ?.putString(KEY_USER, user?.toJson()?.toString() ?: "")
             ?.apply()
+    }
+
+    /**
+     * 最近登录过的用户名 (最新在前, 最多 5 个, 去重)
+     * 只存用户名, 不存 token/密码, 切换账号时用来快速回填登录框
+     */
+    fun recentAccounts(): List<String> =
+        (prefs?.getString(KEY_RECENT, "") ?: "")
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+    /** 记录一个登录过的用户名 (登录成功后自动调用) */
+    fun addRecentAccount(username: String) {
+        val name = username.trim()
+        if (name.isBlank()) return
+        val list = (listOf(name) + recentAccounts().filter { it != name }).take(RECENT_MAX)
+        prefs?.edit()?.putString(KEY_RECENT, list.joinToString("\n"))?.apply()
     }
 
     /** 仅更新用户资料 (改昵称/简介/头像后调用) */
