@@ -26,7 +26,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -48,11 +51,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,6 +87,16 @@ private const val POLL_INTERVAL_MS = 3000L
 /** 群消息内容里的 @昵称 (中文/字母/数字/下划线, 不含空白与 @) */
 private val MENTION_REGEX = Regex("@[^\\s@]{1,20}")
 
+/** 消息里的链接: 点一下用内置浏览器打开 */
+private val URL_REGEX = Regex("https?://[^\\s@，。；、）)\"]+")
+
+/** 聊天页顶栏「三条横杠」菜单 / 公告弹框的共享状态 (顶栏在 SocialScreen, 聊天内容在 ChatView) */
+private class ChatMenuState {
+    var showNoticeViewer by mutableStateOf(false)
+    var showNoticeEditor by mutableStateOf(false)
+    var draft by mutableStateOf("")
+}
+
 /**
  * SocialScreen - 社交页 (群组列表 → 群聊)
  *
@@ -97,6 +114,8 @@ fun SocialScreen(
     initialGroupId: Int? = null,
     /** 非空时点群组交给外部导航 (tab 模式全屏打开聊天页); 为空则页内切换 */
     onOpenGroup: ((SocialGroup) -> Unit)? = null,
+    /** 消息里的链接: 交给内置浏览器打开 */
+    onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -107,6 +126,9 @@ fun SocialScreen(
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var currentGroup by remember { mutableStateOf<SocialGroup?>(null) }
+    // 顶栏「三条横杠」菜单与公告弹框的状态 (聊天页顶栏在这里, 内容在 ChatView)
+    val chatMenu = remember { ChatMenuState() }
+    var refreshTick by remember { mutableStateOf(0) }
 
     fun loadGroups(isRefresh: Boolean) {
         scope.launch {
@@ -146,6 +168,50 @@ fun SocialScreen(
                 g != null -> AppTopBar(
                     title = g.name,
                     onBack = { if (onBack != null) onBack() else currentGroup = null },
+                    actions = {
+                        // 右上角「三条横杠」菜单 (和 QQ 群一样的入口): 看公告 / 发公告 / 刷新
+                        var menuOpen by remember { mutableStateOf(false) }
+                        val admin = UserStore.current?.role == "admin"
+                        Box(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { menuOpen = true }
+                                .padding(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "更多",
+                                tint = MiuixTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(if (g.notice.isBlank()) "群公告 (暂无)" else "查看群公告") },
+                                onClick = {
+                                    menuOpen = false
+                                    chatMenu.showNoticeViewer = true
+                                },
+                            )
+                            if (admin) {
+                                DropdownMenuItem(
+                                    text = { Text(if (g.notice.isBlank()) "发布群公告" else "编辑群公告") },
+                                    onClick = {
+                                        menuOpen = false
+                                        chatMenu.draft = g.notice
+                                        chatMenu.showNoticeEditor = true
+                                    },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("刷新消息") },
+                                onClick = {
+                                    menuOpen = false
+                                    refreshTick++
+                                },
+                            )
+                        }
+                    },
                 )
                 onBack != null -> AppTopBar(title = "群组", onBack = onBack)
                 // tab 常驻页: 无返回按钮
@@ -175,6 +241,9 @@ fun SocialScreen(
                 ChatView(
                     group = group,
                     me = UserStore.current,
+                    menu = chatMenu,
+                    refreshTick = refreshTick,
+                    onOpenWeb = onOpenWeb,
                     onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
                 )
             }
@@ -335,6 +404,9 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
 private fun ChatView(
     group: SocialGroup,
     me: User?,
+    menu: ChatMenuState,
+    refreshTick: Int,
+    onOpenWeb: ((url: String, title: String) -> Unit)?,
     onToast: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -342,7 +414,8 @@ private fun ChatView(
     val foreground = rememberIsForeground()
 
     var messages by remember { mutableStateOf<List<SocialMessage>>(emptyList()) }
-    var input by remember { mutableStateOf("") }
+    // 用 TextFieldValue 而不是 String: @ 插入后要把光标放到插入文本之后
+    var input by remember { mutableStateOf(TextFieldValue("")) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
@@ -351,12 +424,14 @@ private fun ChatView(
     var noticeExpanded by remember { mutableStateOf(false) }
     // 群公告本地副本: 管理员在客户端改完立刻生效, 不必等下次拉群资料
     var noticeText by remember(group.id) { mutableStateOf(group.notice) }
-    var showNoticeEditor by remember { mutableStateOf(false) }
-    var noticeDraft by remember { mutableStateOf("") }
     var noticeSaving by remember { mutableStateOf(false) }
+    /** 是否通过选择器选了「所有人」(@所有人) */
+    var atAllPicked by remember { mutableStateOf(false) }
     var showMentionPicker by remember { mutableStateOf(false) }
     var mentionMembers by remember { mutableStateOf<List<SocialGroupMember>>(emptyList()) }
     var mentionLoading by remember { mutableStateOf(false) }
+    /** @ 选择器里的搜索关键字 */
+    var mentionQuery by remember { mutableStateOf("") }
     /** 通过选择器 @ 到的人: 直接记 userId (昵称可能重名) */
     var pickedAt by remember { mutableStateOf<List<Int>>(emptyList()) }
 
@@ -383,6 +458,9 @@ private fun ChatView(
     }
 
     LaunchedEffect(group.id) { loadLatest(false) }
+
+    // 顶栏菜单里的「刷新消息」
+    LaunchedEffect(refreshTick) { if (refreshTick > 0) loadLatest(false) }
 
     // 3 秒轮询: 仅在页面处于前台时进行 (退到后台立刻停)
     LaunchedEffect(group.id, foreground) {
@@ -414,8 +492,40 @@ private fun ChatView(
             .distinct()
     }
 
+    /**
+     * 把 @昵称 插到输入框当前光标处, 并把光标移到插入文本之后。
+     * 用户自己敲下的 '@' 会被这次插入替换掉, 避免出现 "@@昵称"。
+     */
+    fun insertMention(m: SocialGroupMember) {
+        val cur = input
+        val text = cur.text
+        var start = cur.selection.start.coerceIn(0, text.length)
+        val end = cur.selection.end.coerceIn(0, text.length)
+        if (start > 0 && text[start - 1] == '@') start -= 1
+        val insert = "@" + m.nickname + " "
+        val newText = (text.substring(0, start) + insert + text.substring(end)).take(500)
+        val cursor = (start + insert.length).coerceAtMost(newText.length)
+        input = TextFieldValue(text = newText, selection = TextRange(cursor))
+        pickedAt = (pickedAt + m.id).distinct()
+    }
+
+    /** 管理员: 插入 @所有人 (全体提醒) */
+    fun insertMentionAll() {
+        val cur = input
+        val text = cur.text
+        var start = cur.selection.start.coerceIn(0, text.length)
+        val end = cur.selection.end.coerceIn(0, text.length)
+        if (start > 0 && text[start - 1] == '@') start -= 1
+        val insert = "@所有人 "
+        val newText = (text.substring(0, start) + insert + text.substring(end)).take(500)
+        val cursor = (start + insert.length).coerceAtMost(newText.length)
+        input = TextFieldValue(text = newText, selection = TextRange(cursor))
+        atAllPicked = true
+    }
+
     /** 打开 @ 选择器 (首次打开时拉取成员候选) */
     fun openMentionPicker() {
+        mentionQuery = ""
         showMentionPicker = true
         if (mentionLoading) return
         mentionLoading = true
@@ -428,14 +538,17 @@ private fun ChatView(
     }
 
     fun doSend() {
-        val text = input.trim()
+        val text = input.text.trim()
         if (text.isEmpty() || sending) return
         sending = true
         scope.launch {
-            ApiClient.socialSend(group.id, text, (resolveMentionIds(text) + pickedAt).distinct())
+            // 管理员 + (选过「所有人」或内容里写了 @所有人) -> 全体提醒
+            val wantAll = isAdmin && (atAllPicked || text.contains("@所有人"))
+            ApiClient.socialSend(group.id, text, (resolveMentionIds(text) + pickedAt).distinct(), atAll = wantAll)
                 .onSuccess {
-                    input = ""
+                    input = TextFieldValue("")
                     pickedAt = emptyList()
+                    atAllPicked = false
                     val after = messages.maxOfOrNull { it.id } ?: 0
                     ApiClient.socialMessages(group.id, afterId = after)
                         .onSuccess { new -> mergeNew(new) }
@@ -469,8 +582,8 @@ private fun ChatView(
                             fontSize = 11.sp,
                             color = MiuixTheme.colorScheme.primary,
                             modifier = Modifier.clickable {
-                                noticeDraft = noticeText
-                                showNoticeEditor = true
+                                menu.draft = noticeText
+                                menu.showNoticeEditor = true
                             },
                         )
                         Spacer(Modifier.width(10.dp))
@@ -513,6 +626,27 @@ private fun ChatView(
                                 mine = mine,
                                 canRecall = !msg.isRecalled && (mine || isAdmin),
                                 onLongPress = { recallTarget = msg },
+                                // 消息里的链接: 用内置浏览器打开
+                                onOpenLink = { url ->
+                                    if (onOpenWeb != null) {
+                                        onOpenWeb(url, group.name)
+                                    } else {
+                                        onToast("没有可用的内置浏览器")
+                                    }
+                                },
+                                // 长按对方头像 = @ 他
+                                onAvatarLongPress = {
+                                    insertMention(
+                                        SocialGroupMember(
+                                            id = msg.userId,
+                                            nickname = msg.nickname,
+                                            username = "",
+                                            avatar = msg.avatar,
+                                            role = msg.role,
+                                        ),
+                                    )
+                                    onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
+                                },
                             )
                         }
                     }
@@ -533,8 +667,8 @@ private fun ChatView(
                 SmallActionButton(
                     text = "公告",
                     onClick = {
-                        noticeDraft = ""
-                        showNoticeEditor = true
+                        menu.draft = ""
+                        menu.showNoticeEditor = true
                     },
                 )
                 Spacer(Modifier.width(6.dp))
@@ -542,7 +676,16 @@ private fun ChatView(
             Box(Modifier.weight(1f)) {
                 OutlinedTextField(
                     value = input,
-                    onValueChange = { if (it.length <= 500) input = it },
+                    onValueChange = { nv ->
+                        if (nv.text.length <= 500) {
+                            // 刚敲下一个 '@' 就自动弹成员选择器 (选择器里还能搜索)
+                            val c = nv.selection.start
+                            val typedAt = nv.text.length > input.text.length && c > 0 &&
+                                c <= nv.text.length && nv.text[c - 1] == '@'
+                            input = nv
+                            if (typedAt) openMentionPicker()
+                        }
+                    },
                     placeholder = {
                         Text(
                             text = "说点什么… 用 @昵称 提醒对方",
@@ -572,9 +715,40 @@ private fun ChatView(
     }
 
     // ===== 群公告编辑 (仅管理员) =====
-    if (showNoticeEditor) {
+    // ===== 查看群公告 (顶栏「三条横杠」菜单进入) =====
+    if (menu.showNoticeViewer) {
         AlertDialog(
-            onDismissRequest = { showNoticeEditor = false },
+            onDismissRequest = { menu.showNoticeViewer = false },
+            title = {
+                Text(
+                    text = group.name + " · 群公告",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onBackground,
+                )
+            },
+            text = {
+                Text(
+                    text = noticeText.ifBlank { "群主和管理员还没有发布公告" },
+                    fontSize = 14.sp,
+                    color = if (noticeText.isBlank()) {
+                        MiuixTheme.colorScheme.onBackgroundVariant
+                    } else {
+                        MiuixTheme.colorScheme.onBackground
+                    },
+                )
+            },
+            confirmButton = {
+                M3TextButton(onClick = { menu.showNoticeViewer = false }) {
+                    Text(text = "知道了", color = MiuixTheme.colorScheme.primary)
+                }
+            },
+        )
+    }
+
+    if (menu.showNoticeEditor) {
+        AlertDialog(
+            onDismissRequest = { menu.showNoticeEditor = false },
             title = {
                 Text(text = "群公告", color = MiuixTheme.colorScheme.onBackground)
             },
@@ -587,8 +761,8 @@ private fun ChatView(
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
-                        value = noticeDraft,
-                        onValueChange = { if (it.length <= 500) noticeDraft = it },
+                        value = menu.draft,
+                        onValueChange = { if (it.length <= 500) menu.draft = it },
                         placeholder = { Text(text = "写点群规、活动或者通知…", fontSize = 13.sp) },
                         textStyle = TextStyle(
                             fontSize = 14.sp,
@@ -599,7 +773,7 @@ private fun ChatView(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = noticeDraft.length.toString() + " / 500",
+                        text = menu.draft.length.toString() + " / 500",
                         fontSize = 11.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                     )
@@ -611,10 +785,10 @@ private fun ChatView(
                         if (noticeSaving) return@M3TextButton
                         noticeSaving = true
                         scope.launch {
-                            ApiClient.socialSetNotice(group.id, noticeDraft.trim())
+                            ApiClient.socialSetNotice(group.id, menu.draft.trim())
                                 .onSuccess {
-                                    noticeText = noticeDraft.trim()
-                                    showNoticeEditor = false
+                                    noticeText = menu.draft.trim()
+                                    menu.showNoticeEditor = false
                                     onToast("公告已更新")
                                 }
                                 .onFailure { e -> onToast(e.message ?: "公告保存失败") }
@@ -626,7 +800,7 @@ private fun ChatView(
                 }
             },
             dismissButton = {
-                M3TextButton(onClick = { showNoticeEditor = false }) {
+                M3TextButton(onClick = { menu.showNoticeEditor = false }) {
                     Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
                 }
             },
@@ -641,43 +815,114 @@ private fun ChatView(
                 Text(text = "选择要 @ 的人", color = MiuixTheme.colorScheme.onBackground)
             },
             text = {
-                when {
-                    mentionLoading -> Text(
-                        text = "加载中…",
-                        fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                Column {
+                    OutlinedTextField(
+                        value = mentionQuery,
+                        onValueChange = { if (it.length <= 30) mentionQuery = it },
+                        placeholder = {
+                            Text(
+                                text = "搜索昵称或用户名",
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                        },
+                        textStyle = TextStyle(
+                            fontSize = 14.sp,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    mentionMembers.isEmpty() -> Text(
-                        text = "暂无可 @ 的成员。\n群里有人发过言后, 他就会出现在这里。",
-                        fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                    else -> LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                        items(mentionMembers, key = { it.id }) { m ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        input = (input + "@" + m.nickname + " ").take(500)
-                                        pickedAt = (pickedAt + m.id).distinct()
-                                        showMentionPicker = false
-                                    }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = m.nickname,
-                                    fontSize = 15.sp,
-                                    color = MiuixTheme.colorScheme.onBackground,
-                                )
-                                if (m.role == "admin") {
+                    Spacer(Modifier.height(8.dp))
+                    val q = mentionQuery.trim().lowercase()
+                    val filtered = if (q.isEmpty()) {
+                        mentionMembers
+                    } else {
+                        mentionMembers.filter {
+                            it.nickname.lowercase().contains(q) || it.username.lowercase().contains(q)
+                        }
+                    }
+                    // 管理员可以 @所有人 (全体提醒)
+                    val showAll = isAdmin && (q.isEmpty() || "所有人".contains(q) || "all".startsWith(q))
+                    when {
+                        mentionLoading -> Text(
+                            text = "加载中…",
+                            fontSize = 14.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        else -> Column {
+                            if (showAll) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            insertMentionAll()
+                                            showMentionPicker = false
+                                        }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "所有人",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MiuixTheme.colorScheme.primary,
+                                    )
                                     Spacer(Modifier.width(6.dp))
                                     Text(
-                                        text = "管理员",
+                                        text = "@所有人 (全体提醒)",
                                         fontSize = 11.sp,
                                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                                     )
                                 }
+                            }
+                            if (mentionMembers.isEmpty()) {
+                                Text(
+                                    text = "暂无可 @ 的成员。\n群里有人发过言后, 他就会出现在这里。",
+                                    fontSize = 14.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
+                            } else if (filtered.isEmpty()) {
+                                Text(
+                                    text = "没有找到匹配「" + mentionQuery.trim() + "」的成员",
+                                    fontSize = 14.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
+                            } else LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                            items(filtered, key = { it.id }) { m ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            insertMention(m)
+                                            showMentionPicker = false
+                                        }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = m.nickname,
+                                        fontSize = 15.sp,
+                                        color = MiuixTheme.colorScheme.onBackground,
+                                    )
+                                    if (m.username.isNotBlank()) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "@" + m.username,
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                        )
+                                    }
+                                    if (m.role == "admin") {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "管理员",
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
                             }
                         }
                     }
@@ -743,6 +988,8 @@ private fun MessageRow(
     mine: Boolean,
     canRecall: Boolean,
     onLongPress: () -> Unit,
+    onAvatarLongPress: () -> Unit = {},
+    onOpenLink: (String) -> Unit = {},
 ) {
     // 撤回的消息: 居中灰字提示, 不显示气泡
     if (msg.isRecalled) {
@@ -768,7 +1015,14 @@ private fun MessageRow(
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         if (!mine) {
-            MessageAvatar(url = msg.avatar, name = msg.nickname)
+            // 长按头像 @ 他
+            Box(
+                modifier = Modifier.pointerInput(msg.userId) {
+                    detectTapGestures(onLongPress = { onAvatarLongPress() })
+                },
+            ) {
+                MessageAvatar(url = msg.avatar, name = msg.nickname)
+            }
             Spacer(Modifier.width(8.dp))
         }
         Column(
@@ -798,6 +1052,21 @@ private fun MessageRow(
                             )
                         }
                     }
+                    if (msg.at.contains(0)) {
+                        Spacer(Modifier.width(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFF53F3F).copy(alpha = 0.14f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "@所有人",
+                                fontSize = 9.sp,
+                                color = Color(0xFFF53F3F),
+                            )
+                        }
+                    }
                     Spacer(Modifier.width(4.dp))
                 }
                 Text(
@@ -817,27 +1086,46 @@ private fun MessageRow(
                             MiuixTheme.colorScheme.surfaceContainerHigh
                         },
                     )
-                    .pointerInput(msg.id, canRecall) {
-                        detectTapGestures(
-                            onLongPress = { if (canRecall) onLongPress() },
-                        )
-                    }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
+                // 链接要能点(走内置浏览器), 又不能抢掉长按撤回 —— 所以手势自己做在文本上:
+                // onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 URL 注解
+                var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+                val shown = highlightMentions(
+                    content = msg.content,
+                    mentionColor = if (mine) {
+                        Color(0xFFFFE082)
+                    } else {
+                        MiuixTheme.colorScheme.primary
+                    },
+                    linkColor = if (mine) {
+                        Color(0xFFFFF3C4)
+                    } else {
+                        MiuixTheme.colorScheme.primary
+                    },
+                )
                 Text(
-                    text = highlightMentions(
-                        content = msg.content,
-                        mentionColor = if (mine) {
-                            Color(0xFFFFE082)
-                        } else {
-                            MiuixTheme.colorScheme.primary
-                        },
-                    ),
+                    text = shown,
                     fontSize = 14.sp,
                     color = if (mine) {
                         MiuixTheme.colorScheme.onPrimary
                     } else {
                         MiuixTheme.colorScheme.onBackground
+                    },
+                    onTextLayout = { textLayout = it },
+                    modifier = Modifier.pointerInput(msg.id, canRecall) {
+                        detectTapGestures(
+                            onLongPress = { if (canRecall) onLongPress() },
+                            onTap = { pos ->
+                                val lr = textLayout
+                                if (lr != null) {
+                                    val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
+                                    shown.getStringAnnotations("URL", off, off)
+                                        .firstOrNull()
+                                        ?.let { ann -> onOpenLink(ann.item) }
+                                }
+                            },
+                        )
                     },
                 )
             }
@@ -849,19 +1137,45 @@ private fun MessageRow(
     }
 }
 
-/** 把内容里的 @昵称 高亮 (AnnotatedString) */
-private fun highlightMentions(content: String, mentionColor: Color): AnnotatedString =
-    buildAnnotatedString {
-        var last = 0
-        MENTION_REGEX.findAll(content).forEach { m ->
-            if (m.range.first > last) append(content.substring(last, m.range.first))
-            withStyle(SpanStyle(color = mentionColor, fontWeight = FontWeight.Medium)) {
-                append(m.value)
-            }
-            last = m.range.last + 1
+/** 高亮 @昵称 与链接: @ 用 mentionColor, 链接用 linkColor 并打上 URL 注解 (点击可打开) */
+private fun highlightMentions(
+    content: String,
+    mentionColor: Color,
+    linkColor: Color,
+): AnnotatedString = buildAnnotatedString {
+    var last = 0
+    URL_REGEX.findAll(content).forEach { m ->
+        if (m.range.first > last) {
+            appendPlainWithMentions(content.substring(last, m.range.first), mentionColor)
         }
-        if (last < content.length) append(content.substring(last))
+        pushStringAnnotation("URL", m.value)
+        withStyle(
+            SpanStyle(
+                color = linkColor,
+                fontWeight = FontWeight.Medium,
+                textDecoration = TextDecoration.Underline,
+            ),
+        ) {
+            append(m.value)
+        }
+        pop()
+        last = m.range.last + 1
     }
+    if (last < content.length) appendPlainWithMentions(content.substring(last), mentionColor)
+}
+
+/** 纯文本片段: 只把 @昵称 高亮上去 */
+private fun AnnotatedString.Builder.appendPlainWithMentions(text: String, mentionColor: Color) {
+    var last = 0
+    MENTION_REGEX.findAll(text).forEach { m ->
+        if (m.range.first > last) append(text.substring(last, m.range.first))
+        withStyle(SpanStyle(color = mentionColor, fontWeight = FontWeight.Medium)) {
+            append(m.value)
+        }
+        last = m.range.last + 1
+    }
+    if (last < text.length) append(text.substring(last))
+}
 
 @Composable
 private fun MessageAvatar(url: String, name: String) {

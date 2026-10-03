@@ -315,6 +315,8 @@ fun MainScreen(
                                 // 「群组」tab: 常驻列表页, 无返回栏; 点群组进全屏聊天
                                 onBack = null,
                                 onOpenGroup = { g -> navController.navigate(Routes.socialGroup(g.id)) },
+                                // 群聊消息里的链接: 内置浏览器打开
+                                onOpenWeb = { url, title -> openLink(url, title) },
                             )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
@@ -417,6 +419,8 @@ fun MainScreen(
                     navController.popBackStack(Routes.MAIN, false)
                 },
                 initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                // 群聊消息里的链接: 内置浏览器打开
+                onOpenWeb = { url, title -> openLink(url, title) },
             )
         }
 

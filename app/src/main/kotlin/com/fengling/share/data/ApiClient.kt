@@ -410,12 +410,15 @@ object ApiClient {
         groupId: Int,
         content: String,
         at: List<Int> = emptyList(),
+        /** 管理员专用: @所有人 (全体提醒) */
+        atAll: Boolean = false,
     ): Result<Int> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
             if (at.isNotEmpty()) {
                 params["at"] = JSONArray().apply { at.forEach { put(it) } }
             }
+            if (atAll) params["at_all"] = 1
             request("social_send", params, UserStore.token)
                 .optJSONObject("data")?.optInt("id", 0) ?: 0
         }

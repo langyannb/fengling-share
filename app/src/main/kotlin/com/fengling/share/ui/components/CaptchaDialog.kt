@@ -125,7 +125,7 @@ fun CaptchaDialog(
                 // 图形验证码图片: 点一下换一张
                 Box(
                     modifier = Modifier
-                        .size(width = 140.dp, height = 52.dp)
+                        .size(width = 260.dp, height = 94.dp)  // 服务端出图 280x100, 放大到接近 1:1 才看得清
                         .clip(RoundedCornerShape(10.dp))
                         .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                         .clickable { loadCaptcha() },
