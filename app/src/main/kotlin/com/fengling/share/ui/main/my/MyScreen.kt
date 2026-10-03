@@ -280,14 +280,32 @@ fun MyScreen(
                     }
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            text = if (account != null) account.displayName else "点击登录 / 注册",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MiuixTheme.colorScheme.onBackground,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (account != null) account.displayName else "点击登录 / 注册",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MiuixTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            // 已登录但邮箱还没验证: 给个轻量提醒, 点进账号页可以自助验证
+                            if (account != null && account.email.isNotBlank() && !account.emailVerified) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "邮箱未验证",
+                                    fontSize = 10.sp,
+                                    color = MiuixTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .background(
+                                            color = MiuixTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(6.dp),
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(3.dp))
                         Text(
                             text = account?.let { u -> u.bio.ifBlank { u.email } }?.takeIf { it.isNotBlank() }
