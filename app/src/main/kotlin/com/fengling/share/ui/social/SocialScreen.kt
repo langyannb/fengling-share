@@ -3,6 +3,7 @@ package com.fengling.share.ui.social
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -60,6 +62,7 @@ import androidx.lifecycle.LifecycleOwner
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.SocialGroup
+import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
@@ -338,6 +341,11 @@ private fun ChatView(
     var refreshing by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var recallTarget by remember { mutableStateOf<SocialMessage?>(null) }
+    var showMentionPicker by remember { mutableStateOf(false) }
+    var mentionMembers by remember { mutableStateOf<List<SocialGroupMember>>(emptyList()) }
+    var mentionLoading by remember { mutableStateOf(false) }
+    /** 通过选择器 @ 到的人: 直接记 userId (昵称可能重名) */
+    var pickedAt by remember { mutableStateOf<List<Int>>(emptyList()) }
 
     val isAdmin = me != null && me.role == "admin"
 
@@ -393,14 +401,28 @@ private fun ChatView(
             .distinct()
     }
 
+    /** 打开 @ 选择器 (首次打开时拉取成员候选) */
+    fun openMentionPicker() {
+        showMentionPicker = true
+        if (mentionLoading) return
+        mentionLoading = true
+        scope.launch {
+            ApiClient.socialGroupMembers(group.id)
+                .onSuccess { mentionMembers = it }
+                .onFailure { e -> onToast(e.message ?: "成员加载失败") }
+            mentionLoading = false
+        }
+    }
+
     fun doSend() {
         val text = input.trim()
         if (text.isEmpty() || sending) return
         sending = true
         scope.launch {
-            ApiClient.socialSend(group.id, text, resolveMentionIds(text))
+            ApiClient.socialSend(group.id, text, (resolveMentionIds(text) + pickedAt).distinct())
                 .onSuccess {
                     input = ""
+                    pickedAt = emptyList()
                     val after = messages.maxOfOrNull { it.id } ?: 0
                     ApiClient.socialMessages(group.id, afterId = after)
                         .onSuccess { new -> mergeNew(new) }
@@ -468,10 +490,73 @@ private fun ChatView(
             }
             Spacer(Modifier.width(8.dp))
             SmallActionButton(
+                text = "@",
+                onClick = { openMentionPicker() },
+            )
+            Spacer(Modifier.width(6.dp))
+            SmallActionButton(
                 text = if (sending) "发送中" else "发送",
                 onClick = { doSend() },
             )
         }
+    }
+
+    // ===== @ 成员选择 =====
+    if (showMentionPicker) {
+        AlertDialog(
+            onDismissRequest = { showMentionPicker = false },
+            title = {
+                Text(text = "选择要 @ 的人", color = MiuixTheme.colorScheme.onBackground)
+            },
+            text = {
+                when {
+                    mentionLoading -> Text(
+                        text = "加载中…",
+                        fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    mentionMembers.isEmpty() -> Text(
+                        text = "暂无可 @ 的成员。\n群里有人发过言后, 他就会出现在这里。",
+                        fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    else -> LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        items(mentionMembers, key = { it.id }) { m ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        input = (input + "@" + m.nickname + " ").take(500)
+                                        pickedAt = (pickedAt + m.id).distinct()
+                                        showMentionPicker = false
+                                    }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = m.nickname,
+                                    fontSize = 15.sp,
+                                    color = MiuixTheme.colorScheme.onBackground,
+                                )
+                                if (m.role == "admin") {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "管理员",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                M3TextButton(onClick = { showMentionPicker = false }) {
+                    Text(text = "关闭", color = MiuixTheme.colorScheme.onBackground)
+                }
+            },
+        )
     }
 
     // ===== 长按撤回确认 =====

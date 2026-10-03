@@ -370,6 +370,19 @@ object ApiClient {
         }
     }
 
+    /** 群成员候选 (可 @ 的人): 该群发过言的活跃用户 + 管理员, 已排除自己 */
+    suspend fun socialGroupMembers(groupId: Int): Result<List<SocialGroupMember>> = withContext(Dispatchers.IO) {
+        apiCall {
+            val arr = request("social_group_members", mapOf<String, Any?>("group_id" to groupId), UserStore.token)
+                .optJSONObject("data")?.optJSONArray("list")
+            if (arr == null) {
+                emptyList()
+            } else {
+                (0 until arr.length()).map { SocialGroupMember.fromJson(arr.getJSONObject(it)) }
+            }
+        }
+    }
+
     /**
      * 群消息列表 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
@@ -621,6 +634,25 @@ data class SocialGroup(
 }
 
 /** 群消息 (isRecalled 时 content 为空串, 前端显示「该消息已撤回」) */
+/** 群成员候选 (用于 @ 选择) */
+data class SocialGroupMember(
+    val id: Int = 0,
+    val nickname: String = "",
+    val username: String = "",
+    val avatar: String = "",
+    val role: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
+            id = j.optInt("id", 0),
+            nickname = jsonStr(j, "nickname"),
+            username = jsonStr(j, "username"),
+            avatar = jsonStr(j, "avatar"),
+            role = jsonStr(j, "role"),
+        )
+    }
+}
+
 data class SocialMessage(
     val id: Int = 0,
     val groupId: Int = 0,
