@@ -906,6 +906,52 @@ private fun ChatView(
     }
 
     /**
+     * 保存图片到系统相册 (targetSdk 34 / minSdk 33 → MediaStore + RELATIVE_PATH, 不需要任何存储权限)。
+     * 下载走 OkHttp (ApiClient.downloadChatImage), 写盘在 IO 线程, Toast 回主线程再弹。
+     */
+    fun saveImageToGallery(url: String) {
+        if (url.isBlank()) return
+        scope.launch {
+            val bytes = ApiClient.downloadChatImage(url).getOrElse { e ->
+                onToast(e.message?.takeIf { it.isNotBlank() } ?: "图片下载失败")
+                return@launch
+            }
+            val mime = when {
+                url.endsWith(".png", true) -> "image/png"
+                url.endsWith(".webp", true) -> "image/webp"
+                else -> "image/jpeg"
+            }
+            val ext = when (mime) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            // 在 IO 线程 insert + 写字节; 出错只把文案带回来, Toast 一定在主线程弹
+            val errMsg = withContext(Dispatchers.IO) {
+                runCatching {
+                    val values = ContentValues().apply {
+                        put(
+                            MediaStore.Images.Media.DISPLAY_NAME,
+                            "fl_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "." + ext,
+                        )
+                        put(MediaStore.Images.Media.MIME_TYPE, mime)
+                        // 相册里的「风铃分享库」相簿
+                        put(
+                            MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES + "/风铃分享库",
+                        )
+                    }
+                    val cr = context.contentResolver
+                    val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: error("相册写入失败")
+                    cr.openOutputStream(uri)?.use { out -> out.write(bytes) } ?: error("相册写入失败")
+                }.exceptionOrNull()?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: "未知错误" }
+            }
+            if (errMsg == null) onToast("已保存到相册") else onToast("保存失败: " + errMsg)
+        }
+    }
+
+    /**
      * 相册选图 → 读字节 → 上传对象存储 → 立刻作为图片消息发出。
      * 纯图片消息 content 传空串; 上传/发送失败都不动用户已经打好的文字。
      */
@@ -1749,52 +1795,6 @@ private fun ChatView(
                 }
             },
         )
-    }
-
-    /**
-     * 保存图片到系统相册 (targetSdk 34 / minSdk 33 → MediaStore + RELATIVE_PATH, 不需要任何存储权限)。
-     * 下载走 OkHttp (ApiClient.downloadChatImage), 写盘在 IO 线程, Toast 回主线程再弹。
-     */
-    fun saveImageToGallery(url: String) {
-        if (url.isBlank()) return
-        scope.launch {
-            val bytes = ApiClient.downloadChatImage(url).getOrElse { e ->
-                onToast(e.message?.takeIf { it.isNotBlank() } ?: "图片下载失败")
-                return@launch
-            }
-            val mime = when {
-                url.endsWith(".png", true) -> "image/png"
-                url.endsWith(".webp", true) -> "image/webp"
-                else -> "image/jpeg"
-            }
-            val ext = when (mime) {
-                "image/png" -> "png"
-                "image/webp" -> "webp"
-                else -> "jpg"
-            }
-            // 在 IO 线程 insert + 写字节; 出错只把文案带回来, Toast 一定在主线程弹
-            val errMsg = withContext(Dispatchers.IO) {
-                runCatching {
-                    val values = ContentValues().apply {
-                        put(
-                            MediaStore.Images.Media.DISPLAY_NAME,
-                            "fl_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "." + ext,
-                        )
-                        put(MediaStore.Images.Media.MIME_TYPE, mime)
-                        // 相册里的「风铃分享库」相簿
-                        put(
-                            MediaStore.Images.Media.RELATIVE_PATH,
-                            Environment.DIRECTORY_PICTURES + "/风铃分享库",
-                        )
-                    }
-                    val cr = context.contentResolver
-                    val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                        ?: error("相册写入失败")
-                    cr.openOutputStream(uri)?.use { out -> out.write(bytes) } ?: error("相册写入失败")
-                }.exceptionOrNull()?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: "未知错误" }
-            }
-            if (errMsg == null) onToast("已保存到相册") else onToast("保存失败: " + errMsg)
-        }
     }
 
     // ===== 全屏查看图片 (点气泡里的图打开, 点任意处 / 右上角关闭) =====
