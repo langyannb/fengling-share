@@ -114,7 +114,6 @@ object Routes {
     const val CONTRIBUTORS = "contributors"
     const val ACCOUNT = "account"
     // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
-    const val SOCIAL = "social"
     const val SOCIAL_GROUP = "social/group/{groupId}"
     const val MESSAGES = "messages"
 
@@ -332,9 +331,6 @@ fun MainScreen(
                                 onOpenAccount = {
                                     navController.navigate(Routes.ACCOUNT)
                                 },
-                                onOpenSocial = {
-                                    navController.navigate(Routes.SOCIAL)
-                                },
                                 onOpenMessages = {
                                     navController.navigate(Routes.MESSAGES)
                                 },
@@ -415,15 +411,12 @@ fun MainScreen(
             arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
         ) { backStackEntry ->
             SocialScreen(
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    // 返回时直接回到主界面(群组 tab 的列表页)。
+                    // 原来用 popBackStack() 会落到「我的-社交群组」那一页(现已移除), 用户反馈返回位置不对
+                    navController.popBackStack(Routes.MAIN, false)
+                },
                 initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
-            )
-        }
-
-        // 社交页 (群组列表 + 群聊)
-        composable(Routes.SOCIAL) {
-            SocialScreen(
-                onBack = { navController.popBackStack() },
             )
         }
 

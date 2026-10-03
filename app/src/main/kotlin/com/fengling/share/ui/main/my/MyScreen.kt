@@ -97,7 +97,6 @@ fun MyScreen(
     onOpenUpdate: (VersionInfo) -> Unit = {},
     onOpenContributors: () -> Unit = {},
     onOpenAccount: () -> Unit = {},
-    onOpenSocial: () -> Unit = {},
     onOpenMessages: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -329,13 +328,6 @@ fun MyScreen(
                     .padding(horizontal = 12.dp),
                 cornerRadius = 16.dp,
             ) {
-                SettingRow(
-                    title = "社交群组",
-                    summary = "加入群聊, 和大家一起交流分享",
-                    icon = Icons.Filled.Favorite,
-                    onClick = onOpenSocial,
-                )
-                SettingDivider()
                 SettingRow(
                     title = "消息中心",
                     summary = "系统通知 / 管理员公告 / 群聊提及",
