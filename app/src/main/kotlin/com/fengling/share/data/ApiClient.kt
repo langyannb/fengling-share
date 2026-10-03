@@ -370,6 +370,18 @@ object ApiClient {
         }
     }
 
+    /** 开启/关闭某个群的消息免打扰 (只对自己生效, @我 与群公告仍然提醒) */
+    suspend fun socialMuteSet(groupId: Int, muted: Boolean): Result<Boolean> = withContext(Dispatchers.IO) {
+        apiCall {
+            val body = request(
+                "social_mute_set",
+                mapOf<String, Any?>("group_id" to groupId, "muted" to if (muted) 1 else 0),
+                UserStore.token,
+            )
+            body.optJSONObject("data")?.optInt("muted", 0)?.let { it == 1 } ?: muted
+        }
+    }
+
     /** 群成员候选 (可 @ 的人): 该群发过言的活跃用户 + 管理员, 已排除自己 */
     suspend fun socialGroupMembers(groupId: Int): Result<List<SocialGroupMember>> = withContext(Dispatchers.IO) {
         apiCall {
@@ -636,6 +648,8 @@ data class SocialGroup(
     val notice: String = "",
     val memberCount: Int = 0,
     val messageCount: Int = 0,
+    /** 我是否对这个世界开了消息免打扰 */
+    val muted: Boolean = false,
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
@@ -646,6 +660,7 @@ data class SocialGroup(
             notice = jsonStr(j, "notice"),
             memberCount = j.optInt("member_count", 0),
             messageCount = j.optInt("message_count", 0),
+            muted = j.optInt("muted", 0) == 1,
         )
     }
 }

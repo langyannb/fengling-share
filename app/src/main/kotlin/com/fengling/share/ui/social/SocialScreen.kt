@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -62,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -95,6 +97,9 @@ private class ChatMenuState {
     var showNoticeViewer by mutableStateOf(false)
     var showNoticeEditor by mutableStateOf(false)
     var draft by mutableStateOf("")
+
+    /** 当前群我是否开了消息免打扰 */
+    var muted by mutableStateOf(false)
 }
 
 /**
@@ -172,6 +177,8 @@ fun SocialScreen(
                         // 右上角「三条横杠」菜单 (和 QQ 群一样的入口): 看公告 / 发公告 / 刷新
                         var menuOpen by remember { mutableStateOf(false) }
                         val admin = UserStore.current?.role == "admin"
+                        // 进群时同步该群的免打扰状态
+                        LaunchedEffect(g.id) { chatMenu.muted = g.muted }
                         Box(
                             modifier = Modifier
                                 .clip(CircleShape)
@@ -203,6 +210,31 @@ fun SocialScreen(
                                     },
                                 )
                             }
+                            // 消息免打扰: 和 QQ/微信一样, 开了之后普通消息不再提醒,
+                            // 但 @我 和群公告这些「重要的」还是会提醒
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (chatMenu.muted) "消息免打扰: 已开启" else "消息免打扰: 已关闭")
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    val next = !chatMenu.muted
+                                    chatMenu.muted = next
+                                    // 立刻在列表上也反映出来
+                                    currentGroup = currentGroup?.copy(muted = next)
+                                    scope.launch {
+                                        ApiClient.socialMuteSet(g.id, next)
+                                            .onSuccess { on ->
+                                                chatMenu.muted = on
+                                                currentGroup = currentGroup?.copy(muted = on)
+                                                groups = groups.map { row ->
+                                                    if (row.id == g.id) row.copy(muted = on) else row
+                                                }
+                                            }
+                                            .onFailure { e -> onToast(e.message ?: "设置失败") }
+                                    }
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("刷新消息") },
                                 onClick = {
@@ -365,6 +397,15 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
                         fontSize = 11.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                     )
+                    if (group.muted) {
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Filled.NotificationsOff,
+                            contentDescription = "消息免打扰",
+                            tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -595,12 +636,20 @@ private fun ChatView(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    text = noticeText,
-                    fontSize = 12.sp,
+                // 公告里的链接也能点开 (走内置浏览器); 点空白处仍然是展开/收起
+                LinkText(
+                    content = noticeText,
                     color = MiuixTheme.colorScheme.onBackground,
+                    linkColor = MiuixTheme.colorScheme.primary,
+                    fontSize = 12.sp,
                     maxLines = if (noticeExpanded) Int.MAX_VALUE else 2,
-                    overflow = TextOverflow.Ellipsis,
+                    onTap = { url ->
+                        if (url != null) {
+                            if (onOpenWeb != null) onOpenWeb(url, group.name) else onToast("没有可用的内置浏览器")
+                        } else {
+                            noticeExpanded = !noticeExpanded
+                        }
+                    },
                 )
             }
         }
@@ -728,13 +777,22 @@ private fun ChatView(
                 )
             },
             text = {
-                Text(
-                    text = noticeText.ifBlank { "群主和管理员还没有发布公告" },
-                    fontSize = 14.sp,
+                LinkText(
+                    content = noticeText.ifBlank { "群主和管理员还没有发布公告" },
                     color = if (noticeText.isBlank()) {
                         MiuixTheme.colorScheme.onBackgroundVariant
                     } else {
                         MiuixTheme.colorScheme.onBackground
+                    },
+                    linkColor = MiuixTheme.colorScheme.primary,
+                    fontSize = 14.sp,
+                    onTap = { url ->
+                        if (url != null && onOpenWeb != null) {
+                            menu.showNoticeViewer = false
+                            onOpenWeb(url, group.name)
+                        } else if (url != null) {
+                            onToast("没有可用的内置浏览器")
+                        }
                     },
                 )
             },
@@ -1269,4 +1327,50 @@ private fun rememberIsForeground(): Boolean {
         }
     }
     return foreground
+}
+
+/**
+ * 可点击链接文本 (群公告 / 查看公告共用)
+ *
+ * Coil 之外这里不能用 ClickableText (会和长按手势打架), 所以自己处理手势:
+ * onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 highlightMentions 打好的 URL 注解。
+ * onTap 收到 null 表示点在普通文字上, 调用方可以拿来做「展开/收起」。
+ */
+@Composable
+private fun LinkText(
+    content: String,
+    color: Color,
+    linkColor: Color,
+    fontSize: TextUnit,
+    onTap: ((String?) -> Unit)? = null,
+    maxLines: Int = Int.MAX_VALUE,
+    mentionColor: Color = linkColor,
+    modifier: Modifier = Modifier,
+) {
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val shown = remember(content, mentionColor, linkColor) {
+        highlightMentions(content = content, mentionColor = mentionColor, linkColor = linkColor)
+    }
+    Text(
+        text = shown,
+        fontSize = fontSize,
+        color = color,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { textLayout = it },
+        modifier = modifier.pointerInput(shown.text, onTap) {
+            if (onTap != null) {
+                detectTapGestures(onTap = { pos ->
+                    val lr = textLayout
+                    val url = if (lr == null) {
+                        null
+                    } else {
+                        val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
+                        shown.getStringAnnotations("URL", off, off).firstOrNull()?.item
+                    }
+                    onTap(url)
+                })
+            }
+        },
+    )
 }
