@@ -231,7 +231,7 @@ fun SocialScreen(
                                                     if (row.id == g.id) row.copy(muted = on) else row
                                                 }
                                             }
-                                            .onFailure { e -> onToast(e.message ?: "设置失败") }
+                                            .onFailure { e -> Toast.makeText(context, e.message ?: "设置失败", Toast.LENGTH_SHORT).show() }
                                     }
                                 },
                             )
