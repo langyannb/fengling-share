@@ -387,10 +387,18 @@ private fun ProfileView(me: User) {
                     Toast.makeText(context, "读取图片失败，请换一张", Toast.LENGTH_SHORT).show()
                 } else {
                     val mime = context.contentResolver.getType(uri) ?: "image/*"
+                    // 相册 URI 的 lastPathSegment 常常是一串数字 (没有扩展名), 这里按 MIME 给出规范文件名,
+                    // 避免后端因扩展名不合法而拒绝 (相册选图不带 .jpg/.png)
+                    val ext = when {
+                        mime.contains("png") -> "png"
+                        mime.contains("webp") -> "webp"
+                        mime.contains("gif") -> "gif"
+                        else -> "jpg"
+                    }
                     val filename = uri.lastPathSegment
                         ?.substringAfterLast('/')
-                        ?.takeIf { it.isNotBlank() }
-                        ?: "avatar.png"
+                        ?.takeIf { it.isNotBlank() && it.contains('.') }
+                        ?: "avatar.$ext"
                     ApiClient.uploadAvatar(bytes, filename, mime)
                         .onSuccess {
                             // 后端已同步 users.avatar, 重新拉一次资料刷新界面
