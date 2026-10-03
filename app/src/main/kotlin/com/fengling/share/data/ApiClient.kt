@@ -412,7 +412,10 @@ object ApiClient {
     /** 社交群组列表 (公开, 只含 is_active=1 的群) */
     suspend fun socialGroups(): Result<List<SocialGroup>> = withContext(Dispatchers.IO) {
         apiCall {
-            val arr = request("social_groups").optJSONObject("data")?.optJSONArray("list")
+            // 必须带 token: social_groups 只有登录后才返回 unread / first_unread_id,
+            // 之前漏传 token, 服务端当访客处理 → 未读数恒为 0, 群列表没有红标
+            val arr = request("social_groups", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data")?.optJSONArray("list")
             if (arr == null) {
                 emptyList()
             } else {
@@ -488,6 +491,41 @@ object ApiClient {
             }
         }
 
+    /** 群消息一页数据: 消息列表 + 该群未读条数 + 第一条未读消息 id */
+    data class SocialMessagesPage(
+        val list: List<SocialMessage> = emptyList(),
+        val unread: Int = 0,
+        val firstUnreadId: Int = 0,
+        val myId: Int = 0,
+    )
+
+    /**
+     * 群消息列表 + 未读信息 (需登录)
+     * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
+     * @param aroundId >0 时以该消息为中心取一屏 (定位用)
+     */
+    suspend fun socialMessagesPage(
+        groupId: Int,
+        afterId: Int = 0,
+        limit: Int = 30,
+        aroundId: Int = 0,
+    ): Result<SocialMessagesPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
+            if (aroundId > 0) params["around_id"] = aroundId
+            if (afterId > 0) params["after_id"] = afterId
+            val d = request("social_messages", params, UserStore.token).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            SocialMessagesPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { SocialMessage.fromJson(arr.getJSONObject(it)) },
+                unread = d?.optInt("unread", 0) ?: 0,
+                firstUnreadId = d?.optInt("first_unread_id", 0) ?: 0,
+                myId = d?.optInt("my_id", 0) ?: 0,
+            )
+        }
+    }
+
     /**
      * 群消息列表 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
@@ -497,20 +535,8 @@ object ApiClient {
         afterId: Int = 0,
         limit: Int = 30,
         aroundId: Int = 0,
-    ): Result<List<SocialMessage>> = withContext(Dispatchers.IO) {
-        apiCall {
-            val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
-            if (aroundId > 0) params["around_id"] = aroundId
-            if (afterId > 0) params["after_id"] = afterId
-            val arr = request("social_messages", params, UserStore.token)
-                .optJSONObject("data")?.optJSONArray("list")
-            if (arr == null) {
-                emptyList()
-            } else {
-                (0 until arr.length()).map { SocialMessage.fromJson(arr.getJSONObject(it)) }
-            }
-        }
-    }
+    ): Result<List<SocialMessage>> =
+        socialMessagesPage(groupId, afterId, limit, aroundId).map { it.list }
 
     /** 发送群消息, 成功返回新消息 id (同一用户同一群 2 秒 1 条) */
     suspend fun socialSend(

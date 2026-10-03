@@ -671,9 +671,22 @@ private fun ChatView(
         scope.launch {
             if (isRefresh) refreshing = true else loading = true
             val around = locateId
-            ApiClient.socialMessages(group.id, limit = 30, aroundId = around)
-                .onSuccess { list ->
-                    messages = list.distinctBy { it.id }.sortedBy { it.id }
+            ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = around)
+                .onSuccess { page ->
+                    messages = page.list.distinctBy { it.id }.sortedBy { it.id }
+                    // 群列表里的未读数可能是旧的 (群对象是进群前拿到的), 所以这里再信一次服务端:
+                    // 首次加载若还有未读、且不是从通知点进来的, 就以「第一条未读」为锚点重取一屏
+                    val anchor = if (!isRefresh && around <= 0 && locateMessageId <= 0 &&
+                        page.unread > 0 && page.firstUnreadId > 0
+                    ) page.firstUnreadId else 0
+                    if (anchor > 0) {
+                        locateId = anchor
+                        unreadAnchorId = anchor
+                        ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = anchor)
+                            .onSuccess { p2 ->
+                                messages = p2.list.distinctBy { it.id }.sortedBy { it.id }
+                            }
+                    }
                 }
                 .onFailure { e -> onToast(e.message ?: "消息加载失败") }
             if (isRefresh) refreshing = false else loading = false
