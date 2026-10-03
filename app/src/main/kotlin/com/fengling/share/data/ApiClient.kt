@@ -3,6 +3,7 @@ package com.fengling.share.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -25,8 +26,15 @@ object ApiClient {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    /** 通用请求: 校验 code, 返回整个响应 JSONObject (含 data) */
-    private fun request(action: String, params: Map<String, Any?> = emptyMap()): JSONObject {
+    /**
+     * 通用请求: 校验 code, 返回整个响应 JSONObject (含 data)
+     * @param token 非空时附加 `Authorization: Bearer <token>` (现有调用不传, 行为不变)
+     */
+    private fun request(
+        action: String,
+        params: Map<String, Any?> = emptyMap(),
+        token: String? = null,
+    ): JSONObject {
         val url = StringBuilder(BASE_URL).append("?action=").append(action)
         val body: okhttp3.RequestBody?
 
@@ -48,6 +56,9 @@ object ApiClient {
         }
 
         val builder = Request.Builder().url(url.toString())
+        if (!token.isNullOrBlank()) {
+            builder.header("Authorization", "Bearer $token")
+        }
         if (body != null) {
             builder.post(body)
         }
@@ -180,6 +191,144 @@ object ApiClient {
             )
         }
     }
+    // ===================== 账号系统 (接口契约 v1.0.10) =====================
+
+    /**
+     * Result 包装: 业务失败用服务端 msg, 网络失败用统一文案 (绝不泄露服务器地址)
+     * token 失效 (code=401 / msg=登录已失效) 时顺手清掉本地登录态
+     */
+    private inline fun <T> apiCall(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: ApiException) {
+        if (e.message?.contains("登录已失效") == true) UserStore.clear()
+        Result.failure(Exception(e.message?.takeIf { it.isNotBlank() } ?: "请求失败"))
+    } catch (e: Exception) {
+        Result.failure(Exception(e.userFriendlyMessage()))
+    }
+
+    /** 解析 {"token":"...","user":{...}} */
+    private fun parseTokenUser(obj: JSONObject): Pair<String, User> {
+        val d = obj.optJSONObject("data") ?: JSONObject()
+        val token = d.optString("token", "")
+        val user = d.optJSONObject("user")?.let { User.fromJson(it) } ?: User()
+        return token to user
+    }
+
+    /** 解析 data 里的单个 user 对象 */
+    private fun parseUserData(obj: JSONObject): User =
+        obj.optJSONObject("data")?.let { User.fromJson(it) } ?: User()
+
+    /** 发送邮箱验证码 (purpose: register=注册 / reset=找回密码) */
+    suspend fun sendCode(email: String, purpose: String = "register"): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                request("send_code", mapOf("email" to email, "purpose" to purpose))
+                Unit
+            }
+        }
+
+    /** 注册: 成功返回 (token, user) */
+    suspend fun register(
+        username: String,
+        password: String,
+        nickname: String,
+        email: String,
+        code: String,
+    ): Result<Pair<String, User>> = withContext(Dispatchers.IO) {
+        apiCall {
+            parseTokenUser(
+                request(
+                    "register",
+                    mapOf(
+                        "username" to username,
+                        "password" to password,
+                        "nickname" to nickname,
+                        "email" to email,
+                        "code" to code,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** 登录 (account 可填用户名或邮箱) */
+    suspend fun loginAccount(account: String, password: String): Result<Pair<String, User>> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                parseTokenUser(request("login", mapOf("username" to account, "password" to password)))
+            }
+        }
+
+    /** 当前登录用户资料 */
+    suspend fun getMe(): Result<User> = withContext(Dispatchers.IO) {
+        apiCall { parseUserData(request("user_me", token = UserStore.token)) }
+    }
+
+    /** 更新资料 (只提交非 null 字段: 昵称≤20 / 简介≤100 / 头像 URL) */
+    suspend fun updateProfile(
+        nickname: String? = null,
+        bio: String? = null,
+        avatar: String? = null,
+    ): Result<User> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>()
+            if (nickname != null) params["nickname"] = nickname
+            if (bio != null) params["bio"] = bio
+            if (avatar != null) params["avatar"] = avatar
+            parseUserData(request("user_update", params, UserStore.token))
+        }
+    }
+
+    /** 修改密码 (成功后后端不返回数据, 需重新登录) */
+    suspend fun changePassword(old: String, new: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                request(
+                    "user_password",
+                    mapOf("old_password" to old, "new_password" to new),
+                    UserStore.token,
+                )
+                Unit
+            }
+        }
+
+    /**
+     * 上传头像 (multipart, 字段名固定 file, action=user_avatar)
+     * 后端会同时把 users.avatar 写成新 URL, 成功返回该 URL
+     */
+    suspend fun uploadAvatar(bytes: ByteArray, filename: String, mime: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val safeMime = if (mime.contains("/")) mime else "image/*"
+                val body = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, bytes.toRequestBody(safeMime.toMediaType()))
+                    .build()
+                // 注意: 局部变量不能叫 request, 会遮蔽上面的 private fun request
+                val req = Request.Builder()
+                    .url(StringBuilder(BASE_URL).append("?action=user_avatar").toString())
+                    .header("Authorization", "Bearer ${UserStore.token}")
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { response ->
+                    val text = response.body?.string() ?: "{}"
+                    val obj = JSONObject(text)
+                    if (obj.optInt("code", -1) != 0) {
+                        throw ApiException(obj.optString("msg", "请求失败"))
+                    }
+                    obj.optJSONObject("data")?.optString("url", "") ?: ""
+                }
+            }
+        }
+
+    /** 退出登录 (通知后端作废 token, 本地登录态由调用方 UserStore.clear()) */
+    suspend fun logoutAccount(): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("logout", mapOf("token" to UserStore.token), UserStore.token)
+            Unit
+        }
+    }
+
 }
 
 /** 版本信息 */
