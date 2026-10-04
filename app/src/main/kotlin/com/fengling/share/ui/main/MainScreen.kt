@@ -125,14 +125,15 @@ object Routes {
     // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知 进入)
     const val PM_CHAT = "pm/chat?convId={convId}&userId={userId}&messageId={messageId}"
     // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
-    const val USER_PROFILE = "user/profile/{userId}"
+    // groupId: 从群聊进来带群 id (主页上的禁言只对本群生效), 其它入口 = 0 全站视角
+    const val USER_PROFILE = "user/profile/{userId}?groupId={groupId}"
 
     fun detail(appId: Int) = "detail/$appId"
     fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
         "social/group/$groupId?messageId=$messageId&notice=" + if (notice) 1 else 0
     fun pmChat(convId: Int = 0, userId: Int = 0, messageId: Int = 0) =
         "pm/chat?convId=$convId&userId=$userId&messageId=$messageId"
-    fun userProfile(userId: Int) = "user/profile/$userId"
+    fun userProfile(userId: Int, groupId: Int = 0) = "user/profile/$userId?groupId=$groupId"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -345,8 +346,9 @@ fun MainScreen(
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
                                 onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
-                                // 点群聊里任何人的头像: 打开用户主页
-                                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
+                                // 点群聊里任何人的头像: 打开用户主页 (带上群 id, 主页里可直接禁言)
+                                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
+
                                 // 私聊会话列表点一条: 进私聊会话页
                                 onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
                                 // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
@@ -469,7 +471,8 @@ fun MainScreen(
                 openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
                 // 群聊消息里的链接: 内置浏览器打开
                 onOpenWeb = { url, title -> openLink(url, title) },
-                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
+                // 群聊里点头像: 带上当前群 id → 主页里就能直接禁言 (只对本群生效)
+                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
                 onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
                 onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
             )
@@ -496,10 +499,15 @@ fun MainScreen(
         // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己; 自己看时没有「发消息」按钮)
         composable(
             route = Routes.USER_PROFILE,
-            arguments = listOf(navArgument("userId") { type = NavType.IntType }),
+            arguments = listOf(
+                navArgument("userId") { type = NavType.IntType },
+                // 群聊进来的群 id (禁言只对本群生效); 私聊/消息中心进来 = 0 (全站视角)
+                navArgument("groupId") { type = NavType.IntType; defaultValue = 0 },
+            ),
         ) { backStackEntry ->
             UserProfileScreen(
                 userId = backStackEntry.arguments?.getInt("userId") ?: 0,
+                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
                 onBack = { navController.popBackStack() },
                 onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(convId = cid, userId = uid)) },
             )
@@ -521,6 +529,7 @@ fun MainScreen(
                 initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
                 onBack = { navController.popBackStack() },
                 onOpenWeb = { url, title -> openLink(url, title) },
+                // 私聊里点头像: 没有群上下文 → groupId = 0 (全站视角)
                 onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
             )
         }

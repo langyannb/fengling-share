@@ -451,6 +451,8 @@ fun PmChatScreen(
             AppTopBar(
                 title = peer?.displayName?.takeIf { it.isNotBlank() } ?: "私聊",
                 onBack = onBack,
+                // 对方的管理员标签 (防骗警示, 契约 F1)
+                titleTags = peer?.tags ?: emptyList(),
                 actions = {
                     val target = peer?.id ?: peerUserId
                     if (onOpenUser != null && target > 0) {

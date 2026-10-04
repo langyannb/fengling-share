@@ -101,6 +101,8 @@ import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.MuteOptionPicker
+import com.fengling.share.ui.components.TagChips
 import com.fengling.share.ui.lottery.LotteryScreen
 import com.fengling.share.ui.pm.PmScreen
 import kotlinx.coroutines.Dispatchers
@@ -209,7 +211,7 @@ fun SocialScreen(
     /** 未登录时点「去登录」的回调 (跳账号页登录/注册) */
     onNeedLogin: (() -> Unit)? = null,
     /** 点头像 / 点昵称: 打开某个用户的主页 (含自己; 主页里自己看不显示「发消息」) */
-    onOpenUser: ((userId: Int) -> Unit)? = null,
+    onOpenUser: ((userId: Int, groupId: Int) -> Unit)? = null,
     /** 「私聊」tab 里点会话: 打开私聊聊天页 (convId = 0 表示还没会话说, 用 userId 首次私聊) */
     onOpenPm: ((userId: Int, convId: Int) -> Unit)? = null,
     /** 点「有人@你 / 有人@所有人」提示: 进群并定位到那条消息 */
@@ -409,7 +411,8 @@ fun SocialScreen(
                     // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
                     showTabs && tab == 1 && group == null -> PmScreen(
                         onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
-                        onOpenUser = onOpenUser,
+                        // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
+                        onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
                         onNeedLogin = onNeedLogin,
                     )
                     group == null -> GroupList(
@@ -443,7 +446,8 @@ fun SocialScreen(
                         onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
                         // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
                         onMarkRead = { clearUnread(group.id) },
-                        onOpenUser = onOpenUser,
+                        // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
+                        onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
                     )
                 }
             }
@@ -801,7 +805,7 @@ private fun ChatView(
     onToast: (String) -> Unit,
     onMarkRead: () -> Unit = {},
     /** 点头像: 打开用户主页 (为 null 时退回旧的成员操作面板) */
-    onOpenUser: ((Int) -> Unit)? = null,
+    onOpenUser: ((Int, Int) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
@@ -1516,7 +1520,11 @@ private fun ChatView(
                                 // 点头像/昵称: 打开用户主页 (含自己, 主页里自己看不显示「发消息」);
                                 // 没接主页时退回旧的成员操作面板
                                 onAvatarTap = {
-                                    if (onOpenUser != null) onOpenUser(msg.userId) else openMemberPanel(msg)
+                                    if (onOpenUser != null) {
+                                        onOpenUser(msg.userId, group.id)
+                                    } else {
+                                        openMemberPanel(msg)
+                                    }
                                 },
                                 // 点图片: 全屏查看大图
                                 onImageTap = { url -> previewImage = url },
@@ -2076,6 +2084,15 @@ private fun ChatView(
                             }
                         }
                     }
+                    // 管理员: 从消息菜单也能进「成员操作」(禁言) 面板 ——
+                    // 点头像现在是进个人主页 (主页里也能禁言), 这里保证老入口不丢
+                    if (isAdmin) {
+                        MessageActionRow(text = "成员操作") {
+                            val t = acting
+                            actionTarget = null
+                            openMemberPanel(t)
+                        }
+                    }
                     // 撤回权限: 自己的消息 or 管理员, 已撤回的不再给入口
                     if (canRecall) {
                         MessageActionRow(text = if (isImage) "删除图片" else "撤回", danger = true) {
@@ -2142,39 +2159,11 @@ private fun ChatView(
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
                         Spacer(Modifier.height(6.dp))
-                        MUTE_OPTIONS.chunked(3).forEach { rowItems ->
-                            Row {
-                                rowItems.forEach { item ->
-                                    val picked = muteMinutes == item.second
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(
-                                                if (picked) {
-                                                    MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
-                                                } else {
-                                                    MiuixTheme.colorScheme.surfaceContainerHigh
-                                                },
-                                            )
-                                            .clickable { muteMinutes = item.second }
-                                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                                    ) {
-                                        Text(
-                                            text = item.first,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (picked) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (picked) {
-                                                MiuixTheme.colorScheme.primary
-                                            } else {
-                                                MiuixTheme.colorScheme.onBackgroundVariant
-                                            },
-                                        )
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                }
-                            }
-                            Spacer(Modifier.height(6.dp))
-                        }
+                        // 时长档位与「个人主页 → 禁言」共用同一份 MUTE_OPTIONS (components/UserTagChips.kt)
+                        MuteOptionPicker(
+                            selected = muteMinutes,
+                            onSelect = { muteMinutes = it },
+                        )
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = muteReason,
@@ -2444,6 +2433,11 @@ private fun MessageRow(
                             )
                         }
                     }
+                    // 管理员给这个用户打的标签 (防骗警示): 最多 2 个, 多了折成 +N
+                    if (msg.tags.isNotEmpty()) {
+                        Spacer(Modifier.width(4.dp))
+                        TagChips(tags = msg.tags, max = 2, small = true)
+                    }
                     if (msg.at.contains(0)) {
                         Spacer(Modifier.width(4.dp))
                         Box(
@@ -2689,15 +2683,6 @@ private fun CenterHint(text: String) {
 }
 
 /** 轻量操作按钮 (不依赖 AccountScreen 的私有按钮组件) */
-/** 禁言时长选项: 文案 → 分钟数 (0 = 永久) */
-private val MUTE_OPTIONS = listOf(
-    "10 分钟" to 10,
-    "1 小时" to 60,
-    "1 天" to 1440,
-    "7 天" to 10080,
-    "30 天" to 43200,
-    "永久" to 0,
-)
 
 @Composable
 private fun SmallActionButton(text: String, onClick: () -> Unit) {

@@ -47,6 +47,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.PmConversation
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.TagChips
 import com.fengling.share.ui.social.LoginRequiredView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -240,14 +241,22 @@ private fun PmConversationCard(
             Spacer(Modifier.width(12.dp))
 
             Column(Modifier.weight(1f)) {
-                Text(
-                    text = conversation.displayName,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = conversation.displayName,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // 管理员标签 (防骗警示, 契约 F1)
+                    if (conversation.tags.isNotEmpty()) {
+                        Spacer(Modifier.width(6.dp))
+                        TagChips(tags = conversation.tags, max = 2, small = true)
+                    }
+                }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = pmPreviewText(conversation),
