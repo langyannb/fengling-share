@@ -8,6 +8,9 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -16,6 +19,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,6 +42,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.AlertDialog
@@ -59,6 +65,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -643,8 +650,11 @@ private fun ChatView(
     /**
      * 用户当前是否贴在消息列表底部。
      * 只有「本来就贴底」时才自动跟到最新消息; 用户上翻翻历史时收到新消息绝不能把ta拽回底部。
+     * 由下面 snapshotFlow 持续维护, 同时决定右下角「回到最新消息」按钮显不显示。
      */
     var atBottom by remember { mutableStateOf(true) }
+    /** 用户上翻期间新增的消息条数: 显示在「回到最新消息」按钮的角标上, 回到底部后清零 */
+    var newWhileAway by remember { mutableStateOf(0) }
     /**
      * 本次消息列表变化后要不要自动滚到底。
      * 必须在「改写 messages 的那一刻」按当时的贴底状态算好: 新消息一进列表
@@ -657,7 +667,7 @@ private fun ChatView(
     /**
      * 当前是否「贴在底部」(带「最后一条已进入可视区」的一格容差, 与 atBottom 判据一致)。
      * 判据带上容差是为了防抖动: 贴底时刚来一条新消息会让 canScrollForward 立刻变 true,
-     * 只看它的话自动跟随也会失效。
+     * 只看它的话按钮会闪一下、自动跟随也会失效。
      * 注意: 必须在改写 messages 之前调用, 这样才代表「改写前」的位置。
      */
     fun isStuckToBottom(): Boolean {
@@ -667,11 +677,19 @@ private fun ChatView(
         return lastVisible >= messages.lastIndex - 1
     }
 
-    // 持续维护 atBottom
+    // 持续维护 atBottom (用户滚到底部时顺手把「上翻期间新增」角标清零)
     LaunchedEffect(group.id, listState) {
         snapshotFlow { isStuckToBottom() }.collect { bottom ->
             atBottom = bottom
+            if (bottom) newWhileAway = 0
         }
+    }
+
+    /** 回到最新消息: 滚到底部 + 清掉上翻期间累积的新消息角标 */
+    fun jumpToLatest() {
+        val last = messages.lastIndex
+        if (last >= 0) scope.launch { runCatching { listState.animateScrollToItem(last) } }
+        newWhileAway = 0
     }
     // 抽奖界面 (输入区「+」菜单进入)
     var showLottery by remember { mutableStateOf(false) }
@@ -775,7 +793,8 @@ private fun ChatView(
     /**
      * 合并新消息: 按 id 去重 + 正序 (轮询片段可能重复或乱序)。
      * forceScroll = true 用于「自己刚发出去的消息」: 不管当时在哪都跟到最新。
-     * 其余情况按「改写 messages 之前」的贴底状态决定要不要自动跟到底: 用户上翻看历史时绝不滚动。
+     * 其余情况按「改写 messages 之前」的贴底状态决定要不要自动跟到底 ——
+     * 用户上翻看历史时绝不滚动, 只把新增条数记到 newWhileAway 上, 由右下角按钮一键回去。
      */
     fun mergeNew(incoming: List<SocialMessage>, forceScroll: Boolean = false) {
         if (incoming.isEmpty()) return
@@ -786,7 +805,12 @@ private fun ChatView(
         // 关键: 贴底状态要在改写 messages 之前读 —— 列表一变长 canScrollForward 立刻就是 true
         val stuck = forceScroll || isStuckToBottom()
         messages = merged
-        if (stuck) autoScrollPending = true
+        if (stuck) {
+            autoScrollPending = true
+            newWhileAway = 0
+        } else {
+            newWhileAway += added
+        }
     }
 
     /**
@@ -1327,6 +1351,59 @@ private fun ChatView(
                                     focusInput()
                                     onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
                                 },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ===== 右下角「回到最新消息」(问题3): 用户上翻看历史时出现, 一点回最新 =====
+            // 贴在这个消息列表区域的右下角 (输入框之上, 不挡输入框); 在底部时淡出隐藏
+            // 这里外层是 Column, 直接写 AnimatedVisibility 会被解析成 ColumnScope 的扩展重载而报错,
+            // 因此显式写成顶层函数 (它内部依然能用到 BoxScope 的 Modifier.align)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !atBottom && messages.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 16.dp),
+            ) {
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .shadow(6.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                            .clickable { jumpToLatest() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardDoubleArrowDown,
+                            contentDescription = "回到最新消息",
+                            tint = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    // 上翻期间新增的消息条数 (点按钮回到底部后清零)
+                    if (newWhileAway > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = 1.dp, y = (-1).dp)
+                                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFE53935))
+                                .clickable { jumpToLatest() }
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = if (newWhileAway > 99) "99+" else newWhileAway.toString(),
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }
