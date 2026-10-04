@@ -512,7 +512,10 @@ fun SocialScreen(
                         tabs = listOf("群组", "私聊"),
                         selected = tab,
                         onSelect = { tab = it },
-                        backdrop = glassBackdrop,
+                        // 注意: 不能用 MainScreen 的 backdrop —— 该层捕获范围包含本控件自身,
+                        // 自引用会让 hwui 的 RenderNode 树无限递归 (真机 SIGSEGV stack overflow),
+                        // 且本控件在流内布局、背后无滚动内容可模糊, 故退化为半透明+描边玻璃。
+                        backdrop = null,
                         unread = listOf(
                             // 契约 B2: 群组未读 = 所有群未读之和
                             groups.sumOf { it.unread },
@@ -1856,7 +1859,8 @@ private fun ChatView(
                 // 契约 C: 输入栏玻璃化 —— 固定层, 允许 backdrop 模糊, 拿不到就退化为半透明底
                 .fillMaxWidth()
                 .glassSurface(
-                    backdrop = glassBackdrop,
+                    // 同上: 输入栏在捕获层内部, 不能自引用 backdrop
+                    backdrop = null,
                     shape = RoundedCornerShape(topStart = GlassRadius.panel, topEnd = GlassRadius.panel),
                     fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.90f),
                 )
