@@ -48,6 +48,8 @@ import com.fengling.share.data.LotteryResult
 import com.fengling.share.data.LotteryWindow
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.LoadingBox
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -250,8 +252,16 @@ fun LotteryScreen(
         loadRecords(1, false)
     }
 
+    // 契约 B: 预测性返回 (跟手) —— 手势进度 0→1 跟手右移 + 缩小淡出, 松手 <50% 回弹, >=50% 提交返回。
+    // 未开「预测性返回手势动画」或低版本系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(),
+    // 功能与原来完全一致, 不会崩。
+    // 抽奖结果弹窗开着时: 返回手势先关弹窗, 再退出抽奖页
+    val backProgress = rememberPredictiveBackProgress(enabled = true) {
+        if (result != null) result = null else onBack()
+    }
+
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = info?.title?.takeIf { it.isNotBlank() } ?: "抽奖",
