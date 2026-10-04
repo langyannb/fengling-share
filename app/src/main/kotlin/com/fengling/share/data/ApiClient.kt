@@ -141,8 +141,16 @@ object ApiClient {
                                 line.startsWith("data:") -> {
                                     val payload = line.substring(5).trim()
                                     when (eventName) {
-                                        "pm" -> parsePmStreamEvent(payload)?.let(onEvent)
-                                        "group" -> parseGroupStreamEvent(payload)?.let(onEvent)
+                                        "pm" -> {
+                                            val ev = parsePmStreamEvent(payload)
+                                            Log.i("FLS_SSE", "解析 pm 结果=" + ev)
+                                            ev?.let(onEvent)
+                                        }
+                                        "group" -> {
+                                            val ev = parseGroupStreamEvent(payload)
+                                            Log.i("FLS_SSE", "解析 group 结果=" + ev)
+                                            ev?.let(onEvent)
+                                        }
                                         // 服务端正常收尾 (25 秒到点) -> 成功返回让外层重连
                                         "bye" -> {
                                             return@use
@@ -171,7 +179,7 @@ object ApiClient {
             image = j.optString("image", ""),
             createdAt = j.optString("created_at", ""),
         )
-    }.getOrNull()
+    }.onFailure { Log.e("FLS_SSE", "解析 pm 抛异常", it) }.getOrNull()
 
     /** 解析 `event: group` 的 data 行 (契约 A3) */
     private fun parseGroupStreamEvent(payload: String): StreamEvent.Group? = runCatching {
@@ -188,7 +196,7 @@ object ApiClient {
             atAll = j.optInt("at_all", 0),
             createdAt = j.optString("created_at", ""),
         )
-    }.getOrNull()
+    }.onFailure { Log.e("FLS_SSE", "解析 group 抛异常", it) }.getOrNull()
 
     /** 轮播图 */
     suspend fun getBanners(): List<Banner> = withContext(Dispatchers.IO) {
