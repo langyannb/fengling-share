@@ -36,7 +36,11 @@ import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -73,6 +77,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -111,6 +116,7 @@ import com.kyant.backdrop.Backdrop
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.glassStroke
 import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
@@ -693,17 +699,33 @@ private fun GroupCard(
         last.image.isNotBlank() -> last.nickname.ifBlank { "群友" } + ": [图片]"
         else -> "暂无消息"
     }
-    Card(
-        onClick = onClick,
+    // 契约 C: 群列表卡片玻璃化 + 按下缩到 0.97 松手弹回 (去掉涟漪, 靠缩放给触感反馈)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 700f),
+        label = "groupCardPress",
+    )
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        cornerRadius = 16.dp,
+            .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .glassCard(radius = GlassRadius.card)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            ),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(GlassSpacing.cardInner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 群图标: 有图用图, 没有用群名首字占位

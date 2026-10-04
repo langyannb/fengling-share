@@ -2,6 +2,7 @@ package com.fengling.share.ui.pm
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -32,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -49,7 +56,10 @@ import com.fengling.share.data.PmConversation
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.TagChips
+import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.social.LoginRequiredView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -213,17 +223,33 @@ private fun PmConversationCard(
     onClick: () -> Unit,
     onAvatarClick: () -> Unit,
 ) {
-    Card(
-        onClick = onClick,
+    // 契约 C: 私聊列表卡片玻璃化 + 按下缩到 0.97 松手弹回 (和群列表观感统一)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 700f),
+        label = "pmCardPress",
+    )
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        cornerRadius = 16.dp,
+            .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .glassCard(radius = GlassRadius.card)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            ),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(GlassSpacing.cardInner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 头像: 点一下看主页, 不让点击穿透到整行的「进会话」
