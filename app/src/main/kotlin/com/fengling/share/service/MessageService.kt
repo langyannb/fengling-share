@@ -257,6 +257,13 @@ class MessageService : Service() {
             runCatching { StreamCursor.init(applicationContext) }
             // 兜底补拉 (v1.1.2): 服务刚起来 / 上一次压根没连上时, 先做一次轻量 HTTP 补拉, 把断线期间
             // 漏掉的通知当场补弹。正常的 25 秒收尾重连**不做** (那 2 秒窗口由 SSE 游标在服务端补齐)。
+            // 基线落盘 (v1.1.2): 首次安装 / 刚升级 / 刚换账号时, 游标是 0, 此刻若进程被划掉,
+            // 之后到达的消息既没有 SSE 推送、补拉也会因为「游标为 0」而跳过 -> 通知永久丢失。
+            // 所以连接前先把服务端当前最大 id 记成基线 (幂等, 之后每轮都是纯本地读)。
+            if (StreamCursor.lastPmId <= 0 || StreamCursor.lastGroupId <= 0) {
+                runCatching { MessageCatchUp.seedIfUnset(this, "连接前建立基线") }
+                    .onFailure { Log.w(TAG, "建立游标基线失败", it) }
+            }
             if (firstConnect || lastConnectFailed) {
                 runCatching {
                     MessageCatchUp.pull(

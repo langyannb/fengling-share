@@ -45,10 +45,17 @@ object MessageCatchUp {
         val myId = runCatching { UserStore.current?.id ?: 0 }.getOrDefault(0)
         val basePm = StreamCursor.lastPmId
         val baseGrp = StreamCursor.lastGroupId
-        // 游标全 0 = 首次安装 / 刚退出登录: 语义是「从现在开始」, 绝不重放历史消息
+        // 游标全 0 = 首次安装 / 刚退出登录 / 刚升级到 1.1.2: 语义是「从现在开始」, 绝不重放历史。
+        // 但**基线必须落盘**: 基线不落盘的话, 只要进程在一片新消息到达前被划掉/杀掉, 那批消息
+        // 既没有 SSE 推送 (服务不在), 补拉又会一直走「游标为 0 -> 跳过」分支 —— 通知永久丢失。
         if (basePm <= 0 && baseGrp <= 0) {
-            Log.i(TAG, "补拉($reason): 游标为 0 (首次/刚登录), 跳过, 不重放历史")
-            return@withContext 0
+            val seeded = seedIfUnset(context, reason)
+            Log.i(
+                TAG,
+                "补拉($reason): 游标为 0, 只建基线不重放历史 (pm=" + (seeded?.first ?: -1) +
+                    " grp=" + (seeded?.second ?: -1) + ")",
+            )
+            return@withContext if (seeded == null) -1 else 0
         }
 
         var maxPm = basePm
@@ -126,5 +133,41 @@ object MessageCatchUp {
         )
         if (pushed > 0) return@withContext pushed
         return@withContext fail
+    }
+
+    /**
+     * 把「已处理基线」落到本地: 游标是 0 时, 用服务端当前的最大消息 id 作为起点。
+     *
+     * 语义与 SSE 的「pm_id=0 = 从现在开始」完全一致 —— 已有的历史一条都不重放;
+     * 但基线落盘之后, 之后任何新消息的 id 都严格大于它, 补拉立刻能生效。
+     * 幂等: 两个游标都非 0 时是纯本地读, 不发网络请求。
+     *
+     * @return (pmMax, groupMax); null = 拉取失败, 下次再试
+     */
+    suspend fun seedIfUnset(context: Context, reason: String): Pair<Int, Int>? = withContext(Dispatchers.IO) {
+        val needPm = StreamCursor.lastPmId <= 0
+        val needGrp = StreamCursor.lastGroupId <= 0
+        if (!needPm && !needGrp) return@withContext StreamCursor.lastPmId to StreamCursor.lastGroupId
+
+        var pm = StreamCursor.lastPmId
+        var grp = StreamCursor.lastGroupId
+        if (needPm) {
+            val page = ApiClient.pmConversations().getOrNull() ?: return@withContext null
+            for (conv in page.list) {
+                val id = conv.last?.id ?: 0
+                if (id > pm) pm = id
+            }
+        }
+        if (needGrp) {
+            val groups = ApiClient.socialGroups().getOrNull() ?: return@withContext null
+            for (g in groups) {
+                val id = g.lastMessage?.id ?: 0
+                if (id > grp) grp = id
+            }
+        }
+        if (needPm) StreamCursor.markPm(pm)
+        if (needGrp) StreamCursor.markGroup(grp)
+        Log.i(TAG, "游标基线已建立($reason): pm=" + pm + " grp=" + grp + " (从现在开始, 不重放历史)")
+        pm to grp
     }
 }
