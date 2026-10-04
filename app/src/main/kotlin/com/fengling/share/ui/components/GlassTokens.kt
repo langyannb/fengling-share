@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -16,6 +17,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
 
 /**
  * 全局观感 token (v1.1.5 UI 精修)
@@ -88,6 +95,44 @@ fun Modifier.glassCard(
         .clip(shape)
         .background(fill)
         .border(strokeWidth, stroke, shape)
+}
+
+/**
+ * 固定层玻璃修饰符 (顶栏 / 输入栏 / 分段控件这类不随列表滚动的层专用)
+ *
+ * backdrop 为 null (页面级捕获层拿不到, 例如走 NavHost 全屏路由的群聊页) 时,
+ * 自动退化为「半透明底 + 细描边」, 不崩、观感一致。
+ * 性能红线: 绝不把这个修饰符用在 LazyColumn 的 item 上。
+ */
+@Composable
+fun Modifier.glassSurface(
+    backdrop: Backdrop?,
+    shape: Shape,
+    fill: Color = glassFill(),
+    blurRadius: Dp = 20.dp,
+    highlightAlpha: Float = 0.55f,
+    innerShadowRadius: Dp = 10.dp,
+): Modifier {
+    val stroke = glassStroke()
+    return if (backdrop != null) {
+        this.drawBackdrop(
+            backdrop = backdrop,
+            shape = { shape },
+            highlight = { Highlight.Default.copy(alpha = highlightAlpha) },
+            shadow = { null },
+            innerShadow = { InnerShadow(radius = innerShadowRadius, alpha = 0.28f) },
+            effects = {
+                vibrancy()
+                blur(blurRadius.toPx())
+            },
+            onDrawSurface = { drawRect(fill) },
+        )
+    } else {
+        this
+            .clip(shape)
+            .background(fill)
+            .border(1.dp, stroke, shape)
+    }
 }
 
 /**

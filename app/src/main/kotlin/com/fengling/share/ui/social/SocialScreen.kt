@@ -11,6 +11,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -31,9 +32,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -107,6 +110,9 @@ import com.fengling.share.data.isSystemMessage
 import com.kyant.backdrop.Backdrop
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.glassStroke
+import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
@@ -557,6 +563,7 @@ fun SocialScreen(
                             onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
                             // 契约 B3: 加入群聊成功 → 本地马上把 isMember 置 true, 并刷新群资料
                             // (标题里的成员数 +1) 与群列表; 底部输入区随即从「加入群聊」变回输入框
+                            glassBackdrop = glassBackdrop,
                             onJoined = {
                                 currentGroup = currentGroup?.copy(isMember = true)
                                 groups = groups.map { row ->
@@ -901,6 +908,8 @@ private fun ChatView(
     onOpenUser: ((Int, Int) -> Unit)? = null,
     /** 点「加入群聊」成功后回调: 上层刷新群资料(成员数/isMember)与群列表 (契约 B3) */
     onJoined: () -> Unit = {},
+    /** 页面级捕获层: 输入栏 / 顶栏做毛玻璃用, null 时自动退化为半透明底 (契约 C) */
+    glassBackdrop: Backdrop? = null,
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
@@ -1640,6 +1649,7 @@ private fun ChatView(
                                     msg = msg,
                                     groupId = group.id,
                                     onOpenUser = onOpenUser,
+                                    modifier = messageItemEnter(),
                                 )
                             } else {
                             val mine = me != null && msg.userId == me.id
@@ -1649,6 +1659,7 @@ private fun ChatView(
                                 canRecall = !msg.isRecalled && (mine || isAdmin),
                                 onLongPress = { actionTarget = msg },
                                 highlight = highlightId == msg.id || unreadAnchorId == msg.id,
+                                modifier = messageItemEnter(),
                                 // 消息里的链接: 用内置浏览器打开
                                 onOpenLink = { url ->
                                     if (onOpenWeb != null) {
@@ -1819,8 +1830,13 @@ private fun ChatView(
         if (group.isMember) {
         Row(
             modifier = Modifier
+                // 契约 C: 输入栏玻璃化 —— 固定层, 允许 backdrop 模糊, 拿不到就退化为半透明底
                 .fillMaxWidth()
-                .background(MiuixTheme.colorScheme.surface)
+                .glassSurface(
+                    backdrop = glassBackdrop,
+                    shape = RoundedCornerShape(topStart = GlassRadius.panel, topEnd = GlassRadius.panel),
+                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.90f),
+                )
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1831,7 +1847,8 @@ private fun ChatView(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(CircleShape)
-                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
+                        .border(1.dp, glassStroke(), CircleShape)
                         .clickable { if (canSpeak) plusMenuOpen = true },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -1900,6 +1917,8 @@ private fun ChatView(
                 OutlinedTextField(
                     value = input,
                     enabled = canSpeak,
+                    // 契约 C: 药丸输入框
+                    shape = RoundedCornerShape(22.dp),
                     onValueChange = { nv ->
                         if (nv.text.length <= 500) {
                             // 刚敲下一个 '@' 就自动弹成员选择器 (选择器里还能搜索)
@@ -1932,7 +1951,7 @@ private fun ChatView(
             Card(
                 onClick = { if (!uploading && !sending) doSend() },
                 modifier = Modifier,
-                cornerRadius = 12.dp,
+                cornerRadius = 18.dp,
             ) {
                 Box(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -2535,6 +2554,18 @@ private fun MessageActionRow(text: String, danger: Boolean = false, onClick: () 
     )
 }
 
+/**
+ * 消息 item 进场动画 (契约 C)
+ *
+ * 只保留淡入: 不启用 placement 动画 —— 否则「加载更早的消息」往列表顶部插数据时,
+ * 整列消息会被动画推着走, 和顶部锚定逻辑打架。
+ */
+private fun LazyItemScope.messageItemEnter(): Modifier = Modifier.animateItem(
+    fadeInSpec = tween(durationMillis = 200),
+    placementSpec = null,
+    fadeOutSpec = null,
+)
+
 /** 单条消息: 自己靠右 (主色气泡), 别人靠左 (灰色气泡 + 头像 + 昵称 + 时间) */
 @Composable
 private fun MessageRow(
@@ -2549,11 +2580,12 @@ private fun MessageRow(
     onImageTap: (String) -> Unit = {},
     /** 从通知定位过来的那条消息: 给个底色方便一眼看到 */
     highlight: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     // 撤回的消息: 居中灰字提示, 不显示气泡
     if (msg.isRecalled) {
         Box(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .padding(vertical = 6.dp),
             contentAlignment = Alignment.Center,
@@ -2568,9 +2600,13 @@ private fun MessageRow(
     }
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .background(if (highlight) Color(0x33FFB300) else Color.Transparent)
+            // 契约 C: 未读/定位高亮改柔和 (原来是生硬的琥珀色块)
+            .background(
+                if (highlight) MiuixTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else Color.Transparent,
+            )
             .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
@@ -2597,7 +2633,7 @@ private fun MessageRow(
                     Text(
                         text = msg.nickname.ifBlank { "群成员" },
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                     )
                     if (msg.role == "admin") {
@@ -2640,7 +2676,8 @@ private fun MessageRow(
                 Text(
                     text = msg.timeText.ifBlank { msg.createdAt },
                     fontSize = 10.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    // 契约 C: 时间戳更轻, 不抢消息内容
+                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.72f),
                 )
             }
             Spacer(Modifier.height(3.dp))
@@ -2677,9 +2714,15 @@ private fun MessageRow(
                 }
                 Spacer(Modifier.height(4.dp))
             }
+            // 契约 C: 大圆角 + 靠自己那一侧的「尾角」; 别人的气泡补一道细玻璃描边做层次
+            val bubbleShape = if (mine) {
+                RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
+            } else {
+                RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
+            }
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(bubbleShape)
                     .background(
                         if (mine) {
                             MiuixTheme.colorScheme.primary
@@ -2687,12 +2730,15 @@ private fun MessageRow(
                             MiuixTheme.colorScheme.surfaceContainerHigh
                         },
                     )
+                    .then(
+                        if (mine) Modifier else Modifier.border(1.dp, glassStroke(), bubbleShape),
+                    )
                     // 长按气泡的任意位置都弹「消息操作」: 图片 / 引用块 / 留白都算,
                     // 原来只有文字那一小块能长按, 图片消息长按没反应 (用户反馈)
                     .pointerInput(msg.id) {
                         detectTapGestures(onLongPress = { onLongPress() })
                     }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 13.dp, vertical = 9.dp),
             ) {
                 Column {
                     // 图片消息: 按 image_w/image_h 比例排版 (最长边 200dp, 竖图不会撑满屏幕),
@@ -3019,6 +3065,7 @@ private fun SystemMessageRow(
     msg: SocialMessage,
     groupId: Int,
     onOpenUser: ((Int, Int) -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     // 标签: 先用消息自带的, 没有就拉一次主页接口补 (remember(msg.id) 保证只拉一次)
@@ -3035,7 +3082,7 @@ private fun SystemMessageRow(
     val gray = MiuixTheme.colorScheme.onBackgroundVariant
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,

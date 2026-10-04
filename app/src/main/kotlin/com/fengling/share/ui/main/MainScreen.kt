@@ -199,8 +199,8 @@ private fun NavGraphBuilder.appScreen(
     composable(
         route = route,
         arguments = arguments,
-        enterTransition = { slideInHorizontally(slideSpec) { it } + fadeIn(slideSpec) },
-        exitTransition = { slideOutHorizontally(slideSpec) { -it } + fadeOut(slideSpec) },
+        enterTransition = { slideInHorizontally(slideSpec) { it } + fadeIn(popSpec) },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it } + fadeOut(popSpec) },
         popEnterTransition = {
             slideInHorizontally(slideSpec) { -it / 4 } + fadeIn(popSpec) +
                 scaleIn(initialScale = 0.96f, animationSpec = popSpec)
