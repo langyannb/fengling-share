@@ -497,22 +497,28 @@ object ApiClient {
         val unread: Int = 0,
         val firstUnreadId: Int = 0,
         val myId: Int = 0,
+        /** 是否还存在更早的消息 (false = 已经翻到群聊最开始, 上滑不用再拉) */
+        val hasMoreBefore: Boolean = false,
     )
 
     /**
      * 群消息列表 + 未读信息 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
      * @param aroundId >0 时以该消息为中心取一屏 (定位用)
+     * @param beforeId >0 时只取比它更早的一页 (往上翻历史消息用, 返回仍是时间正序);
+     *   服务端优先级: aroundId > beforeId > afterId > 默认(最新)
      */
     suspend fun socialMessagesPage(
         groupId: Int,
         afterId: Int = 0,
         limit: Int = 30,
         aroundId: Int = 0,
+        beforeId: Int = 0,
     ): Result<SocialMessagesPage> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
             if (aroundId > 0) params["around_id"] = aroundId
+            if (beforeId > 0) params["before_id"] = beforeId
             if (afterId > 0) params["after_id"] = afterId
             val d = request("social_messages", params, UserStore.token).optJSONObject("data")
             val arr = d?.optJSONArray("list")
@@ -522,6 +528,7 @@ object ApiClient {
                 unread = d?.optInt("unread", 0) ?: 0,
                 firstUnreadId = d?.optInt("first_unread_id", 0) ?: 0,
                 myId = d?.optInt("my_id", 0) ?: 0,
+                hasMoreBefore = jsonBool(d ?: JSONObject(), "has_more_before"),
             )
         }
     }
@@ -529,14 +536,16 @@ object ApiClient {
     /**
      * 群消息列表 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
+     * @param beforeId >0 时只取比它更早的消息 (上滑加载更早的消息用)
      */
     suspend fun socialMessages(
         groupId: Int,
         afterId: Int = 0,
         limit: Int = 30,
         aroundId: Int = 0,
+        beforeId: Int = 0,
     ): Result<List<SocialMessage>> =
-        socialMessagesPage(groupId, afterId, limit, aroundId).map { it.list }
+        socialMessagesPage(groupId, afterId, limit, aroundId, beforeId).map { it.list }
 
     /** 发送群消息, 成功返回新消息 id (同一用户同一群 2 秒 1 条) */
     suspend fun socialSend(
@@ -607,6 +616,55 @@ object ApiClient {
             Unit
         }
     }
+
+    // ===================== 抽奖 (需登录) =====================
+
+    /**
+     * 抽奖活动信息: 开关 / 标题 / 说明 / 我的剩余次数 / 奖品 / 我的中奖记录
+     *
+     * 必须带 UserStore.token: 服务端要靠它算 my_quota / my_drawn / records,
+     * 漏 token 会被当访客处理 (和之前 socialGroups 漏 token 是同一类 bug)
+     */
+    suspend fun lotteryInfo(): Result<LotteryInfo> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("lottery_info", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data") ?: JSONObject()
+            LotteryInfo.fromJson(d)
+        }
+    }
+
+    /**
+     * 抽一次奖 (无参数)
+     * 失败时 ApiException.message 就是服务端中文提示, 可直接 Toast:
+     * 「抽奖活动已关闭」/「你的抽奖次数已用完」/「奖品已抽完, 请稍后再来」
+     */
+    suspend fun lotteryDraw(): Result<LotteryResult> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("lottery_draw", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data") ?: JSONObject()
+            LotteryResult.fromJson(d)
+        }
+    }
+
+    /** 我的中奖记录 (分页, 每页最多 50 条) */
+    suspend fun lotteryRecords(page: Int = 1, pageSize: Int = 20): Result<LotteryRecordPage> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val d = request(
+                    "lottery_records",
+                    mapOf("page" to page, "page_size" to pageSize),
+                    UserStore.token,
+                ).optJSONObject("data")
+                val arr = d?.optJSONArray("list")
+                LotteryRecordPage(
+                    list = if (arr == null) emptyList() else
+                        (0 until arr.length()).map { LotteryRecord.fromJson(arr.getJSONObject(it)) },
+                    total = d?.optInt("total", 0) ?: 0,
+                    page = d?.optInt("page", page) ?: page,
+                    pageSize = d?.optInt("page_size", pageSize) ?: pageSize,
+                )
+            }
+        }
 
     /**
      * 消息通知列表 (需登录)
@@ -949,3 +1007,109 @@ data class NotifyItem(
         )
     }
 }
+
+/** 抽奖奖项 (服务端只下发「启用 且 还有库存」的奖项) */
+data class LotteryPrize(
+    val id: Int = 0,
+    val name: String = "",
+    /** 卡密类型: 天卡 / 周卡 / 月卡 (也可以是后台自定义的任意文本) */
+    val cardType: String = "",
+    /** 该奖项剩余可抽数量 */
+    val left: Int = 0,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryPrize = LotteryPrize(
+            id = j.optInt("id", 0),
+            name = jsonStr(j, "name"),
+            cardType = jsonStr(j, "card_type"),
+            left = j.optInt("left", 0),
+        )
+    }
+}
+
+/** 我的中奖记录 (含卡密, 客户端可直接复制) */
+data class LotteryRecord(
+    val id: Int = 0,
+    val prizeId: Int = 0,
+    val prizeName: String = "",
+    val cardType: String = "",
+    val code: String = "",
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryRecord = LotteryRecord(
+            id = j.optInt("id", 0),
+            prizeId = j.optInt("prize_id", 0),
+            prizeName = jsonStr(j, "prize_name"),
+            cardType = jsonStr(j, "card_type"),
+            code = jsonStr(j, "code"),
+            createdAt = jsonStr(j, "created_at"),
+        )
+    }
+}
+
+/** 抽奖总览 (lottery_info) */
+data class LotteryInfo(
+    /** 后台开关: false = 抽奖活动已关闭, 客户端要禁用抽奖按钮 */
+    val enabled: Boolean = false,
+    val title: String = "",
+    /** 抽奖说明, 可含换行 (客户端用 SelectionContainer 包住方便复制) */
+    val content: String = "",
+    /** 默认每人可抽次数 (仅展示用) */
+    val perUserLimit: Int = 0,
+    /** 我还能抽几次 (>=0, 已扣掉已抽的) */
+    val myQuota: Int = 0,
+    /** 我已经抽了几次 */
+    val myDrawn: Int = 0,
+    val prizes: List<LotteryPrize> = emptyList(),
+    /** 我最近的中奖记录 */
+    val records: List<LotteryRecord> = emptyList(),
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryInfo {
+            val prizeArr = j.optJSONArray("prizes")
+            val recordArr = j.optJSONArray("records")
+            return LotteryInfo(
+                enabled = jsonBool(j, "enabled"),
+                title = jsonStr(j, "title"),
+                content = jsonStr(j, "content"),
+                perUserLimit = jsonInt(j, "per_user_limit"),
+                myQuota = jsonInt(j, "my_quota"),
+                myDrawn = jsonInt(j, "my_drawn"),
+                prizes = if (prizeArr == null) emptyList() else
+                    (0 until prizeArr.length()).map { LotteryPrize.fromJson(prizeArr.getJSONObject(it)) },
+                records = if (recordArr == null) emptyList() else
+                    (0 until recordArr.length()).map { LotteryRecord.fromJson(recordArr.getJSONObject(it)) },
+            )
+        }
+    }
+}
+
+/** 一次抽奖的结果 (lottery_draw) */
+data class LotteryResult(
+    val prizeId: Int = 0,
+    val prizeName: String = "",
+    val cardType: String = "",
+    /** 抽中的卡密 (要大字等宽显示 + 可复制) */
+    val code: String = "",
+    /** 抽完后我还剩几次 */
+    val left: Int = 0,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryResult = LotteryResult(
+            prizeId = j.optInt("prize_id", 0),
+            prizeName = jsonStr(j, "prize_name"),
+            cardType = jsonStr(j, "card_type"),
+            code = jsonStr(j, "code"),
+            left = jsonInt(j, "left"),
+        )
+    }
+}
+
+/** 中奖记录一页 (lottery_records) */
+data class LotteryRecordPage(
+    val list: List<LotteryRecord> = emptyList(),
+    val total: Int = 0,
+    val page: Int = 1,
+    val pageSize: Int = 20,
+)
