@@ -651,6 +651,8 @@ private fun ChatView(
      * canScrollForward 立刻就是 true, 等到组合后再判断就永远不敢跟到底了。
      */
     var autoScrollPending by remember { mutableStateOf(false) }
+    /** 首屏/刷新落地用无动画的 scrollToItem (从顶部动画滚到最新一条看起来像「抖一下」) */
+    var settleWithoutAnimation by remember { mutableStateOf(true) }
 
     /**
      * 当前是否「贴在底部」(带「最后一条已进入可视区」的一格容差, 与 atBottom 判据一致)。
@@ -733,25 +735,37 @@ private fun ChatView(
             // 整屏重载: 更早消息的分页状态作废 (下拉刷新时重置为「可能还有更早」)
             pendingScrollTo = -1
             if (isRefresh) hasMoreBefore = true
+            // 首屏落地用无动画滚动, 避免从顶部动画滚到底部 (看起来像「抖一下」)
+            settleWithoutAnimation = true
             val around = locateId
             ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = around)
                 .onSuccess { page ->
-                    messages = page.list.distinctBy { it.id }.sortedBy { it.id }
-                    hasMoreBefore = page.hasMoreBefore
+                    // 先把「最终要用哪一屏」算完, 中途不改写 messages:
+                    // 以前先赋值第一屏、再赋值第二屏, 界面会闪两下、位置跳一次
+                    // (用户反馈的进群「抖一下, 好像是刷新」)
+                    var finalList = page.list.distinctBy { it.id }.sortedBy { it.id }
+                    var finalHasMore = page.hasMoreBefore
                     // 群列表里的未读数可能是旧的 (群对象是进群前拿到的), 所以这里再信一次服务端:
-                    // 首次加载若还有未读、且不是从通知点进来的, 就以「第一条未读」为锚点重取一屏
+                    // 首次加载若还有未读、且不是从通知点进来的, 就以「第一条未读」为锚点重取一屏。
+                    // 群对象上已经有未读锚点时 (initialLocateId) around > 0, 这里不会再发第二次请求。
                     val anchor = if (!isRefresh && around <= 0 && locateMessageId <= 0 &&
                         page.unread > 0 && page.firstUnreadId > 0
                     ) page.firstUnreadId else 0
                     if (anchor > 0) {
+                        // 定位状态在最终赋值之前定好, 避免赋值后二次组合再跳一下
                         locateId = anchor
                         unreadAnchorId = anchor
                         ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = anchor)
                             .onSuccess { p2 ->
-                                messages = p2.list.distinctBy { it.id }.sortedBy { it.id }
-                                hasMoreBefore = p2.hasMoreBefore
+                                finalList = p2.list.distinctBy { it.id }.sortedBy { it.id }
+                                finalHasMore = p2.hasMoreBefore
                             }
+                            .onFailure { e -> onToast(e.message ?: "消息加载失败") }
                     }
+                    hasMoreBefore = finalHasMore
+                    // 有锚点/定位时由下面「定位」那个 effect 负责滚动, 这里不插手「跟消息」
+                    autoScrollPending = anchor <= 0 && locateId <= 0
+                    messages = finalList
                 }
                 .onFailure { e -> onToast(e.message ?: "消息加载失败") }
             if (isRefresh) refreshing = false else loading = false
@@ -865,7 +879,15 @@ private fun ChatView(
         }
         autoScrollPending = false
         if (messages.isEmpty()) return@LaunchedEffect
-        runCatching { listState.animateScrollToItem(messages.lastIndex) }
+        val target = messages.lastIndex
+        runCatching {
+            if (settleWithoutAnimation) {
+                settleWithoutAnimation = false
+                listState.scrollToItem(target)
+            } else {
+                listState.animateScrollToItem(target)
+            }
+        }
     }
 
     // 从通知点进来 / 未读定位: 滚到那条消息并高亮一下, 然后恢复正常
@@ -876,10 +898,15 @@ private fun ChatView(
         val idx = messages.indexOfFirst { it.id == target }
         if (idx < 0) return@LaunchedEffect
         highlightId = target
-        runCatching { listState.animateScrollToItem(idx) }
+        // 无动画定位: 进群时从顶部动画滚到未读那条, 看起来就是「抖一下」
+        runCatching { listState.scrollToItem(idx) }
         locateId = 0
-        kotlinx.coroutines.delay(2800)
-        highlightId = 0
+        // 定位自己决定位置, 不让「跟最新消息」的逻辑再补一次滚动
+        autoScrollPending = false
+        scope.launch {
+            kotlinx.coroutines.delay(2800)
+            highlightId = 0
+        }
     }
 
     // 定位/首次加载完成后标记已读 (只调一次):
