@@ -103,6 +103,7 @@ import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
+import com.fengling.share.data.isSystemMessage
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.MuteOptionPicker
 import com.fengling.share.ui.components.TagChips
@@ -219,6 +220,8 @@ fun SocialScreen(
     onOpenPm: ((userId: Int, convId: Int) -> Unit)? = null,
     /** 点「有人@你 / 有人@所有人」提示: 进群并定位到那条消息 */
     onOpenGroupAt: ((groupId: Int, messageId: Int) -> Unit)? = null,
+    /** 点右上角「☰」: 打开群详情页 (群头像/成员/公告/相册/设置; 契约 B6) */
+    onOpenGroupInfo: ((groupId: Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -246,6 +249,8 @@ fun SocialScreen(
     // (从「消息」点通知进来的全屏页 onBack != null, 直接进群聊/私聊, 不需要分段)
     val showTabs = onBack == null && onOpenGroup != null
     var tab by remember { mutableStateOf(0) }
+    // 私聊未读总数 (契约 B2): 只用来画顶部「私聊」分段上的红点
+    var pmUnread by remember { mutableStateOf(0) }
 
     /**
      * 拉群列表。
@@ -278,13 +283,69 @@ fun SocialScreen(
         }
     }
 
-    LaunchedEffect(Unit) { loadGroups(false) }
+    /**
+     * 私聊未读总数 (契约 B2): 给顶部「私聊」分段上的红点用。
+     * 失败一律静默 (红点不显示就行, 不能打扰用户)。
+     */
+    fun loadPmUnread() {
+        scope.launch {
+            ApiClient.pmConversations().onSuccess { pmUnread = it.totalUnread }
+        }
+    }
 
-    /** 进群标记已读后调: 立刻把本地未读数清零, 返回群列表时角标就消失了 */
+    LaunchedEffect(Unit) {
+        loadGroups(false)
+        loadPmUnread()
+    }
+
+    /**
+     * 进群标记已读后调: 立刻把本地未读数清零, 返回群列表时角标就消失了。
+     *
+     * 契约 B1: 除了 unread / firstUnreadId, 必须把 atMe / atMeFirst / atAll / atAllFirst 一起清零,
+     * 否则返回列表后红点没了, 却还挂着「有人@你 / 有人@所有人」的提示。
+     */
     fun clearUnread(groupId: Int) {
-        groups = groups.map { if (it.id == groupId) it.copy(unread = 0, firstUnreadId = 0) else it }
+        groups = groups.map {
+            if (it.id == groupId) {
+                it.copy(
+                    unread = 0,
+                    firstUnreadId = 0,
+                    atMe = 0,
+                    atMeFirst = 0,
+                    atAll = 0,
+                    atAllFirst = 0,
+                )
+            } else {
+                it
+            }
+        }
         val cur = currentGroup
-        if (cur != null && cur.id == groupId) currentGroup = cur.copy(unread = 0, firstUnreadId = 0)
+        if (cur != null && cur.id == groupId) {
+            currentGroup = cur.copy(
+                unread = 0,
+                firstUnreadId = 0,
+                atMe = 0,
+                atMeFirst = 0,
+                atAll = 0,
+                atAllFirst = 0,
+            )
+        }
+    }
+
+    /**
+     * 离开群聊回列表前 (契约 B1): 再补一次「标记到最新」的已读上报 + 立刻清掉本地红标。
+     *
+     * 根因回顾: 老实现只在进群那一刻上报一次已读, 之后别人再发的消息又让服务端 unread > 0,
+     * 返回列表时轮询把红标又画出来 (用户报的「必须再进再退才消失」就是这个)。
+     */
+    fun leaveCurrentGroup() {
+        val cur = currentGroup ?: return
+        clearUnread(cur.id)
+        currentGroup = null
+        scope.launch {
+            // last_id = 0 = 标记到最新; 失败不提示 (下次进群还会再报一次)
+            ApiClient.socialRead(cur.id)
+        }
     }
 
     // 回到群组列表 (从聊天页返回 / 切回本 tab) 时重新拉一次群列表:
@@ -292,7 +353,10 @@ fun SocialScreen(
     val listForeground = rememberIsForeground()
     // 回到群列表 / App 回到前台: 立刻静默刷新一次未读数
     LaunchedEffect(listForeground, currentGroup) {
-        if (listForeground && currentGroup == null && !loading) loadGroups(false, silent = true)
+        if (listForeground && currentGroup == null && !loading) {
+            loadGroups(false, silent = true)
+            loadPmUnread()
+        }
     }
 
     // 群列表自动刷新: 停在列表页时每 8 秒静默拉一次 (未读红标自己就更新了, 不用手动下拉)
@@ -301,6 +365,8 @@ fun SocialScreen(
         while (true) {
             kotlinx.coroutines.delay(8000L)
             loadGroups(true, silent = true)
+            // 私聊未读总数并入同一个 8 秒静默轮询 (契约 B2)
+            loadPmUnread()
         }
     }
 
@@ -312,7 +378,17 @@ fun SocialScreen(
             when (event) {
                 is StreamEvent.Group -> {
                     loadGroups(true, silent = true)
-                    if (currentGroup?.id == event.groupId) refreshTick++
+                    val cur = currentGroup
+                    if (cur != null && cur.id == event.groupId) {
+                        // 契约 B1: 我正看着这个群, 这条消息就算已读 —— 不能只 refreshTick++,
+                        // 那样服务端 unread 还是 > 0, 返回列表红标又冒出来
+                        clearUnread(cur.id)
+                        scope.launch {
+                            ApiClient.socialRead(cur.id, event.msgId)
+                            clearUnread(cur.id)
+                        }
+                        refreshTick++
+                    }
                 }
                 StreamEvent.Reconnected -> {
                     loadGroups(true, silent = true)
@@ -334,7 +410,9 @@ fun SocialScreen(
     // 返回键: 全屏路由模式(从「群组」tab 点进某个群)直接回上一页, 一次到位;
     // 内嵌模式(群组列表 + 聊天同屏)则先回到群组列表。用户反馈原来要点两次才回去。
     BackHandler(enabled = currentGroup != null || onBack != null) {
-        if (onBack != null) onBack() else currentGroup = null
+        // 契约 B1: 离开群聊回列表之前, 补一次已读上报 + 清掉本地红标
+        if (currentGroup != null) leaveCurrentGroup()
+        if (onBack != null) onBack()
     }
 
     Scaffold(
@@ -344,114 +422,35 @@ fun SocialScreen(
             when {
                 // 聊天页: 全屏路由模式直接回上一页, 内嵌模式先回群组列表
                 g != null -> AppTopBar(
-                    title = g.name,
-                    onBack = { if (onBack != null) onBack() else currentGroup = null },
+                    // 契约 B4: 标题显示「群名(成员数)」, 人数取 social_groups 的 member_count
+                    title = if (g.memberCount > 0) g.name + "(" + g.memberCount + ")" else g.name,
+                    // 契约 B1: 离开群聊之前补一次已读上报 + 清本地红标
+                    onBack = {
+                        leaveCurrentGroup()
+                        if (onBack != null) onBack()
+                    },
                     actions = {
-                        // 右上角「三条横杠」菜单 (和 QQ 群一样的入口): 看公告 / 发公告 / 刷新
-                        var menuOpen by remember { mutableStateOf(false) }
-                        val admin = UserStore.current?.role == "admin"
-                        // 进群时同步该群的免打扰状态
+                        // 契约 B6: 右上角「☰」进群详情页。
+                        // 原来的下拉菜单 (查看/发布群公告、全员禁言、消息免打扰、刷新消息)
+                        // 能力全部搬进群详情页, 这里只保留入口
                         LaunchedEffect(g.id) { chatMenu.muted = g.muted }
                         Box(
                             modifier = Modifier
                                 .clip(CircleShape)
-                                .clickable { menuOpen = true }
+                                .clickable {
+                                    if (onOpenGroupInfo != null) {
+                                        onOpenGroupInfo(g.id)
+                                    } else {
+                                        Toast.makeText(context, "群详情页暂不可用", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                                 .padding(8.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Menu,
-                                contentDescription = "更多",
+                                contentDescription = "群详情",
                                 tint = MiuixTheme.colorScheme.onBackground,
                                 modifier = Modifier.size(22.dp),
-                            )
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text(if (g.notice.isBlank()) "群公告 (暂无)" else "查看群公告") },
-                                onClick = {
-                                    menuOpen = false
-                                    chatMenu.showNoticeViewer = true
-                                },
-                            )
-                            if (admin) {
-                                DropdownMenuItem(
-                                    text = { Text(if (g.notice.isBlank()) "发布群公告" else "编辑群公告") },
-                                    onClick = {
-                                        menuOpen = false
-                                        chatMenu.draft = g.notice
-                                        chatMenu.showNoticeEditor = true
-                                    },
-                                )
-                            }
-                            // 全员禁言 (仅管理员可见, v1.1.1): 开启后除管理员外谁都不能发言
-                            if (admin) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(if (g.allMuted) "全员禁言: 已开启" else "全员禁言: 已关闭")
-                                    },
-                                    onClick = {
-                                        menuOpen = false
-                                        val next = !g.allMuted
-                                        // 先本地乐观更新 (列表 + 当前群), 失败再回滚
-                                        currentGroup = currentGroup?.copy(allMuted = next)
-                                        groups = groups.map { row ->
-                                            if (row.id == g.id) row.copy(allMuted = next) else row
-                                        }
-                                        scope.launch {
-                                            ApiClient.socialGroupAllMuteSet(g.id, next)
-                                                .onSuccess { on ->
-                                                    currentGroup = currentGroup?.copy(allMuted = on)
-                                                    groups = groups.map { row ->
-                                                        if (row.id == g.id) row.copy(allMuted = on) else row
-                                                    }
-                                                    Toast.makeText(
-                                                        context,
-                                                        if (on) "已开启全员禁言, 仅群管理员可发言" else "已关闭全员禁言",
-                                                        Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                }
-                                                .onFailure { e ->
-                                                    currentGroup = currentGroup?.copy(allMuted = !next)
-                                                    groups = groups.map { row ->
-                                                        if (row.id == g.id) row.copy(allMuted = !next) else row
-                                                    }
-                                                    Toast.makeText(context, e.message ?: "设置失败", Toast.LENGTH_SHORT).show()
-                                                }
-                                        }
-                                    },
-                                )
-                            }
-                            // 消息免打扰: 和 QQ/微信一样, 开了之后普通消息不再提醒,
-                            // 但 @我 和群公告这些「重要的」还是会提醒
-                            DropdownMenuItem(
-                                text = {
-                                    Text(if (chatMenu.muted) "消息免打扰: 已开启" else "消息免打扰: 已关闭")
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    val next = !chatMenu.muted
-                                    chatMenu.muted = next
-                                    // 立刻在列表上也反映出来
-                                    currentGroup = currentGroup?.copy(muted = next)
-                                    scope.launch {
-                                        ApiClient.socialMuteSet(g.id, next)
-                                            .onSuccess { on ->
-                                                chatMenu.muted = on
-                                                currentGroup = currentGroup?.copy(muted = on)
-                                                groups = groups.map { row ->
-                                                    if (row.id == g.id) row.copy(muted = on) else row
-                                                }
-                                            }
-                                            .onFailure { e -> Toast.makeText(context, e.message ?: "设置失败", Toast.LENGTH_SHORT).show() }
-                                    }
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("刷新消息") },
-                                onClick = {
-                                    menuOpen = false
-                                    refreshTick++
-                                },
                             )
                         }
                     },
@@ -470,7 +469,13 @@ fun SocialScreen(
             val group = currentGroup
             // 顶部「群组 / 私聊」分段 (只在 tab 常驻模式且没进群聊时显示)
             if (showTabs && group == null) {
-                SocialTabBar(selected = tab, onSelect = { tab = it })
+                SocialTabBar(
+                    selected = tab,
+                    onSelect = { tab = it },
+                    // 契约 B2: 群组未读 = 所有群未读之和; 私聊未读 = 会话未读总数
+                    groupUnread = groups.sumOf { it.unread },
+                    pmUnread = pmUnread,
+                )
             }
             Box(
                 modifier = Modifier
@@ -518,6 +523,15 @@ fun SocialScreen(
                         onMarkRead = { clearUnread(group.id) },
                         // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
                         onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
+                        // 契约 B3: 加入群聊成功 → 本地马上把 isMember 置 true, 并刷新群资料
+                        // (标题里的成员数 +1) 与群列表; 底部输入区随即从「加入群聊」变回输入框
+                        onJoined = {
+                            currentGroup = currentGroup?.copy(isMember = true)
+                            groups = groups.map { row ->
+                                if (row.id == group.id) row.copy(isMember = true) else row
+                            }
+                            loadGroups(true, silent = true)
+                        },
                     )
                 }
             }
@@ -527,7 +541,14 @@ fun SocialScreen(
 
 /** 顶部「群组 / 私聊」分段控件 (和项目其它页面的圆角胶囊风格一致) */
 @Composable
-private fun SocialTabBar(selected: Int, onSelect: (Int) -> Unit) {
+private fun SocialTabBar(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    /** 「群组」分段未读总数 (契约 B2) */
+    groupUnread: Int = 0,
+    /** 「私聊」分段未读总数 (契约 B2) */
+    pmUnread: Int = 0,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -538,6 +559,7 @@ private fun SocialTabBar(selected: Int, onSelect: (Int) -> Unit) {
     ) {
         listOf("群组", "私聊").forEachIndexed { index, label ->
             val active = selected == index
+            val unread = if (index == 0) groupUnread else pmUnread
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -547,16 +569,24 @@ private fun SocialTabBar(selected: Int, onSelect: (Int) -> Unit) {
                     .padding(vertical = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = label,
-                    fontSize = 14.sp,
-                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (active) {
-                        MiuixTheme.colorScheme.onPrimary
-                    } else {
-                        MiuixTheme.colorScheme.onBackgroundVariant
-                    },
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = label,
+                        fontSize = 14.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (active) {
+                            MiuixTheme.colorScheme.onPrimary
+                        } else {
+                            MiuixTheme.colorScheme.onBackgroundVariant
+                        },
+                    )
+                    // 契约 B2: 分段上的未读红点 (复用群列表那个 UnreadBadge, >99 自动显示 99+)
+                    if (unread > 0) {
+                        Box(modifier = Modifier.padding(start = 4.dp)) {
+                            UnreadBadge(count = unread, muted = false)
+                        }
+                    }
+                }
             }
         }
     }
@@ -889,12 +919,16 @@ private fun ChatView(
     onMarkRead: () -> Unit = {},
     /** 点头像: 打开用户主页 (为 null 时退回旧的成员操作面板) */
     onOpenUser: ((Int, Int) -> Unit)? = null,
+    /** 点「加入群聊」成功后回调: 上层刷新群资料(成员数/isMember)与群列表 (契约 B3) */
+    onJoined: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
     val context = LocalContext.current
     val listState = rememberLazyListState()
     val foreground = rememberIsForeground()
+    // 契约 B3: 「加入群聊」请求进行中 (防重复点)
+    var joining by remember(group.id) { mutableStateOf(false) }
 
     var messages by remember { mutableStateOf<List<SocialMessage>>(emptyList()) }
     // 用 TextFieldValue 而不是 String: @ 插入后要把光标放到插入文本之后
@@ -1199,14 +1233,43 @@ private fun ChatView(
         }
     }
 
-    // 定位/首次加载完成后标记已读 (只调一次):
-    // 从通知进来、自动定位第一条未读、直接进群, 三种情况都标记;
-    // 服务端保证传更小的 last_id 不会让已读位置回退
-    var readMarked by remember(group.id) { mutableStateOf(false) }
-    LaunchedEffect(group.id, loading, messages.size) {
-        if (readMarked || loading || messages.isEmpty()) return@LaunchedEffect
-        readMarked = true
-        ApiClient.socialRead(group.id).onSuccess { onMarkRead() }
+    // 契约 B1: 只要「别人发来的消息最大 id」变大, 就防抖 1.2 秒上报一次已读。
+    //
+    // 老实现只在进群那一刻标一次已读: 用户在群里待着的时候别人又发消息 → 服务端 unread 又 > 0,
+    // 返回群列表时红标又冒出来 (得再进再退才消失) —— 这就是用户报的 bug。
+    // 现在已读位置跟着「来自别人的最新消息」走, 且只在本群可见 + App 前台时才上报。
+    val otherMaxId = messages.maxOfOrNull { if (me != null && it.userId == me.id) 0 else it.id } ?: 0
+    var readReported by remember(group.id) { mutableStateOf(0) }
+    LaunchedEffect(group.id, otherMaxId, loading, foreground) {
+        if (loading || !foreground || otherMaxId <= 0) return@LaunchedEffect
+        if (otherMaxId <= readReported) return@LaunchedEffect
+        // 防抖: 群里连着来消息时不用每条都上报一次
+        delay(1200L)
+        if (otherMaxId <= readReported) return@LaunchedEffect
+        readReported = otherMaxId
+        ApiClient.socialRead(group.id, otherMaxId).onSuccess { onMarkRead() }
+    }
+
+    /**
+     * 契约 B3: 加入群聊 (先加入才能发消息)。
+     *
+     * 服务端加入成功时会往群里写一条系统消息「xxx加入了群聊」,
+     * 所以成功后立刻重新拉一屏消息, 让用户马上看到这条提示。
+     */
+    fun joinGroup() {
+        if (joining) return
+        joining = true
+        scope.launch {
+            ApiClient.socialGroupJoin(group.id)
+                .onSuccess {
+                    onJoined()
+                    onToast("已加入 " + group.name)
+                    loadLatest(false)
+                }
+                // 失败: Toast 服务端返回的中文原文
+                .onFailure { e -> onToast(e.message ?: "加入失败") }
+            joining = false
+        }
     }
 
     /** 昵称 → userId 映射 (只用当前已加载的消息构建, 对应 @ 解析的简单实现) */
@@ -1590,6 +1653,15 @@ private fun ChatView(
                             }
                         }
                         items(messages, key = { it.id }) { msg ->
+                            // 契约 B5: 系统消息 (「xxx加入了群聊」这种) 单独走居中灰字样式:
+                            // 没有头像、没有气泡、不可长按 (不能引用/撤回/复制)
+                            if (isSystemMessage(msg.msgType, msg.content)) {
+                                SystemMessageRow(
+                                    msg = msg,
+                                    groupId = group.id,
+                                    onOpenUser = onOpenUser,
+                                )
+                            } else {
                             val mine = me != null && msg.userId == me.id
                             MessageRow(
                                 msg = msg,
@@ -1631,6 +1703,7 @@ private fun ChatView(
                                     onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
                                 },
                             )
+                            }
                         }
                     }
                 }
@@ -1758,6 +1831,12 @@ private fun ChatView(
         }
 
         // ===== 底部输入区 (QQ 那种布局: 左边「+」, 中间输入框占满, 右边发送) =====
+        // 契约 B3: 还没加入这个群 → 输入区整条换成「加入群聊」按钮 (先加入才能发消息)
+        if (!group.isMember) {
+            JoinGroupBar(joining = joining, onJoin = { joinGroup() })
+        }
+        // 已加入: 正常输入区
+        if (group.isMember) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1891,6 +1970,7 @@ private fun ChatView(
                     )
                 }
             }
+        }
         }
     }
 
@@ -2116,10 +2196,18 @@ private fun ChatView(
                                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                                         )
                                     }
-                                    if (m.role == "admin") {
+                                    if (m.isAdmin) {
                                         Spacer(Modifier.width(6.dp))
                                         Text(
                                             text = "管理员",
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.primary,
+                                        )
+                                    } else if (m.role == "owner" || m.role == "admin") {
+                                        // role 是「群角色」(契约 A3): 群主 / 群管理员
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = if (m.role == "owner") "群主" else "群管理员",
                                             fontSize = 11.sp,
                                             color = MiuixTheme.colorScheme.primary,
                                         )
@@ -2240,8 +2328,12 @@ private fun ChatView(
             text = {
                 Column {
                     Text(
-                        text = memberActing.nickname.ifBlank { "群成员" } +
-                            if (memberActing.role == "admin") " · 管理员" else "",
+                        text = memberActing.nickname.ifBlank { "群成员" } + when {
+                            memberActing.isAdmin -> " · 管理员"
+                            memberActing.role == "owner" -> " · 群主"
+                            memberActing.role == "admin" -> " · 群管理员"
+                            else -> ""
+                        },
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onBackground,
@@ -2258,7 +2350,7 @@ private fun ChatView(
                         fontSize = 12.sp,
                         color = if (muted) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackgroundVariant,
                     )
-                    if (memberActing.role == "admin") {
+                    if (memberActing.isAdmin) {
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = "管理员不能被禁言",
@@ -2891,4 +2983,128 @@ private fun LinkText(
             }
         },
     )
+}
+
+
+/**
+ * 契约 B3: 未加入这个群时的底部整条按钮 —— 「先加入才能发消息」。
+ *
+ * 加入成功后服务端会多记一位成员, 群里也会出现一条系统消息「xxx加入了群聊」。
+ */
+@Composable
+private fun JoinGroupBar(joining: Boolean, onJoin: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MiuixTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = "加入群聊后才能在这里发言 (加入后你会成为群成员之一)",
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        Card(
+            onClick = { if (!joining) onJoin() },
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 12.dp,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (joining) "加入中…" else "加入群聊",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
+
+/**
+ * 契约 B5: 群聊里的系统消息 (「xxx加入了群聊」/「xxx退出了群聊」)。
+ *
+ * 样式对齐 QQ: 整行居中、灰字、小字, 没有头像也没有气泡, 因此也不进消息长按菜单
+ * (引用/撤回/复制/保存都不该出现在系统消息上)。
+ *
+ * 唯一的交互是「点人名」: 名字用主色调并且可点, 点了进这个人的主页 (带上群 id,
+ * 主页里能看到他在这个群里的禁言状态), 名字后面跟身份标签 chips (和聊天页其它地方一致)。
+ * 消息体里如果没有带 tags (服务端系统消息一般不带), 就按 user_id 拉一次 user_profile 补上。
+ */
+@Composable
+private fun SystemMessageRow(
+    msg: SocialMessage,
+    groupId: Int,
+    onOpenUser: ((Int, Int) -> Unit)? = null,
+) {
+    val context = LocalContext.current
+    // 标签: 先用消息自带的, 没有就拉一次主页接口补 (remember(msg.id) 保证只拉一次)
+    var tags by remember(msg.id) { mutableStateOf(msg.tags) }
+    LaunchedEffect(msg.id, groupId) {
+        if (tags.isEmpty() && msg.userId > 0) {
+            ApiClient.userProfile(msg.userId, groupId).onSuccess { p -> tags = p.tags }
+        }
+    }
+    val nickname = msg.nickname.ifBlank { "" }
+    val text = msg.content.ifBlank { nickname + "加入了群聊" }
+    val nameStart = if (nickname.isNotEmpty()) text.indexOf(nickname) else -1
+    val hasName = msg.userId > 0 && nameStart >= 0
+    val gray = MiuixTheme.colorScheme.onBackgroundVariant
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (hasName) {
+                Text(
+                    text = text.substring(0, nameStart),
+                    fontSize = 11.sp,
+                    color = gray,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = nickname,
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            if (onOpenUser != null) {
+                                onOpenUser(msg.userId, groupId)
+                            } else {
+                                Toast.makeText(context, nickname, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .padding(horizontal = 2.dp),
+                )
+                // 身份标签 (管理员/防骗警示之类), 没有就不占位置
+                TagChips(
+                    tags = tags,
+                    max = 2,
+                    small = true,
+                    modifier = Modifier.padding(start = 4.dp),
+                )
+                Text(
+                    text = text.substring(nameStart + nickname.length),
+                    fontSize = 11.sp,
+                    color = gray,
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                Text(text = text, fontSize = 11.sp, color = gray, textAlign = TextAlign.Center)
+            }
+        }
+    }
 }

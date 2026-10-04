@@ -104,6 +104,8 @@ import com.fengling.share.ui.main.my.NotifySettingsScreen
 import com.fengling.share.ui.pm.PmChatScreen
 import com.fengling.share.ui.user.UserProfileScreen
 import com.fengling.share.ui.main.my.MyScreen
+import com.fengling.share.ui.social.GroupInfoScreen
+import com.fengling.share.ui.social.GroupMemberListScreen
 import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
@@ -139,6 +141,10 @@ object Routes {
     // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
     // groupId: 从群聊进来带群 id (主页上的禁言只对本群生效), 其它入口 = 0 全站视角
     const val USER_PROFILE = "user/profile/{userId}?groupId={groupId}"
+    // 群详情页 (群聊页右上角「☰」进入: 群公告 / 群相册 / 群成员 / 消息免打扰 / 退出群聊)
+    const val GROUP_INFO = "social/group/{groupId}/info"
+    // 群成员列表页 (群详情页「查看全部 N 人」进入: 搜索 + 分页)
+    const val GROUP_MEMBERS = "social/group/{groupId}/members?name={name}"
 
     fun detail(appId: Int) = "detail/$appId"
     fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
@@ -146,6 +152,9 @@ object Routes {
     fun pmChat(convId: Int = 0, userId: Int = 0, messageId: Int = 0) =
         "pm/chat?convId=$convId&userId=$userId&messageId=$messageId"
     fun userProfile(userId: Int, groupId: Int = 0) = "user/profile/$userId?groupId=$groupId"
+    fun groupInfo(groupId: Int) = "social/group/$groupId/info"
+    fun groupMembers(groupId: Int, name: String = "") =
+        "social/group/$groupId/members?name=${android.net.Uri.encode(name)}"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -517,6 +526,39 @@ fun MainScreen(
                 onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
                 onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
                 onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
+                // 群聊右上角「☰」: 进群详情页 (群公告 / 群相册 / 群成员 / 退出群聊)
+                onOpenGroupInfo = { gid -> navController.navigate(Routes.groupInfo(gid)) },
+            )
+        }
+
+        // 群详情页 (契约 B6): 群公告 / 群相册 / 群成员 / 消息免打扰 / 全员禁言 / 退出群聊
+        composable(
+            route = Routes.GROUP_INFO,
+            arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
+        ) { backStackEntry ->
+            GroupInfoScreen(
+                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onBack = { navController.popBackStack() },
+                onOpenMembers = { id -> navController.navigate(Routes.groupMembers(id)) },
+                onOpenUser = { uid, id -> navController.navigate(Routes.userProfile(uid, id)) },
+                // 退出群聊成功: 直接回群列表 (群详情页 + 群聊页一起弹掉)
+                onLeft = { navController.popBackStack(Routes.MAIN, false) },
+            )
+        }
+
+        // 群成员列表页 (契约 B6): 搜索昵称 / 用户名 + 分页 + 点成员进主页
+        composable(
+            route = Routes.GROUP_MEMBERS,
+            arguments = listOf(
+                navArgument("groupId") { type = NavType.IntType },
+                navArgument("name") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { backStackEntry ->
+            GroupMemberListScreen(
+                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onBack = { navController.popBackStack() },
+                groupName = backStackEntry.arguments?.getString("name") ?: "",
+                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
             )
         }
 

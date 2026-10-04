@@ -1420,7 +1420,15 @@ data class SocialGroupMember(
     val nickname: String = "",
     val username: String = "",
     val avatar: String = "",
+    /**
+     * 群角色 (契约 A3): "owner" = 群主 / "admin" = 群管理员 / "member" = 普通成员。
+     * 注意: 这是**群内**角色, 不是全站管理员 —— 判断能不能管这个群看 [isAdmin]。
+     */
     val role: String = "",
+    /** 全站角色 (契约 A3 user_brief.global_role): "admin" = 全站管理员, 其它 = 普通用户 */
+    val globalRole: String = "",
+    /** 是否全站管理员 (服务端 is_admin); 只有全站管理员能禁言 / 全员禁言 */
+    val isAdmin: Boolean = false,
     /** 是否被管理员禁言 (禁言只影响发言, 仍然能看消息) */
     val muted: Boolean = false,
     /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
@@ -1438,6 +1446,14 @@ data class SocialGroupMember(
             username = jsonStr(j, "username"),
             avatar = jsonStr(j, "avatar"),
             role = jsonStr(j, "role"),
+            globalRole = jsonStr(j, "global_role"),
+            // 全站管理员只看 is_admin; 老服务端没有这两个字段时退回「role == admin」的老语义
+            isAdmin = if (j.has("is_admin")) {
+                jsonBool(j, "is_admin")
+            } else {
+                jsonStr(j, "global_role") == "admin" ||
+                    (j.isNull("global_role") && jsonStr(j, "role") == "admin")
+            },
             muted = j.optInt("muted", 0) == 1,
             muteLeft = jsonStr(j, "mute_left"),
             muteReason = jsonStr(j, "mute_reason"),
