@@ -171,14 +171,19 @@ fun LotteryScreen(
     }
 
     /** 只有需要倒计时(状态卡 / 冷却)时才每秒刷新一次, 其余情况不空转 */
-    val tickNeeded = info?.let { it.window != null || it.cooldownLeft > 0 } == true
+    val tickNeeded = info?.let {
+        val w = it.window
+        // 未开放(要数到下次开放) / 开放中但有明确关闭时间(要数到关闭) / 有冷却 才需要每秒刷新
+        (w != null && (!w.open || w.secondsToClose > 0)) || it.cooldownLeft > 0
+    } == true
     LaunchedEffect(tickNeeded) {
         var lastAutoReloadAt = 0L
         while (tickNeeded) {
             nowMs = System.currentTimeMillis()
             // 倒计时归零后自动拉一次最新状态 (30 秒内最多一次, 防止空转打服务端)
             val w = info?.window
-            val closedNow = w != null && w.open && w.secondsToClose - elapsedSec() <= 0
+            val closedNow = w != null && w.open && w.secondsToClose > 0 &&
+                w.secondsToClose - elapsedSec() <= 0
             val openNow = w != null && !w.open && w.nextOpenAt.isNotBlank() &&
                 w.secondsToOpen - elapsedSec() <= 0
             if ((closedNow || openNow) && nowMs - lastAutoReloadAt > 30_000L) {
@@ -374,7 +379,8 @@ fun LotteryScreen(
 
                     // ===== 顶部状态卡 (契约 D: 服务端没返回 window 时整块隐藏) =====
                     val winState = cur.window
-                    if (winState != null) {
+                    // 活动总开关关了的话, 下面已经有「抽奖活动已关闭」提示块, 状态卡不再重复一句
+                    if (winState != null && cur.enabled) {
                         val winOk = winState.open && winState.myAllowed
                         Spacer(Modifier.height(10.dp))
                         Column(
@@ -844,6 +850,8 @@ private fun parseServerTime(raw: String): Long? {
  */
 private fun windowTitle(w: LotteryWindow, elapsed: Int): String {
     if (w.open) {
+        // seconds_to_close = 0 表示这个时段没有关闭时间 (后台没启用自定义时段), 这时不显示倒计时
+        if (w.secondsToClose <= 0) return "进行中"
         val left = w.secondsToClose - elapsed
         return if (left > 0) "进行中, 还剩 " + fmtCountdown(left) else "进行中, 即将结束"
     }
