@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
@@ -54,6 +55,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,9 +94,11 @@ import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.lottery.LotteryScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -631,6 +635,13 @@ private fun ChatView(
     var plusMenuOpen by remember { mutableStateOf(false) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
+    // 上滑加载更早的消息: 服务端还有没有更早的一页 + 是否正在拉更早的一页
+    var hasMoreBefore by remember(group.id) { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
+    // 前插更早消息后要补偿的滚动目标 index (-1 = 不需要补偿)
+    var pendingScrollTo by remember { mutableStateOf(-1) }
+    // 抽奖界面 (输入区「+」菜单进入)
+    var showLottery by remember { mutableStateOf(false) }
     // 点空白处取消文本选中用的 key: 本仓库 Compose 版本的 SelectionContainer 只公开
     // (modifier, content) 这一个重载, 既没有选中态回调也没有清除选中的 API,
     // 所以「取消选中」靠改这个 key 重建被选中的那段文本 (用户 2026-10-04 反馈的问题)
@@ -688,10 +699,14 @@ private fun ChatView(
     fun loadLatest(isRefresh: Boolean) {
         scope.launch {
             if (isRefresh) refreshing = true else loading = true
+            // 整屏重载: 更早消息的分页状态作废 (下拉刷新时重置为「可能还有更早」)
+            pendingScrollTo = -1
+            if (isRefresh) hasMoreBefore = true
             val around = locateId
             ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = around)
                 .onSuccess { page ->
                     messages = page.list.distinctBy { it.id }.sortedBy { it.id }
+                    hasMoreBefore = page.hasMoreBefore
                     // 群列表里的未读数可能是旧的 (群对象是进群前拿到的), 所以这里再信一次服务端:
                     // 首次加载若还有未读、且不是从通知点进来的, 就以「第一条未读」为锚点重取一屏
                     val anchor = if (!isRefresh && around <= 0 && locateMessageId <= 0 &&
@@ -703,6 +718,7 @@ private fun ChatView(
                         ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = anchor)
                             .onSuccess { p2 ->
                                 messages = p2.list.distinctBy { it.id }.sortedBy { it.id }
+                                hasMoreBefore = p2.hasMoreBefore
                             }
                     }
                 }
@@ -717,6 +733,67 @@ private fun ChatView(
         val base = messages
         val merged = (base + incoming).distinctBy { it.id }.sortedBy { it.id }
         messages = merged
+    }
+
+    /**
+     * 上滑加载更早的一页 (before_id = 当前列表最小 id)。
+     * manual = 用户点了顶部那一行; 自动加载只在真的到了顶部时才发请求。
+     */
+    fun loadOlder(manual: Boolean = false) {
+        if (loadingMore || loading || messages.isEmpty()) return
+        if (!hasMoreBefore) {
+            if (manual) onToast("已经是最早的消息了")
+            return
+        }
+        // 从通知点进来正在定位 / 正在补偿滚动时不要抢
+        if (!manual && (locateId > 0 || pendingScrollTo >= 0)) return
+        val minId = messages.minOfOrNull { it.id } ?: return
+        if (minId <= 0) return
+        scope.launch {
+            loadingMore = true
+            // 前插前记下「用户正看着第几行」以及「顶部是否已经有加载行」
+            val firstIndex = listState.firstVisibleItemIndex
+            val headerBefore = if (hasMoreBefore) 1 else 0
+            ApiClient.socialMessagesPage(group.id, limit = 30, beforeId = minId)
+                .onSuccess { page ->
+                    hasMoreBefore = page.hasMoreBefore
+                    // 保险: 只前插真的更早的消息 (万一服务端把 before_id 语义放宽也不会乱序)
+                    val older = page.list.filter { it.id < minId }
+                    if (older.isNotEmpty()) {
+                        val merged = (older + messages).distinctBy { it.id }.sortedBy { it.id }
+                        val added = merged.size - messages.size
+                        messages = merged
+                        if (added > 0) {
+                            // 保持滚动位置: 前面插进 added 条后, 原来第 firstIndex 行挪到了
+                            // firstIndex + added; 顶部「加载更早」行占 1 个 index, 并且只在
+                            // 还有更早消息时才存在, 所以按「新的」hasMoreBefore 补差额
+                            val headerAfter = if (hasMoreBefore) 1 else 0
+                            pendingScrollTo = (firstIndex + added + headerAfter - headerBefore)
+                                .coerceAtLeast(0)
+                        }
+                    }
+                }
+                .onFailure { e -> onToast(e.message ?: "更早的消息加载失败") }
+            loadingMore = false
+        }
+    }
+
+    // 前插完成后补偿滚动: 放在 LaunchedEffect 里, 等新列表组合完索引才有效
+    LaunchedEffect(messages.size, pendingScrollTo) {
+        val target = pendingScrollTo
+        if (target < 0) return@LaunchedEffect
+        pendingScrollTo = -1
+        runCatching { listState.scrollToItem(target) }
+    }
+
+    // 上滑到顶自动加载更早的消息: 只在「已经在顶部」这个条件由 false 变 true 时才触发一次,
+    // 短列表 / 补偿失败时不会反复请求 (顶部那一行也可以点, 作为手动兜底)
+    LaunchedEffect(group.id, locateId) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex <= 1 && listState.firstVisibleItemScrollOffset == 0
+        }.collect { atTop ->
+            if (atTop) loadOlder()
+        }
     }
 
     LaunchedEffect(group.id) { loadLatest(false) }
@@ -739,6 +816,8 @@ private fun ChatView(
     LaunchedEffect(messages.size) {
         // 从通知点进来定位消息时不要抢滚动
         if (locateId > 0) return@LaunchedEffect
+        // 前插更早消息也会让 messages.size 变大, 这时要保住用户当前位置, 不能滚到底
+        if (pendingScrollTo >= 0 || loadingMore) return@LaunchedEffect
         if (messages.isNotEmpty()) {
             runCatching { listState.animateScrollToItem(messages.lastIndex) }
         }
@@ -1124,6 +1203,25 @@ private fun ChatView(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
+                        // 顶部: 还有更早的消息时占一行 (自动加载时显示提示, 也可以手动点一下)
+                        if (hasMoreBefore) {
+                            item(key = "load_older") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { loadOlder(manual = true) }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = if (loadingMore) "加载更早的消息…"
+                                        else "上滑或点这里加载更早的消息",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
+                                }
+                            }
+                        }
                         items(messages, key = { it.id }) { msg ->
                             val mine = me != null && msg.userId == me.id
                             MessageRow(
@@ -1251,6 +1349,25 @@ private fun ChatView(
                         onClick = {
                             plusMenuOpen = false
                             openMentionPicker()
+                        },
+                    )
+                    // 抽奖: 打开抽奖界面 (全屏 Dialog 承载 LotteryScreen)
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.CardGiftcard,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("抽奖")
+                            }
+                        },
+                        onClick = {
+                            plusMenuOpen = false
+                            showLottery = true
                         },
                     )
                     // 管理员: 顺手把群公告的入口也收进来
@@ -1880,6 +1997,22 @@ private fun ChatView(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
+            }
+        }
+    }
+
+    // ===== 抽奖 (输入区「+」菜单进入): 全屏 Dialog 承载 LotteryScreen =====
+    if (showLottery) {
+        Dialog(
+            onDismissRequest = { showLottery = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MiuixTheme.colorScheme.background),
+            ) {
+                LotteryScreen(onBack = { showLottery = false }, onToast = onToast)
             }
         }
     }
