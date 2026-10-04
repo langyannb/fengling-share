@@ -76,6 +76,11 @@ import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.GitHubBrandIcon
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
+import com.fengling.share.ui.components.pressScaleEffect
 import com.fengling.share.ui.components.QqBrandIcon
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -181,7 +186,7 @@ fun MyScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background),
+            .appGradientBackground(),
         contentPadding = PaddingValues(bottom = 100.dp),
     ) {
         // ===== 顶部信息区 (普通字号/普通颜色, 无渐变无超大高度) =====
@@ -238,10 +243,16 @@ fun MyScreen(
         item {
             Card(
                 onClick = { onOpenAccount() },
+                colors = CardDefaults.defaultColors(
+                    color = Color.Transparent,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                cornerRadius = 16.dp,
+                    .padding(horizontal = GlassSpacing.page)
+                    .pressScaleEffect(label = "myAccountPress")
+                    .glassCard(radius = GlassRadius.card),
+                cornerRadius = GlassRadius.card,
             ) {
                 Row(
                     modifier = Modifier
@@ -345,8 +356,13 @@ fun MyScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                cornerRadius = 16.dp,
+                    .padding(horizontal = GlassSpacing.page)
+                    .glassCard(radius = GlassRadius.card),
+                cornerRadius = GlassRadius.card,
+                colors = CardDefaults.defaultColors(
+                    color = Color.Transparent,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
             ) {
                 SettingRow(
                     title = "消息中心",
@@ -391,8 +407,13 @@ fun MyScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                cornerRadius = 16.dp,
+                    .padding(horizontal = GlassSpacing.page)
+                    .glassCard(radius = GlassRadius.card),
+                cornerRadius = GlassRadius.card,
+                colors = CardDefaults.defaultColors(
+                    color = Color.Transparent,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
             ) {
                 SettingRow(
                     title = "主题",
@@ -516,8 +537,13 @@ fun MyScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                cornerRadius = 16.dp,
+                    .padding(horizontal = GlassSpacing.page)
+                    .glassCard(radius = GlassRadius.card),
+                cornerRadius = GlassRadius.card,
+                colors = CardDefaults.defaultColors(
+                    color = Color.Transparent,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
             ) {
                 // 入口: 横向头像预览 (空时占位), 点击进入完整投稿名单页
                 Column(
@@ -649,8 +675,13 @@ fun MyScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                cornerRadius = 16.dp,
+                    .padding(horizontal = GlassSpacing.page)
+                    .glassCard(radius = GlassRadius.card),
+                cornerRadius = GlassRadius.card,
+                colors = CardDefaults.defaultColors(
+                    color = Color.Transparent,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
             ) {
                 // 频道说明 (纯文字, 无渐变底色块)
                 if (aboutConfig.bannerText.isNotEmpty() || aboutConfig.bannerSub.isNotEmpty()) {
@@ -768,8 +799,13 @@ fun MyScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                cornerRadius = 16.dp,
+                    .padding(horizontal = GlassSpacing.page)
+                    .glassCard(radius = GlassRadius.card),
+                cornerRadius = GlassRadius.card,
+                colors = CardDefaults.defaultColors(
+                    color = Color.Transparent,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                ),
             ) {
                 SettingRow(
                     title = "检查更新",
@@ -1032,7 +1068,7 @@ private fun SettingRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (clickable) Modifier.clickable { clickAction() } else Modifier)
+            .then(if (clickable) Modifier.pressScaleEffect(label = "mySettingPress").clickable { clickAction() } else Modifier)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -63,10 +63,16 @@ import com.fengling.share.data.Category
 import com.fengling.share.data.childrenOf
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.EmptyMessage
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.LoadingBox
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
+import com.fengling.share.ui.components.pressScaleEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -210,7 +216,8 @@ fun HomeScreen(
             onRefresh = { refresh() },
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .appGradientBackground(),
         ) {
             Column(
                 Modifier
@@ -353,7 +360,7 @@ fun HomeScreen(
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(
-                                    start = 12.dp, end = 12.dp, top = 4.dp,
+                                    start = GlassSpacing.page, end = GlassSpacing.page, top = 4.dp,
                                     bottom = 100.dp, // 留出悬浮胶囊空间, 内容可滚到胶囊下方被模糊
                                 ),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -439,10 +446,16 @@ private fun AppTag(text: String, highlight: Boolean = false) {
 private fun AppListItem(app: AppItem, onClick: () -> Unit) {
     Card(
         onClick = onClick,
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        cornerRadius = 16.dp,
+            .padding(vertical = 3.dp)
+            .pressScaleEffect(label = "homeAppPress")
+            .glassCard(radius = GlassRadius.card),
+        cornerRadius = GlassRadius.card,
     ) {
         Row(
             modifier = Modifier

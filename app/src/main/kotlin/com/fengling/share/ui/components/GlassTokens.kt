@@ -1,19 +1,29 @@
 package com.fengling.share.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -133,6 +143,49 @@ fun Modifier.glassSurface(
             .background(fill)
             .border(1.dp, stroke, shape)
     }
+}
+
+/**
+ * 通用「按压缩放回弹」修饰符 (契约 C)
+ *
+ * 用途: 挂在任意可点组件的最外层, 让 Miuix Card(onClick) / 普通 clickable 也拥有
+ *      0.97 缩放 + 弹簧回弹的按压反馈, 不用把调用处的 Card 改写成 Box。
+ *
+ * 关键: 本修饰符 **完全不消费手势** ——
+ *  · awaitFirstDown(requireUnconsumed = false) 只看不抢;
+ *  · 全程不调用 change.consume()。
+ * 因此子层的 onClick / clickable 照旧收到点击, 功能与原来 100% 一致;
+ * 手指滚动列表时也不会被这里截胡。
+ */
+@Composable
+fun Modifier.pressScaleEffect(
+    pressedScale: Float = 0.97f,
+    dampingRatio: Float = 0.55f,
+    stiffness: Float = 700f,
+    label: String = "pressScale",
+): Modifier {
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = dampingRatio, stiffness = stiffness),
+        label = label,
+    )
+    return this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                pressed = true
+                while (true) {
+                    val event = awaitPointerEvent()
+                    if (event.changes.all { !it.pressed }) break
+                }
+                pressed = false
+            }
+        }
 }
 
 /**

@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,8 +37,13 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.Contributor
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.LoadingBox
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
@@ -84,7 +90,8 @@ fun ContributorsScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = GlassSpacing.page)
+                        .appGradientBackground(),
                 ) {
                     item {
                         Spacer(Modifier.height(6.dp))
@@ -105,10 +112,15 @@ fun ContributorsScreen(
 @Composable
 private fun ContributorRow(c: Contributor) {
     Card(
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        cornerRadius = 14.dp,
+            .padding(vertical = 3.dp)
+            .glassCard(radius = GlassRadius.card),
+        cornerRadius = GlassRadius.card,
     ) {
         Row(
             modifier = Modifier

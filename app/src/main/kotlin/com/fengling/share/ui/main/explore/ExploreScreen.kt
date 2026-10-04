@@ -52,10 +52,16 @@ import com.fengling.share.data.Category
 import com.fengling.share.data.categoryWithSubsIds
 import com.fengling.share.data.childrenOf
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
+import com.fengling.share.ui.components.pressScaleEffect
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
@@ -183,7 +189,8 @@ fun ExploreScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(innerPadding),
+                        .padding(innerPadding)
+                        .appGradientBackground(),
                 ) {
                     // ── 左侧: 一级分类栏 ──
                     LazyColumn(
@@ -424,10 +431,16 @@ private fun parseColor(hex: String): Color {
 private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
     Card(
         onClick = onClick,
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        cornerRadius = 16.dp,
+            .padding(vertical = 3.dp)
+            .pressScaleEffect(label = "exploreAppPress")
+            .glassCard(radius = GlassRadius.card),
+        cornerRadius = GlassRadius.card,
     ) {
         Row(
             modifier = Modifier
