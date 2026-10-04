@@ -607,7 +607,7 @@ fun PmChatScreen(
                                 val compact = prev != null && !prev.isRecalled && !msg.isRecalled &&
                                     prev.userId == msg.userId
                                 PmMessageRow(
-                                    modifier = Modifier.pmMessageItemEnter(),
+                                    modifier = pmMessageItemEnter(),
                                     compact = compact,
                                     msg = msg,
                                     mine = mine,

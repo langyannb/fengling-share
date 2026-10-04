@@ -126,17 +126,6 @@ import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
 import com.fengling.share.ui.components.SegmentBarHeight
 
-/**
- * 群组列表的**进程内缓存** (用户 m00464 反馈「群组里面返回的话会卡一下」)。
- *
- * 点会话/群都走 NavHost 路由, 导航过去时 SocialScreen 被 dispose; 返回时重建,
- * groups 是空的 + loading = true → 先闪一屏「加载中…」再等一次网络往返, 看着就是「卡一下」。
- * 用进程内缓存垫一层: 返回立刻出上次的数据, 再后台静默刷新, 视觉上无跳变。
- * 只在内存里, 不落盘、不跨进程, 退出 App 即失效, 不会显示过期很久的脏数据。
- */
-private object SocialListCache {
-    var groups: List<SocialGroup>? = null
-}
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.MuteOptionPicker
@@ -155,6 +144,18 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/**
+ * 群组列表的**进程内缓存** (用户 m00464 反馈「群组里面返回的话会卡一下」)。
+ *
+ * 点会话/群都走 NavHost 路由, 导航过去时 SocialScreen 被 dispose; 返回时重建,
+ * groups 是空的 + loading = true → 先闪一屏「加载中…」再等一次网络往返, 看着就是「卡一下」。
+ * 用进程内缓存垫一层: 返回立刻出上次的数据, 再后台静默刷新, 视觉上无跳变。
+ * 只在内存里, 不落盘、不跨进程, 退出 App 即失效, 不会显示过期很久的脏数据。
+ */
+private object SocialListCache {
+    var groups: List<SocialGroup>? = null
+}
 
 /** 轮询间隔 (毫秒): 聊天页每 3 秒拉一次新消息 */
 private const val POLL_INTERVAL_MS = 3000L
