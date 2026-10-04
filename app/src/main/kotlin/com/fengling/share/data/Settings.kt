@@ -95,4 +95,26 @@ object Settings {
     var noticeShownContent: String
         get() = prefs.getString("notice_shown_content", "") ?: ""
         set(value) = prefs.edit().putString("notice_shown_content", value).apply()
+
+    // ===== 后台常驻消息服务 (v1.0.35) =====
+    /**
+     * 是否开启「后台接收消息」(常驻前台服务, key = msg_service_on)。
+     *
+     * 默认 **true**: 登录后就应该像 QQ/微信一样在后台秒收消息;
+     * 用户想省电/不想看到状态栏常驻通知时, 可在「我的 → 消息通知」里关掉。
+     */
+    var msgServiceOn: Boolean
+        get() = prefs.getBoolean("msg_service_on", true)
+        set(value) = prefs.edit().putBoolean("msg_service_on", value).apply()
+
+    // ===== 启动权限引导节流 (v1.0.36) =====
+    /**
+     * 上次走完「启动权限引导」的时间戳 (毫秒, key = perm_guide_ts)。
+     *
+     * 0 = 从未引导过。引导结束 (点了「一键允许」或「稍后再说」) 都会写一次,
+     * 用于 12 小时节流: 期间不再骚扰用户; 设置页三个入口一直保留。
+     */
+    var permGuideTs: Long
+        get() = prefs.getLong("perm_guide_ts", 0L)
+        set(value) = prefs.edit().putLong("perm_guide_ts", value).apply()
 }

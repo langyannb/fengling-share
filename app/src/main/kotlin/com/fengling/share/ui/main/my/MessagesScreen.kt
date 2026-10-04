@@ -1,6 +1,10 @@
 package com.fengling.share.ui.main.my
 
+import android.content.ClipData
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -35,12 +40,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.NotifyItem
 import com.fengling.share.ui.components.AppTopBar
 import kotlinx.coroutines.launch
@@ -50,6 +58,17 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 每页条数 (与契约 notifications.page_size 默认一致) */
 private const val PAGE_SIZE = 20
+
+/**
+ * 从抽奖通知里抠出卡密。
+ * 服务端把卡密写进通知正文, 形如「你的卡密: GY-XXXX-XXXX」, 这里取「卡密/卡号」后面那段;
+ * 抠不到就退回整段正文 (宁可复制多, 别复制空)。
+ */
+private fun lotteryCodeOf(item: NotifyItem): String {
+    val text = (item.content + "\n" + item.title).trim()
+    val m = Regex("(?:卡密|卡号)\\s*[:：]\\s*(\\S+)").find(text)
+    return m?.groupValues?.get(1)?.trim().orEmpty()
+}
 
 /**
  * 顶部「新消息 N 条」汇总条
@@ -135,9 +154,13 @@ fun MessagesScreen(
     onOpenWeb: (url: String, title: String) -> Unit,
     /** 群聊类通知: 跳进对应群聊, messageId>0 时定位到那条消息, showNotice=true 时直接弹群公告 */
     onOpenGroup: ((groupId: Int, messageId: Int, showNotice: Boolean) -> Unit)? = null,
+    /** 私聊通知: 跳进对应私聊会话, messageId>0 时定位到那条消息 */
+    onOpenPm: ((convId: Int, messageId: Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    // 复制卡密用得到系统剪贴板
+    val context = LocalContext.current
 
     var items by remember { mutableStateOf<List<NotifyItem>>(emptyList()) }
     var total by remember { mutableStateOf(0) }
@@ -146,6 +169,8 @@ fun MessagesScreen(
     var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<NotifyItem?>(null) }
+    // 抽奖通知详情 (看/复制完整卡密)
+    var lotteryTarget by remember { mutableStateOf<NotifyItem?>(null) }
     /** 分类未读数: type -> count (system / admin / social) */
     var unreadByType by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
 
@@ -170,11 +195,18 @@ fun MessagesScreen(
 
     LaunchedEffect(Unit) { load(1, false) }
 
+    // SSE 实时流: 收到任意事件 (私聊 / 群 / 重连) -> 静默刷新一次通知列表。
+    // 复用已有的 load(): 界面只在 items 为空时才显示加载态, 有数据时用户看到的是原列表被换掉。
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { load(1, false) }
+    }
+
     /**
      * 点通知后的去向 (链接约定, 服务端写入 link 字段):
      * - msg:<群id>:<消息id>  群消息/@我  -> 进群聊并定位到那条消息
      * - notice:<群id>        群公告更新 -> 进群聊并弹出公告
      * - group:<群id>         旧格式兼容 -> 只进群聊
+     * - pm:<会话id>:<消息id>  私聊消息   -> 进私聊会话并定位到那条消息
      * - http(s) 开头         普通链接   -> 内置浏览器
      */
     fun openLinkOf(item: NotifyItem) {
@@ -196,6 +228,14 @@ fun MessagesScreen(
                 val gid = link.removePrefix("group:").toIntOrNull() ?: 0
                 if (gid > 0 && onOpenGroup != null) onOpenGroup(gid, 0, false)
             }
+            link.startsWith("pm:") -> {
+                // 私聊通知: pm:<会话id>:<消息id>
+                val p = link.removePrefix("pm:").split(":")
+                val cid = p.getOrNull(0)?.toIntOrNull() ?: 0
+                val mid = p.getOrNull(1)?.toIntOrNull() ?: 0
+                if (cid > 0 && onOpenPm != null) onOpenPm(cid, mid)
+                else onOpenWeb(link, item.title)
+            }
             else -> onOpenWeb(link, item.title)
         }
     }
@@ -216,6 +256,19 @@ fun MessagesScreen(
                 .onFailure { /* 标记已读失败不打断阅读, 下次进入会重试 */ }
             if (thenOpen && item.link.isNotBlank()) openLinkOf(item)
         }
+    }
+
+    /** 复制卡密到剪贴板 (和群消息「复制」同一套写法) */
+    fun copyLotteryCode(item: NotifyItem) {
+        val code = lotteryCodeOf(item).ifBlank { item.content }
+        if (code.isBlank()) {
+            Toast.makeText(context, "这条通知里没有卡密", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
+            as? android.content.ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText("lottery_code", code))
+        Toast.makeText(context, "卡密已复制", Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(
@@ -290,8 +343,22 @@ fun MessagesScreen(
                     items(items, key = { it.id }) { item ->
                         NotificationCard(
                             item = item,
-                            onClick = { markRead(item, thenOpen = true) },
+                            onClick = {
+                                // 抽奖通知: 点开看完整卡密 (顺手标已读, 不跳链接)
+                                if (item.type == "lottery") {
+                                    markRead(item, thenOpen = false)
+                                    lotteryTarget = item
+                                } else {
+                                    markRead(item, thenOpen = true)
+                                }
+                            },
                             onLongClick = { deleteTarget = item },
+                            // 抽奖通知多一个「复制卡密」按钮
+                            onCopyCode = if (item.type == "lottery") {
+                                { copyLotteryCode(item) }
+                            } else {
+                                null
+                            },
                         )
                         // 滑到底部自动加载下一页
                         if (hasMore && item.id == items.last().id) {
@@ -374,6 +441,60 @@ fun MessagesScreen(
                     },
                 )
             }
+
+            // 抽奖通知详情: 完整卡密可长按选中, 也能一键复制
+            val lt = lotteryTarget
+            if (lt != null) {
+                AlertDialog(
+                    onDismissRequest = { lotteryTarget = null },
+                    title = {
+                        Text(
+                            text = lt.title.ifBlank { "抽奖通知" },
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                    },
+                    text = {
+                        Column {
+                            SelectionContainer {
+                                Text(
+                                    text = lt.content,
+                                    fontSize = 14.sp,
+                                    color = MiuixTheme.colorScheme.onBackground,
+                                )
+                            }
+                            val code = lotteryCodeOf(lt)
+                            if (code.isNotBlank()) {
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    text = code,
+                                    fontSize = 16.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MiuixTheme.colorScheme.primary,
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = lt.createdAt,
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        M3TextButton(onClick = { copyLotteryCode(lt) }) {
+                            Text(text = "复制卡密", color = MiuixTheme.colorScheme.primary)
+                        }
+                    },
+                    dismissButton = {
+                        M3TextButton(onClick = { lotteryTarget = null }) {
+                            Text(
+                                text = "关闭",
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -383,6 +504,8 @@ private fun NotificationCard(
     item: NotifyItem,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    /** 非空时表示这是一条带卡密的通知: 正文全文显示 + 多一个「复制卡密」按钮 */
+    onCopyCode: (() -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier
@@ -427,13 +550,38 @@ private fun NotificationCard(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
+                // 抽奖通知里的卡密要能看全, 不截断
+                val code = if (onCopyCode != null) lotteryCodeOf(item) else ""
                 Text(
                     text = item.content,
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 3,
+                    maxLines = if (onCopyCode != null) Int.MAX_VALUE else 3,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (onCopyCode != null && code.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = code,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MiuixTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "复制卡密",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                .clickable(onClick = onCopyCode)
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = item.createdAt,
@@ -454,12 +602,14 @@ private fun NotificationCard(
     }
 }
 
-/** 通知类型标签: system=系统 / admin=管理员 / social=社交 */
+/** 通知类型标签: system=系统 / admin=管理员 / social=社交 / pm=私聊 / lottery=抽奖 */
 @Composable
 private fun TypeTag(type: String) {
     val (label, color) = when (type) {
         "admin" -> "管理员" to Color(0xFFE5484D)
         "social" -> "社交" to Color(0xFF2F9E5F)
+        "pm" -> "私聊" to Color(0xFF3B82F6)
+        "lottery" -> "抽奖" to Color(0xFFE08A00)
         else -> "系统" to MiuixTheme.colorScheme.primary
     }
     Box(

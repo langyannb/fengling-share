@@ -41,12 +41,16 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -68,9 +72,14 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
+import com.fengling.share.data.PendingNav
+import com.fengling.share.service.MessageService
 import com.fengling.share.data.NoticeInfo
+import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
+import com.fengling.share.utils.NotifySound
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
@@ -91,6 +100,9 @@ import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MessagesScreen
+import com.fengling.share.ui.main.my.NotifySettingsScreen
+import com.fengling.share.ui.pm.PmChatScreen
+import com.fengling.share.ui.user.UserProfileScreen
 import com.fengling.share.ui.main.my.MyScreen
 import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
@@ -120,10 +132,20 @@ object Routes {
     // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
     const val SOCIAL_GROUP = "social/group/{groupId}?messageId={messageId}&notice={notice}"
     const val MESSAGES = "messages"
+    // 消息通知设置 (后台接收开关 + 通知/电池优化/自启动 权限引导)
+    const val NOTIFY_SETTINGS = "settings/notify"
+    // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知 进入)
+    const val PM_CHAT = "pm/chat?convId={convId}&userId={userId}&messageId={messageId}"
+    // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
+    // groupId: 从群聊进来带群 id (主页上的禁言只对本群生效), 其它入口 = 0 全站视角
+    const val USER_PROFILE = "user/profile/{userId}?groupId={groupId}"
 
     fun detail(appId: Int) = "detail/$appId"
     fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
         "social/group/$groupId?messageId=$messageId&notice=" + if (notice) 1 else 0
+    fun pmChat(convId: Int = 0, userId: Int = 0, messageId: Int = 0) =
+        "pm/chat?convId=$convId&userId=$userId&messageId=$messageId"
+    fun userProfile(userId: Int, groupId: Int = 0) = "user/profile/$userId?groupId=$groupId"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -161,6 +183,33 @@ fun MainScreen(
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // 私聊新消息提示音 (不管停在哪个 tab 都能听到; 见文件末尾 PmNotifyWatcher)
+    PmNotifyWatcher()
+
+    // ---------- 点通知直达会话 (v1.0.35) ----------
+    // 链路: 通知 PendingIntent 带 open_pm_conv / open_group -> MainActivity 解析写 PendingNav
+    //      -> 这里收集后真正导航 -> 立刻 consume 清空 (免得重复跳)。
+    // 复用消息中心那条老路径 (MessagesScreen 里 pm:<cid>:<mid> 的处理方式): 先切底部 tab, 再压栈到会话页。
+    LaunchedEffect(Unit) {
+        PendingNav.target.collect { target ->
+            val t = target ?: return@collect
+            PendingNav.consume()
+            if (!UserStore.isLoggedIn()) return@collect
+            when {
+                t.groupId > 0 -> {
+                    // 群聊在「群组」tab 里
+                    pagerState.scrollToPage(SOCIAL_TAB_PAGE)
+                    navController.navigate(Routes.socialGroup(t.groupId))
+                }
+                t.pmConvId > 0 -> {
+                    // 私聊会话列表也在「群组」tab 里, 先切过去再压栈, 返回时落点才自然
+                    pagerState.scrollToPage(SOCIAL_TAB_PAGE)
+                    navController.navigate(Routes.pmChat(convId = t.pmConvId))
+                }
+            }
+        }
+    }
 
     // 未登录时左右滑动也不许停在「群组」页 (3 = 0 首页 / 1 分类 / 2 群组 / 3 关于)
     var lastAllowedPage by remember { mutableStateOf(0) }
@@ -336,6 +385,13 @@ fun MainScreen(
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
                                 onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
+                                // 点群聊里任何人的头像: 打开用户主页 (带上群 id, 主页里可直接禁言)
+                                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
+
+                                // 私聊会话列表点一条: 进私聊会话页
+                                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
+                                // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
+                                onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
                             )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
@@ -354,6 +410,9 @@ fun MainScreen(
                                 },
                                 onOpenMessages = {
                                     navController.navigate(Routes.MESSAGES)
+                                },
+                                onOpenNotifySettings = {
+                                    navController.navigate(Routes.NOTIFY_SETTINGS)
                                 },
                             )
                         }
@@ -454,6 +513,10 @@ fun MainScreen(
                 openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
                 // 群聊消息里的链接: 内置浏览器打开
                 onOpenWeb = { url, title -> openLink(url, title) },
+                // 群聊里点头像: 带上当前群 id → 主页里就能直接禁言 (只对本群生效)
+                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
+                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
+                onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
             )
         }
 
@@ -468,6 +531,55 @@ fun MainScreen(
                 onOpenGroup = { groupId, messageId, showNotice ->
                     navController.navigate(Routes.socialGroup(groupId, messageId, showNotice))
                 },
+                // 私聊通知 (link = pm:<conv_id>:<msg_id>): 进私聊会话并定位到那条消息
+                onOpenPm = { convId, messageId ->
+                    navController.navigate(Routes.pmChat(convId = convId, messageId = messageId))
+                },
+            )
+        }
+
+        // 消息通知设置 (我的 -> 消息通知): 后台接收开关 + 权限引导
+        composable(Routes.NOTIFY_SETTINGS) {
+            NotifySettingsScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己; 自己看时没有「发消息」按钮)
+        composable(
+            route = Routes.USER_PROFILE,
+            arguments = listOf(
+                navArgument("userId") { type = NavType.IntType },
+                // 群聊进来的群 id (禁言只对本群生效); 私聊/消息中心进来 = 0 (全站视角)
+                navArgument("groupId") { type = NavType.IntType; defaultValue = 0 },
+            ),
+        ) { backStackEntry ->
+            UserProfileScreen(
+                userId = backStackEntry.arguments?.getInt("userId") ?: 0,
+                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onBack = { navController.popBackStack() },
+                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(convId = cid, userId = uid)) },
+            )
+        }
+
+        // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知进入)
+        composable(
+            route = Routes.PM_CHAT,
+            arguments = listOf(
+                navArgument("convId") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("userId") { type = NavType.IntType; defaultValue = 0 },
+                // 从私聊通知点进来时定位到那条消息
+                navArgument("messageId") { type = NavType.IntType; defaultValue = 0 },
+            ),
+        ) { backStackEntry ->
+            PmChatScreen(
+                initialConvId = backStackEntry.arguments?.getInt("convId") ?: 0,
+                initialUserId = backStackEntry.arguments?.getInt("userId") ?: 0,
+                initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
+                onBack = { navController.popBackStack() },
+                onOpenWeb = { url, title -> openLink(url, title) },
+                // 私聊里点头像: 没有群上下文 → groupId = 0 (全站视角)
+                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
             )
         }
 
@@ -681,4 +793,106 @@ private fun NoticeDialog(
             }
         }
     }
+}
+
+/**
+ * 私聊新消息提示音 (仅 App 前台生效)
+ *
+ * 每 8 秒静默拉一次私聊会话列表, 发现「别人发来的」新消息就响一声系统通知音。
+ * 放在 MainScreen 里做, 这样用户停在哪个页面都能听到, 不用每个页面各写一份。
+ *
+ * 注意: 只在 App 处于前台时轮询 (ON_RESUME ~ ON_PAUSE)。想做到「退到后台也响」
+ * 必须有常驻前台服务, 属于另一个量级的改动, 暂未做。
+ */
+@Composable
+private fun PmNotifyWatcher() {
+    val context = LocalContext.current
+    val foreground = rememberAppForeground()
+    // 已经见过的最新私聊消息 id; -1 = 还没建立基线 (首次只记录, 不响, 免得一进 App 就响)
+    var seenMaxId by remember { mutableStateOf(-1) }
+
+    // ---------- 兜底轮询 (SSE 挂了 / 断线窗口里也能响) ----------
+    // 每 8 秒静默拉一次私聊会话列表, 发现「别人发来的」新消息就响一声。
+    // ⚠️ 接上 SSE 后这条轮询**保留不动** (契约: 现有轮询一律保留作兜底)。
+    LaunchedEffect(foreground) {
+        if (!foreground) return@LaunchedEffect
+        while (true) {
+            if (UserStore.isLoggedIn()) {
+                ApiClient.pmConversations().getOrNull()?.let { page ->
+                    // 只看「别人发给我的」最后一条: 自己发的不算, 撤回后字段也会是空
+                    val newestIncoming = page.list
+                        .mapNotNull { it.last }
+                        .filter { !it.mine }
+                        .maxOfOrNull { it.id } ?: 0
+                    when {
+                        seenMaxId < 0 -> seenMaxId = newestIncoming
+                        newestIncoming > seenMaxId -> {
+                            seenMaxId = newestIncoming
+                            NotifySound.play(context)
+                        }
+                    }
+                }
+            }
+            kotlinx.coroutines.delay(8000L)
+        }
+    }
+
+    // ---------- 后台常驻服务: 按「已登录 + 开关」启停 (v1.0.35) ----------
+    // 那条唯一的 SSE 连接从 MainScreen 搬到了 MessageService (前台服务): 退到后台/桌面也不断,
+    // 才能像 QQ/微信一样秒收。这里只负责把「该不该跑」这个状态摆正, 不再按 foreground 断连。
+    // - 已登录 + 开关打开 -> 拉起服务 (幂等, 已在跑就什么都不做)
+    // - 未登录 -> 停掉服务 (没 token 挂着也是白发一条常驻通知)
+    // 用户在设置页关开关时那边会自己 stopService, 这里不会把它又拉起来。
+    // key 带上 foreground: 从设置页返回/回到前台时重新对一次状态。
+    LaunchedEffect(foreground, UserStore.hasToken) {
+        when {
+            UserStore.isLoggedIn() && Settings.msgServiceOn -> MessageService.start(context)
+            !UserStore.isLoggedIn() -> MessageService.stop(context)
+        }
+    }
+
+    // 订阅流事件:
+    // - 私聊 -> 响
+    // - 群消息且 atMe == 1 || atAll == 1 -> 也响 (群里刷屏不响, 只有被 @ 才响)
+    // - Reconnected -> 这里什么都不用做 (各页面自己补一次全量刷新)
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { event ->
+            when (event) {
+                is StreamEvent.Pm -> {
+                    // 同步兜底轮询的基线, 免得 8 秒后同一条消息又响一次
+                    if (event.msgId > seenMaxId) seenMaxId = event.msgId
+                    NotifySound.play(context)
+                }
+                is StreamEvent.Group -> {
+                    if (event.atMe == 1 || event.atAll == 1) NotifySound.play(context)
+                }
+                StreamEvent.Reconnected -> Unit
+            }
+        }
+    }
+}
+
+/**
+ * 本页面是否处于前台 (ON_RESUME ~ ON_PAUSE)
+ *
+ * 从 LocalContext 拿 ComponentActivity 注册 LifecycleEventObserver,
+ * 不引额外依赖 (Lifecycle/ LifecycleEventObserver 来自项目已有的 lifecycle-common)。
+ */
+@Composable
+private fun rememberAppForeground(): Boolean {
+    val context = LocalContext.current
+    val owner = context as? LifecycleOwner
+    var foreground by remember { mutableStateOf(true) }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> foreground = true
+                Lifecycle.Event.ON_PAUSE -> foreground = false
+                else -> Unit
+            }
+        }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
+    return foreground
 }

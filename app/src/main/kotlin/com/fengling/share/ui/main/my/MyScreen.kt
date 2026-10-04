@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -98,6 +99,7 @@ fun MyScreen(
     onOpenContributors: () -> Unit = {},
     onOpenAccount: () -> Unit = {},
     onOpenMessages: () -> Unit = {},
+    onOpenNotifySettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -370,6 +372,13 @@ fun MyScreen(
                     },
                     value = if (MessageBadge.unread > 0) "${MessageBadge.unread} 条未读" else null,
                     onClick = onOpenMessages,
+                )
+                SettingRow(
+                    title = "消息通知",
+                    summary = "后台接收开关 / 通知权限 / 电池优化与自启动",
+                    icon = Icons.Filled.Notifications,
+                    value = if (Settings.msgServiceOn) "已开启" else "已关闭",
+                    onClick = onOpenNotifySettings,
                 )
             }
         }

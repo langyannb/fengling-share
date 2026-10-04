@@ -42,13 +42,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.AppState
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.CrashReporter
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
+import com.fengling.share.data.PendingNav
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
+import com.fengling.share.service.MessageService
+import com.fengling.share.ui.components.PermissionGuideHost
 import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.main.MainScreen
 import com.fengling.share.ui.theme.AppTheme
@@ -65,6 +69,10 @@ class MainActivity : ComponentActivity() {
         Settings.init(applicationContext)
         // 账号系统: 初始化本地 token/user 存储 (未登录时为空, 不联网)
         UserStore.init(applicationContext)
+        // 点通知冷启动进来的跳转请求 (open_pm_conv / open_group) -> PendingNav -> MainScreen 导航
+        handleNavIntent(intent)
+        // 后台常驻消息服务: 已登录 + 开关打开时拉起 (退到后台/桌面连接也不断, 才能秒收)
+        if (Settings.msgServiceOn) MessageService.start(applicationContext)
         // OShin 同款: 状态栏 + 导航栏全透明, 关闭导航栏对比度强制 (浅色主题下默认白色 scrim 会盖住玻璃底栏下方!)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(
@@ -109,11 +117,55 @@ class MainActivity : ComponentActivity() {
                         },
                     )
                 }
+                // 启动自动权限引导 (v1.0.36): 通知系统框 -> 应用内一键允许 -> 厂商自启动提示
+                PermissionGuideHost()
                 // 全局强制更新弹窗 (覆盖所有页面, 不可关闭)
                 forceUpdateInfo?.let { info ->
                     ForceUpdateDialog(info = info)
                 }
             }
+        }
+    }
+
+    /**
+     * 前台判定: 后台常驻服务靠它决定「弹不弹系统通知」。
+     *
+     * 只看 onResume / onPause (不看 onStop): 弹权限框、进最近任务、被短暂遮挡都算前台,
+     * 免得和前台页面的提示音重复响两遍。
+     */
+    override fun onResume() {
+        super.onResume()
+        AppState.foreground = true
+    }
+
+    override fun onPause() {
+        AppState.foreground = false
+        super.onPause()
+    }
+
+    /**
+     * 点通知时 App 已经在运行 (singleTop): 系统不会重建 Activity, 走这里。
+     * 必须 setIntent 覆盖, 否则 getIntent() 还是老的启动 Intent。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNavIntent(intent)
+    }
+
+    /**
+     * 解析通知带来的跳转 extra (服务端/通知侧约定的名字见 MessageService 常量):
+     * `open_pm_conv` = 私聊会话 id, `open_group` = 群 id。
+     * 读到后写进 [PendingNav] 交给 MainScreen 导航, 并立刻抹掉 extra (免得重建时又跳一次)。
+     */
+    private fun handleNavIntent(intent: Intent?) {
+        val i = intent ?: return
+        val pmConvId = i.getIntExtra(MessageService.EXTRA_OPEN_PM_CONV, 0)
+        val groupId = i.getIntExtra(MessageService.EXTRA_OPEN_GROUP, 0)
+        if (pmConvId > 0 || groupId > 0) {
+            PendingNav.request(pmConvId = pmConvId, groupId = groupId)
+            i.removeExtra(MessageService.EXTRA_OPEN_PM_CONV)
+            i.removeExtra(MessageService.EXTRA_OPEN_GROUP)
         }
     }
 }

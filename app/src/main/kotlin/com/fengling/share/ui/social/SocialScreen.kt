@@ -8,6 +8,9 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -16,6 +19,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,7 +40,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.AlertDialog
@@ -54,9 +61,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -86,15 +95,22 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.SocialGroup
+import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.MuteOptionPicker
+import com.fengling.share.ui.components.TagChips
+import com.fengling.share.ui.lottery.LotteryScreen
+import com.fengling.share.ui.pm.PmScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -130,7 +146,7 @@ private class ChatMenuState {
  * 「从通知点进某个群」这类直达路径, 避免出现一片空白。
  */
 @Composable
-private fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?) {
+internal fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = { if (onBack != null) AppTopBar(title = "群组", onBack = onBack) },
@@ -196,6 +212,12 @@ fun SocialScreen(
     onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     /** 未登录时点「去登录」的回调 (跳账号页登录/注册) */
     onNeedLogin: (() -> Unit)? = null,
+    /** 点头像 / 点昵称: 打开某个用户的主页 (含自己; 主页里自己看不显示「发消息」) */
+    onOpenUser: ((userId: Int, groupId: Int) -> Unit)? = null,
+    /** 「私聊」tab 里点会话: 打开私聊聊天页 (convId = 0 表示还没会话说, 用 userId 首次私聊) */
+    onOpenPm: ((userId: Int, convId: Int) -> Unit)? = null,
+    /** 点「有人@你 / 有人@所有人」提示: 进群并定位到那条消息 */
+    onOpenGroupAt: ((groupId: Int, messageId: Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -212,11 +234,17 @@ fun SocialScreen(
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var currentGroup by remember { mutableStateOf<SocialGroup?>(null) }
+    // 当前群的定位消息 id (点「有人@你」进来时用它, 进群后自动定位并高亮)
+    var locateMsgId by remember { mutableStateOf(0) }
     // 顶栏「三条横杠」菜单与公告弹框的状态 (聊天页顶栏在这里, 内容在 ChatView)
     val chatMenu = remember { ChatMenuState() }
     // 群公告通知点进来: 直接把公告弹框打开
     LaunchedEffect(Unit) { if (openNotice) chatMenu.showNoticeViewer = true }
     var refreshTick by remember { mutableStateOf(0) }
+    // 顶部「群组 / 私聊」分段: 只在底部 tab 常驻模式显示
+    // (从「消息」点通知进来的全屏页 onBack != null, 直接进群聊/私聊, 不需要分段)
+    val showTabs = onBack == null && onOpenGroup != null
+    var tab by remember { mutableStateOf(0) }
 
     /**
      * 拉群列表。
@@ -262,6 +290,25 @@ fun SocialScreen(
         while (true) {
             kotlinx.coroutines.delay(8000L)
             loadGroups(true, silent = true)
+        }
+    }
+
+    // SSE 实时流: 收到群消息 -> 立刻静默刷新群列表 (未读红标不用等 8 秒);
+    // 如果用户正在看这个群 -> 再顺手刷一次当前会话消息 (改 refreshTick 触发 ChatView 的 loadLatest)。
+    // 断线重连 -> 群列表和当前会话都补刷一次。上面的 8 秒兜底轮询保留不动。
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { event ->
+            when (event) {
+                is StreamEvent.Group -> {
+                    loadGroups(true, silent = true)
+                    if (currentGroup?.id == event.groupId) refreshTick++
+                }
+                StreamEvent.Reconnected -> {
+                    loadGroups(true, silent = true)
+                    if (currentGroup != null) refreshTick++
+                }
+                else -> Unit
+            }
         }
     }
 
@@ -366,38 +413,128 @@ fun SocialScreen(
             }
         },
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
             val group = currentGroup
-            if (group == null) {
-                GroupList(
-                    groups = groups,
-                    loading = loading,
-                    refreshing = refreshing,
-                    error = error,
-                    onRefresh = { loadGroups(true) },
-                    onRetry = { loadGroups(false) },
-                    onOpen = { g ->
-                        if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+            // 顶部「群组 / 私聊」分段 (只在 tab 常驻模式且没进群聊时显示)
+            if (showTabs && group == null) {
+                SocialTabBar(selected = tab, onSelect = { tab = it })
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                when {
+                    // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
+                    showTabs && tab == 1 && group == null -> PmScreen(
+                        onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
+                        // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
+                        onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
+                        onNeedLogin = onNeedLogin,
+                    )
+                    group == null -> GroupList(
+                        groups = groups,
+                        loading = loading,
+                        refreshing = refreshing,
+                        error = error,
+                        onRefresh = { loadGroups(true) },
+                        onRetry = { loadGroups(false) },
+                        onOpen = { g ->
+                            locateMsgId = 0
+                            if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                        },
+                        // 点「有人@你」: 进群并定位到那条消息
+                        onOpenAt = { g, mid ->
+                            if (onOpenGroupAt != null) {
+                                onOpenGroupAt(g.id, mid)
+                            } else {
+                                locateMsgId = mid
+                                if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                            }
+                        },
+                    )
+                    else -> ChatView(
+                        group = group,
+                        me = UserStore.current,
+                        menu = chatMenu,
+                        refreshTick = refreshTick,
+                        locateMessageId = if (locateMsgId > 0) locateMsgId else initialMessageId,
+                        onOpenWeb = onOpenWeb,
+                        onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                        // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
+                        onMarkRead = { clearUnread(group.id) },
+                        // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
+                        onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 顶部「群组 / 私聊」分段控件 (和项目其它页面的圆角胶囊风格一致) */
+@Composable
+private fun SocialTabBar(selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+            .padding(3.dp),
+    ) {
+        listOf("群组", "私聊").forEachIndexed { index, label ->
+            val active = selected == index
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (active) MiuixTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { onSelect(index) }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 14.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (active) {
+                        MiuixTheme.colorScheme.onPrimary
+                    } else {
+                        MiuixTheme.colorScheme.onBackgroundVariant
                     },
-                )
-            } else {
-                ChatView(
-                    group = group,
-                    me = UserStore.current,
-                    menu = chatMenu,
-                    refreshTick = refreshTick,
-                    locateMessageId = initialMessageId,
-                    onOpenWeb = onOpenWeb,
-                    onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
-                    // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
-                    onMarkRead = { clearUnread(group.id) },
                 )
             }
         }
+    }
+}
+
+/**
+ * 群列表右侧的时间文案: 今天显示 HH:mm, 昨天显示「昨天」, 更早显示 MM-dd。
+ * 解析失败 (格式不对) 就返回空串, 不显示时间也不崩。
+ */
+private fun groupTimeText(raw: String): String {
+    if (raw.isBlank()) return ""
+    return try {
+        val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).parse(raw)
+            ?: return ""
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val day = dayFmt.format(date)
+        val today = dayFmt.format(Date())
+        val yesterday = java.util.Calendar.getInstance().apply {
+            add(java.util.Calendar.DAY_OF_YEAR, -1)
+        }
+        when {
+            day == today -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            day == dayFmt.format(yesterday.time) -> "昨天"
+            else -> SimpleDateFormat("MM-dd", Locale.getDefault()).format(date)
+        }
+    } catch (_: Exception) {
+        ""
     }
 }
 
@@ -412,6 +549,8 @@ private fun GroupList(
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onOpen: (SocialGroup) -> Unit,
+    /** 点「有人@你 / 有人@所有人」: 进群并定位到第一条相关消息 */
+    onOpenAt: (SocialGroup, Int) -> Unit = { _, _ -> },
 ) {
     PullToRefresh(
         isRefreshing = refreshing,
@@ -455,15 +594,39 @@ private fun GroupList(
                     )
                 }
                 items(groups, key = { it.id }) { g ->
-                    GroupCard(group = g, onClick = { onOpen(g) })
+                    GroupCard(
+                        group = g,
+                        onClick = { onOpen(g) },
+                        onOpenAt = { mid -> onOpenAt(g, mid) },
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * 群列表卡片 (照 QQ 群列表做):
+ * - 第一行: 群名 (+ 免打扰小图标)
+ * - 第二行: 「有人@你」(红) / 「有人@所有人」(橙) 提示 + 最新一条消息摘要
+ * - 第三行: 群公告 (有公告才显示)
+ * - 右侧: 最新消息时间 (今天 HH:mm / 昨天 / MM-dd) + 未读角标
+ */
 @Composable
-private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
+private fun GroupCard(
+    group: SocialGroup,
+    onClick: () -> Unit,
+    onOpenAt: (Int) -> Unit = {},
+) {
+    val last = group.lastMessage
+    // 副标题: 别人发的显示「昵称: 内容」; 纯图片显示 [图片]; 撤回/空显示「暂无消息」
+    val subtitle = when {
+        last == null -> "暂无消息"
+        last.content.isNotBlank() ->
+            last.nickname.ifBlank { "群友" } + ": " + last.content.replace('\n', ' ')
+        last.image.isNotBlank() -> last.nickname.ifBlank { "群友" } + ": [图片]"
+        else -> "暂无消息"
+    }
     Card(
         onClick = onClick,
         modifier = Modifier
@@ -530,13 +693,50 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    text = group.description.ifBlank { "暂无群简介" },
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // @提示: 有人@我用红色, 只有@所有人时用橙色 (两种颜色必须区分开)
+                    // 点提示条 → 直接进群并定位到第一条相关消息
+                    if (group.atMe > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFE5484D).copy(alpha = 0.12f))
+                                .clickable { onOpenAt(group.atMeFirst) }
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "有人@你",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFE5484D),
+                            )
+                        }
+                        Spacer(Modifier.width(5.dp))
+                    } else if (group.atAll > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFE08A00).copy(alpha = 0.12f))
+                                .clickable { onOpenAt(group.atAllFirst) }
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "有人@所有人",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFE08A00),
+                            )
+                        }
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        text = subtitle,
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (group.notice.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -557,10 +757,24 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
                     }
                 }
             }
-            // 未读角标: 免打扰的群用灰点 (不打扰), 正常的用红底数字, >99 显示 99+
-            if (group.unread > 0) {
-                Spacer(Modifier.width(10.dp))
-                UnreadBadge(count = group.unread, muted = group.muted)
+            Spacer(Modifier.width(10.dp))
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                val timeText = groupTimeText(group.lastTime)
+                if (timeText.isNotBlank()) {
+                    Text(
+                        text = timeText,
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                }
+                // 未读角标: 免打扰的群用灰点 (不打扰), 正常的用红底数字, >99 显示 99+
+                if (group.unread > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    UnreadBadge(count = group.unread, muted = group.muted)
+                }
             }
         }
     }
@@ -608,10 +822,11 @@ private fun ChatView(
     refreshTick: Int,
     /** 从通知点进来时要定位的消息 id (0 = 不定位) */
     locateMessageId: Int = 0,
-    onOpenWeb: ((url: String, title: String) -> Unit)?,
+    onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     onToast: (String) -> Unit,
-    /** 进群定位/首次加载完成后标记已读, 用于清掉群列表上的未读角标 */
     onMarkRead: () -> Unit = {},
+    /** 点头像: 打开用户主页 (为 null 时退回旧的成员操作面板) */
+    onOpenUser: ((Int, Int) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
@@ -631,6 +846,57 @@ private fun ChatView(
     var plusMenuOpen by remember { mutableStateOf(false) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
+    // 上滑加载更早的消息: 服务端还有没有更早的一页 + 是否正在拉更早的一页
+    var hasMoreBefore by remember(group.id) { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
+    // 前插更早消息后要补偿的滚动目标 index (-1 = 不需要补偿)
+    var pendingScrollTo by remember { mutableStateOf(-1) }
+    /**
+     * 用户当前是否贴在消息列表底部。
+     * 只有「本来就贴底」时才自动跟到最新消息; 用户上翻翻历史时收到新消息绝不能把ta拽回底部。
+     * 由下面 snapshotFlow 持续维护, 同时决定右下角「回到最新消息」按钮显不显示。
+     */
+    var atBottom by remember { mutableStateOf(true) }
+    /** 用户上翻期间新增的消息条数: 显示在「回到最新消息」按钮的角标上, 回到底部后清零 */
+    var newWhileAway by remember { mutableStateOf(0) }
+    /**
+     * 本次消息列表变化后要不要自动滚到底。
+     * 必须在「改写 messages 的那一刻」按当时的贴底状态算好: 新消息一进列表
+     * canScrollForward 立刻就是 true, 等到组合后再判断就永远不敢跟到底了。
+     */
+    var autoScrollPending by remember { mutableStateOf(false) }
+    /** 首屏/刷新落地用无动画的 scrollToItem (从顶部动画滚到最新一条看起来像「抖一下」) */
+    var settleWithoutAnimation by remember { mutableStateOf(true) }
+
+    /**
+     * 当前是否「贴在底部」(带「最后一条已进入可视区」的一格容差, 与 atBottom 判据一致)。
+     * 判据带上容差是为了防抖动: 贴底时刚来一条新消息会让 canScrollForward 立刻变 true,
+     * 只看它的话按钮会闪一下、自动跟随也会失效。
+     * 注意: 必须在改写 messages 之前调用, 这样才代表「改写前」的位置。
+     */
+    fun isStuckToBottom(): Boolean {
+        if (!listState.canScrollForward) return true
+        if (messages.isEmpty()) return true
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return false
+        return lastVisible >= messages.lastIndex - 1
+    }
+
+    // 持续维护 atBottom (用户滚到底部时顺手把「上翻期间新增」角标清零)
+    LaunchedEffect(group.id, listState) {
+        snapshotFlow { isStuckToBottom() }.collect { bottom ->
+            atBottom = bottom
+            if (bottom) newWhileAway = 0
+        }
+    }
+
+    /** 回到最新消息: 滚到底部 + 清掉上翻期间累积的新消息角标 */
+    fun jumpToLatest() {
+        val last = messages.lastIndex
+        if (last >= 0) scope.launch { runCatching { listState.animateScrollToItem(last) } }
+        newWhileAway = 0
+    }
+    // 抽奖界面 (输入区「+」菜单进入)
+    var showLottery by remember { mutableStateOf(false) }
     // 点空白处取消文本选中用的 key: 本仓库 Compose 版本的 SelectionContainer 只公开
     // (modifier, content) 这一个重载, 既没有选中态回调也没有清除选中的 API,
     // 所以「取消选中」靠改这个 key 重建被选中的那段文本 (用户 2026-10-04 反馈的问题)
@@ -688,35 +954,130 @@ private fun ChatView(
     fun loadLatest(isRefresh: Boolean) {
         scope.launch {
             if (isRefresh) refreshing = true else loading = true
+            // 整屏重载: 更早消息的分页状态作废 (下拉刷新时重置为「可能还有更早」)
+            pendingScrollTo = -1
+            if (isRefresh) hasMoreBefore = true
+            // 首屏落地用无动画滚动, 避免从顶部动画滚到底部 (看起来像「抖一下」)
+            settleWithoutAnimation = true
             val around = locateId
             ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = around)
                 .onSuccess { page ->
-                    messages = page.list.distinctBy { it.id }.sortedBy { it.id }
+                    // 先把「最终要用哪一屏」算完, 中途不改写 messages:
+                    // 以前先赋值第一屏、再赋值第二屏, 界面会闪两下、位置跳一次
+                    // (用户反馈的进群「抖一下, 好像是刷新」)
+                    var finalList = page.list.distinctBy { it.id }.sortedBy { it.id }
+                    var finalHasMore = page.hasMoreBefore
                     // 群列表里的未读数可能是旧的 (群对象是进群前拿到的), 所以这里再信一次服务端:
-                    // 首次加载若还有未读、且不是从通知点进来的, 就以「第一条未读」为锚点重取一屏
+                    // 首次加载若还有未读、且不是从通知点进来的, 就以「第一条未读」为锚点重取一屏。
+                    // 群对象上已经有未读锚点时 (initialLocateId) around > 0, 这里不会再发第二次请求。
                     val anchor = if (!isRefresh && around <= 0 && locateMessageId <= 0 &&
                         page.unread > 0 && page.firstUnreadId > 0
                     ) page.firstUnreadId else 0
                     if (anchor > 0) {
+                        // 定位状态在最终赋值之前定好, 避免赋值后二次组合再跳一下
                         locateId = anchor
                         unreadAnchorId = anchor
                         ApiClient.socialMessagesPage(group.id, limit = 30, aroundId = anchor)
                             .onSuccess { p2 ->
-                                messages = p2.list.distinctBy { it.id }.sortedBy { it.id }
+                                finalList = p2.list.distinctBy { it.id }.sortedBy { it.id }
+                                finalHasMore = p2.hasMoreBefore
                             }
+                            .onFailure { e -> onToast(e.message ?: "消息加载失败") }
                     }
+                    hasMoreBefore = finalHasMore
+                    // 有锚点/定位时由下面「定位」那个 effect 负责滚动, 这里不插手「跟消息」
+                    autoScrollPending = anchor <= 0 && locateId <= 0
+                    messages = finalList
                 }
                 .onFailure { e -> onToast(e.message ?: "消息加载失败") }
             if (isRefresh) refreshing = false else loading = false
         }
     }
 
-    /** 合并新消息: 按 id 去重 + 正序 (轮询片段可能重复或乱序) */
-    fun mergeNew(incoming: List<SocialMessage>) {
+    /**
+     * 合并新消息: 按 id 去重 + 正序 (轮询片段可能重复或乱序)。
+     * forceScroll = true 用于「自己刚发出去的消息」: 不管当时在哪都跟到最新。
+     * 其余情况按「改写 messages 之前」的贴底状态决定要不要自动跟到底 ——
+     * 用户上翻看历史时绝不滚动, 只把新增条数记到 newWhileAway 上, 由右下角按钮一键回去。
+     */
+    fun mergeNew(incoming: List<SocialMessage>, forceScroll: Boolean = false) {
         if (incoming.isEmpty()) return
         val base = messages
         val merged = (base + incoming).distinctBy { it.id }.sortedBy { it.id }
+        val added = merged.size - base.size
+        if (added <= 0) return
+        // 关键: 贴底状态要在改写 messages 之前读 —— 列表一变长 canScrollForward 立刻就是 true
+        val stuck = forceScroll || isStuckToBottom()
         messages = merged
+        if (stuck) {
+            autoScrollPending = true
+            newWhileAway = 0
+        } else {
+            newWhileAway += added
+        }
+    }
+
+    /**
+     * 上滑加载更早的一页 (before_id = 当前列表最小 id)。
+     * manual = 用户点了顶部那一行; 自动加载只在真的到了顶部时才发请求。
+     */
+    fun loadOlder(manual: Boolean = false) {
+        if (loadingMore || loading || messages.isEmpty()) return
+        if (!hasMoreBefore) {
+            if (manual) onToast("已经是最早的消息了")
+            return
+        }
+        // 从通知点进来正在定位 / 正在补偿滚动时不要抢
+        if (!manual && (locateId > 0 || pendingScrollTo >= 0)) return
+        val minId = messages.minOfOrNull { it.id } ?: return
+        if (minId <= 0) return
+        // 前插前记下「用户正看着第几行」以及「顶部是否已经有加载行」
+        val firstIndex = listState.firstVisibleItemIndex
+        val headerBefore = if (hasMoreBefore) 1 else 0
+        // 同步置上 loadingMore (不等协程调度): 快速 fling 时触顶条件可能连续成立,
+        // 靠它保证同一时刻只有一个分页请求在跑
+        loadingMore = true
+        scope.launch {
+            ApiClient.socialMessagesPage(group.id, limit = 30, beforeId = minId)
+                .onSuccess { page ->
+                    hasMoreBefore = page.hasMoreBefore
+                    // 保险: 只前插真的更早的消息 (万一服务端把 before_id 语义放宽也不会乱序)
+                    val older = page.list.filter { it.id < minId }
+                    if (older.isNotEmpty()) {
+                        val merged = (older + messages).distinctBy { it.id }.sortedBy { it.id }
+                        val added = merged.size - messages.size
+                        messages = merged
+                        if (added > 0) {
+                            // 保持滚动位置: 前面插进 added 条后, 原来第 firstIndex 行挪到了
+                            // firstIndex + added; 顶部「加载更早」行占 1 个 index, 并且只在
+                            // 还有更早消息时才存在, 所以按「新的」hasMoreBefore 补差额
+                            val headerAfter = if (hasMoreBefore) 1 else 0
+                            pendingScrollTo = (firstIndex + added + headerAfter - headerBefore)
+                                .coerceAtLeast(0)
+                        }
+                    }
+                }
+                .onFailure { e -> onToast(e.message ?: "更早的消息加载失败") }
+            loadingMore = false
+        }
+    }
+
+    // 前插完成后补偿滚动: 放在 LaunchedEffect 里, 等新列表组合完索引才有效
+    LaunchedEffect(messages.size, pendingScrollTo) {
+        val target = pendingScrollTo
+        if (target < 0) return@LaunchedEffect
+        pendingScrollTo = -1
+        runCatching { listState.scrollToItem(target) }
+    }
+
+    // 上滑到顶自动加载更早的消息: 只在「已经在顶部」这个条件由 false 变 true 时才触发一次,
+    // 短列表 / 补偿失败时不会反复请求 (顶部那一行也可以点, 作为手动兜底)
+    LaunchedEffect(group.id, locateId) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex <= 1 && listState.firstVisibleItemScrollOffset == 0
+        }.collect { atTop ->
+            if (atTop) loadOlder()
+        }
     }
 
     LaunchedEffect(group.id) { loadLatest(false) }
@@ -735,12 +1096,25 @@ private fun ChatView(
         }
     }
 
-    // 有新消息时滚到底部
-    LaunchedEffect(messages.size) {
-        // 从通知点进来定位消息时不要抢滚动
-        if (locateId > 0) return@LaunchedEffect
-        if (messages.isNotEmpty()) {
-            runCatching { listState.animateScrollToItem(messages.lastIndex) }
+    // 有新消息时滚到底部 —— 只有「本来就贴在底部」时 mergeNew 才会把 autoScrollPending 置上,
+    // 用户正在上翻看历史时这里不会跑 (这正是「滑快了被强行拉回最新消息」的修复)
+    LaunchedEffect(messages.size, autoScrollPending) {
+        if (!autoScrollPending) return@LaunchedEffect
+        // 定位消息 / 前插补偿滚动 / 正在拉更早一页时都不抢滚动, 并放弃这一次跟随
+        if (locateId > 0 || pendingScrollTo >= 0 || loadingMore) {
+            autoScrollPending = false
+            return@LaunchedEffect
+        }
+        autoScrollPending = false
+        if (messages.isEmpty()) return@LaunchedEffect
+        val target = messages.lastIndex
+        runCatching {
+            if (settleWithoutAnimation) {
+                settleWithoutAnimation = false
+                listState.scrollToItem(target)
+            } else {
+                listState.animateScrollToItem(target)
+            }
         }
     }
 
@@ -752,10 +1126,15 @@ private fun ChatView(
         val idx = messages.indexOfFirst { it.id == target }
         if (idx < 0) return@LaunchedEffect
         highlightId = target
-        runCatching { listState.animateScrollToItem(idx) }
+        // 无动画定位: 进群时从顶部动画滚到未读那条, 看起来就是「抖一下」
+        runCatching { listState.scrollToItem(idx) }
         locateId = 0
-        kotlinx.coroutines.delay(2800)
-        highlightId = 0
+        // 定位自己决定位置, 不让「跟最新消息」的逻辑再补一次滚动
+        autoScrollPending = false
+        scope.launch {
+            kotlinx.coroutines.delay(2800)
+            highlightId = 0
+        }
     }
 
     // 定位/首次加载完成后标记已读 (只调一次):
@@ -929,7 +1308,7 @@ private fun ChatView(
                     quoteTarget = null
                     val after = messages.maxOfOrNull { it.id } ?: 0
                     ApiClient.socialMessages(group.id, afterId = after)
-                        .onSuccess { new -> mergeNew(new) }
+                        .onSuccess { new -> mergeNew(new, forceScroll = true) }
                 }
                 .onFailure { e -> onToast(e.message ?: "发送失败") }
             sending = false
@@ -1124,6 +1503,25 @@ private fun ChatView(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
+                        // 顶部: 还有更早的消息时占一行 (自动加载时显示提示, 也可以手动点一下)
+                        if (hasMoreBefore) {
+                            item(key = "load_older") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { loadOlder(manual = true) }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = if (loadingMore) "加载更早的消息…"
+                                        else "上滑或点这里加载更早的消息",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
+                                }
+                            }
+                        }
                         items(messages, key = { it.id }) { msg ->
                             val mine = me != null && msg.userId == me.id
                             MessageRow(
@@ -1140,7 +1538,15 @@ private fun ChatView(
                                         onToast("没有可用的内置浏览器")
                                     }
                                 },
-                                onAvatarTap = { openMemberPanel(msg) },
+                                // 点头像/昵称: 打开用户主页 (含自己, 主页里自己看不显示「发消息」);
+                                // 没接主页时退回旧的成员操作面板
+                                onAvatarTap = {
+                                    if (onOpenUser != null) {
+                                        onOpenUser(msg.userId, group.id)
+                                    } else {
+                                        openMemberPanel(msg)
+                                    }
+                                },
                                 // 点图片: 全屏查看大图
                                 onImageTap = { url -> previewImage = url },
                                 // 长按对方头像 = @ 他
@@ -1157,6 +1563,59 @@ private fun ChatView(
                                     focusInput()
                                     onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
                                 },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ===== 右下角「回到最新消息」(问题3): 用户上翻看历史时出现, 一点回最新 =====
+            // 贴在这个消息列表区域的右下角 (输入框之上, 不挡输入框); 在底部时淡出隐藏
+            // 这里外层是 Column, 直接写 AnimatedVisibility 会被解析成 ColumnScope 的扩展重载而报错,
+            // 因此显式写成顶层函数 (它内部依然能用到 BoxScope 的 Modifier.align)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !atBottom && messages.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 16.dp),
+            ) {
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .shadow(6.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                            .clickable { jumpToLatest() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardDoubleArrowDown,
+                            contentDescription = "回到最新消息",
+                            tint = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    // 上翻期间新增的消息条数 (点按钮回到底部后清零)
+                    if (newWhileAway > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = 1.dp, y = (-1).dp)
+                                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFE53935))
+                                .clickable { jumpToLatest() }
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = if (newWhileAway > 99) "99+" else newWhileAway.toString(),
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }
@@ -1251,6 +1710,25 @@ private fun ChatView(
                         onClick = {
                             plusMenuOpen = false
                             openMentionPicker()
+                        },
+                    )
+                    // 抽奖: 打开抽奖界面 (全屏 Dialog 承载 LotteryScreen)
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.CardGiftcard,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("抽奖")
+                            }
+                        },
+                        onClick = {
+                            plusMenuOpen = false
+                            showLottery = true
                         },
                     )
                     // 管理员: 顺手把群公告的入口也收进来
@@ -1627,6 +2105,15 @@ private fun ChatView(
                             }
                         }
                     }
+                    // 管理员: 从消息菜单也能进「成员操作」(禁言) 面板 ——
+                    // 点头像现在是进个人主页 (主页里也能禁言), 这里保证老入口不丢
+                    if (isAdmin) {
+                        MessageActionRow(text = "成员操作") {
+                            val t = acting
+                            actionTarget = null
+                            openMemberPanel(t)
+                        }
+                    }
                     // 撤回权限: 自己的消息 or 管理员, 已撤回的不再给入口
                     if (canRecall) {
                         MessageActionRow(text = if (isImage) "删除图片" else "撤回", danger = true) {
@@ -1693,39 +2180,11 @@ private fun ChatView(
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
                         Spacer(Modifier.height(6.dp))
-                        MUTE_OPTIONS.chunked(3).forEach { rowItems ->
-                            Row {
-                                rowItems.forEach { item ->
-                                    val picked = muteMinutes == item.second
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(
-                                                if (picked) {
-                                                    MiuixTheme.colorScheme.primary.copy(alpha = 0.16f)
-                                                } else {
-                                                    MiuixTheme.colorScheme.surfaceContainerHigh
-                                                },
-                                            )
-                                            .clickable { muteMinutes = item.second }
-                                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                                    ) {
-                                        Text(
-                                            text = item.first,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (picked) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (picked) {
-                                                MiuixTheme.colorScheme.primary
-                                            } else {
-                                                MiuixTheme.colorScheme.onBackgroundVariant
-                                            },
-                                        )
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                }
-                            }
-                            Spacer(Modifier.height(6.dp))
-                        }
+                        // 时长档位与「个人主页 → 禁言」共用同一份 MUTE_OPTIONS (components/UserTagChips.kt)
+                        MuteOptionPicker(
+                            selected = muteMinutes,
+                            onSelect = { muteMinutes = it },
+                        )
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = muteReason,
@@ -1883,6 +2342,22 @@ private fun ChatView(
             }
         }
     }
+
+    // ===== 抽奖 (输入区「+」菜单进入): 全屏 Dialog 承载 LotteryScreen =====
+    if (showLottery) {
+        Dialog(
+            onDismissRequest = { showLottery = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MiuixTheme.colorScheme.background),
+            ) {
+                LotteryScreen(onBack = { showLottery = false }, onToast = onToast)
+            }
+        }
+    }
 }
 
 /** 「消息操作」菜单里的一行 (整行可点, 左对齐; danger = 撤回这类删除性操作) */
@@ -1978,6 +2453,11 @@ private fun MessageRow(
                                 color = MiuixTheme.colorScheme.primary,
                             )
                         }
+                    }
+                    // 管理员给这个用户打的标签 (防骗警示): 最多 2 个, 多了折成 +N
+                    if (msg.tags.isNotEmpty()) {
+                        Spacer(Modifier.width(4.dp))
+                        TagChips(tags = msg.tags, max = 2, small = true)
                     }
                     if (msg.at.contains(0)) {
                         Spacer(Modifier.width(4.dp))
@@ -2127,7 +2607,14 @@ private fun MessageRow(
         }
         if (mine) {
             Spacer(Modifier.width(8.dp))
-            MessageAvatar(url = msg.avatar, name = msg.nickname)
+            // 自己的头像也能点开主页 (主页里自己看不显示「发消息」按钮)
+            Box(
+                modifier = Modifier.pointerInput(msg.userId) {
+                    detectTapGestures(onTap = { onAvatarTap() })
+                },
+            ) {
+                MessageAvatar(url = msg.avatar, name = msg.nickname)
+            }
         }
     }
 }
@@ -2217,15 +2704,6 @@ private fun CenterHint(text: String) {
 }
 
 /** 轻量操作按钮 (不依赖 AccountScreen 的私有按钮组件) */
-/** 禁言时长选项: 文案 → 分钟数 (0 = 永久) */
-private val MUTE_OPTIONS = listOf(
-    "10 分钟" to 10,
-    "1 小时" to 60,
-    "1 天" to 1440,
-    "7 天" to 10080,
-    "30 天" to 43200,
-    "永久" to 0,
-)
 
 @Composable
 private fun SmallActionButton(text: String, onClick: () -> Unit) {

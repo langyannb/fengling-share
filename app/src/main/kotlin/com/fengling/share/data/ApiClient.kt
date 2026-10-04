@@ -1,6 +1,9 @@
 package com.fengling.share.data
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -9,6 +12,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
@@ -74,6 +78,131 @@ object ApiClient {
             return obj
         }
     }
+
+    // ===================== SSE 实时消息流 (契约 A 章节) =====================
+
+    /**
+     * 专用流式 client: readTimeout(0) = 永不读超时 (SSE 长连接靠服务端 25 秒收尾 + 10 秒心跳)。
+     * ⚠️ 用 newBuilder() 派生, 绝不动上面那个 15 秒读超时的 client。
+     */
+    private val streamClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    /**
+     * SSE 实时消息流 (契约 A1/A2/A3): 阻塞读到服务端 `event: bye` 收尾或连接断开为止。
+     *
+     * - URL 里 action 必须放查询串 (api.php 用 $_GET['action'] 路由), token 也走查询串
+     *   (current_user() 支持 param('token'); 不用 Authorization 头, 免得 nginx 丢头)。
+     * - `pm_id=0&group_id=0` = 服务端从「现在」开始, 不重放历史 (见契约 A1)。
+     * - 逐行解析 `event:` / `data:`; `:` 开头是心跳注释行, 忽略; `event: bye` 视为服务端
+     *   正常收尾 -> 返回 Result.success, 让外层 (MessageStream) 立刻重连。
+     * - onEvent 在 IO 线程回调, UI 侧自己 withContext。
+     *
+     * @return 成功 = 服务端正常收尾 / 连接自然结束; 失败 = 建连失败 (含 401)
+     */
+    suspend fun streamMessages(onEvent: (StreamEvent) -> Unit): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = StringBuilder(BASE_URL)
+                    .append("?action=stream&token=")
+                    .append(URLEncoder.encode(UserStore.token, "UTF-8"))
+                    .append("&pm_id=0&group_id=0")
+                    .toString()
+                val call = streamClient.newCall(Request.Builder().url(url).get().build())
+                // 协程被取消 (App 退后台 -> MessageStream.stop()) 时 cancel 掉 Call,
+                // 否则 readUtf8Line 会一直阻塞到服务端 25 秒收尾才放手, 留下悬挂连接
+                val completion = currentCoroutineContext()[Job]?.invokeOnCompletion {
+                    runCatching { call.cancel() }
+                }
+                try {
+                    call.execute().use { response ->
+                        if (!response.isSuccessful) {
+                            throw ApiException("实时消息连接失败 (HTTP ${response.code})")
+                        }
+                        val body = response.body
+                            ?: throw ApiException("实时消息连接没有返回内容")
+                        // readTimeout(0) 下 readUtf8Line 会阻塞到有数据为止, 不需要任何额外超时逻辑
+                        val source = body.source()
+                        Log.i("FLS_SSE", "SSE 已连接: HTTP " + response.code)
+                        var eventName = ""
+                        while (true) {
+                            val line = source.readUtf8Line() ?: break
+                            when {
+                                // 心跳行 `: hb` (纯注释) 直接忽略
+                                line.startsWith(":") -> Unit
+                                // 空行 = 一条 SSE 事件结束, 清掉事件名
+                                line.isEmpty() -> eventName = ""
+                                // "event:" 是 6 个字符, 必须按前缀剥离 (substring(5) 会留下 ": pm")
+                                line.startsWith("event:") -> eventName = line.removePrefix("event:").trim()
+                                line.startsWith("data:") -> {
+                                    val payload = line.removePrefix("data:").trim()
+                                    when (eventName) {
+                                        "pm" -> {
+                                            val ev = parsePmStreamEvent(payload)
+                                            if (ev == null) {
+                                                Log.w("FLS_SSE", "SSE 私聊事件解析失败 (已丢弃)")
+                                            } else {
+                                                onEvent(ev)
+                                            }
+                                        }
+                                        "group" -> {
+                                            val ev = parseGroupStreamEvent(payload)
+                                            if (ev == null) {
+                                                Log.w("FLS_SSE", "SSE 群事件解析失败 (已丢弃)")
+                                            } else {
+                                                onEvent(ev)
+                                            }
+                                        }
+                                        // 服务端正常收尾 (25 秒到点) -> 成功返回让外层重连
+                                        "bye" -> {
+                                            return@use
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    completion?.dispose()
+                }
+                Unit
+            }
+        }
+
+    /** 解析 `event: pm` 的 data 行 (契约 A3) */
+    private fun parsePmStreamEvent(payload: String): StreamEvent.Pm? = runCatching {
+        val j = JSONObject(payload)
+        StreamEvent.Pm(
+            msgId = j.optInt("id", 0),
+            convId = j.optInt("conv_id", 0),
+            fromUser = j.optInt("from_user", 0),
+            nickname = j.optString("nickname", ""),
+            content = j.optString("content", ""),
+            image = j.optString("image", ""),
+            createdAt = j.optString("created_at", ""),
+        )
+    }.getOrNull()
+
+    /** 解析 `event: group` 的 data 行 (契约 A3) */
+    private fun parseGroupStreamEvent(payload: String): StreamEvent.Group? = runCatching {
+        val j = JSONObject(payload)
+        StreamEvent.Group(
+            msgId = j.optInt("id", 0),
+            groupId = j.optInt("group_id", 0),
+            groupName = j.optString("group_name", ""),
+            userId = j.optInt("user_id", 0),
+            nickname = j.optString("nickname", ""),
+            content = j.optString("content", ""),
+            image = j.optString("image", ""),
+            atMe = j.optInt("at_me", 0),
+            atAll = j.optInt("at_all", 0),
+            createdAt = j.optString("created_at", ""),
+        )
+    }.getOrNull()
 
     /** 轮播图 */
     suspend fun getBanners(): List<Banner> = withContext(Dispatchers.IO) {
@@ -497,22 +626,28 @@ object ApiClient {
         val unread: Int = 0,
         val firstUnreadId: Int = 0,
         val myId: Int = 0,
+        /** 是否还存在更早的消息 (false = 已经翻到群聊最开始, 上滑不用再拉) */
+        val hasMoreBefore: Boolean = false,
     )
 
     /**
      * 群消息列表 + 未读信息 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
      * @param aroundId >0 时以该消息为中心取一屏 (定位用)
+     * @param beforeId >0 时只取比它更早的一页 (往上翻历史消息用, 返回仍是时间正序);
+     *   服务端优先级: aroundId > beforeId > afterId > 默认(最新)
      */
     suspend fun socialMessagesPage(
         groupId: Int,
         afterId: Int = 0,
         limit: Int = 30,
         aroundId: Int = 0,
+        beforeId: Int = 0,
     ): Result<SocialMessagesPage> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "limit" to limit)
             if (aroundId > 0) params["around_id"] = aroundId
+            if (beforeId > 0) params["before_id"] = beforeId
             if (afterId > 0) params["after_id"] = afterId
             val d = request("social_messages", params, UserStore.token).optJSONObject("data")
             val arr = d?.optJSONArray("list")
@@ -522,6 +657,7 @@ object ApiClient {
                 unread = d?.optInt("unread", 0) ?: 0,
                 firstUnreadId = d?.optInt("first_unread_id", 0) ?: 0,
                 myId = d?.optInt("my_id", 0) ?: 0,
+                hasMoreBefore = jsonBool(d ?: JSONObject(), "has_more_before"),
             )
         }
     }
@@ -529,14 +665,16 @@ object ApiClient {
     /**
      * 群消息列表 (需登录)
      * @param afterId >0 时只取比它更新的消息 (3 秒轮询用); 返回已按时间正序
+     * @param beforeId >0 时只取比它更早的消息 (上滑加载更早的消息用)
      */
     suspend fun socialMessages(
         groupId: Int,
         afterId: Int = 0,
         limit: Int = 30,
         aroundId: Int = 0,
+        beforeId: Int = 0,
     ): Result<List<SocialMessage>> =
-        socialMessagesPage(groupId, afterId, limit, aroundId).map { it.list }
+        socialMessagesPage(groupId, afterId, limit, aroundId, beforeId).map { it.list }
 
     /** 发送群消息, 成功返回新消息 id (同一用户同一群 2 秒 1 条) */
     suspend fun socialSend(
@@ -607,6 +745,176 @@ object ApiClient {
             Unit
         }
     }
+
+    // ===================== 私聊 / 用户主页 (接口契约 2026-10-04 A 节) =====================
+
+    /**
+     * 用户主页 (可匿名, 带 token 时才能拿到准确的 is_me / can_chat / conv_id)
+     * @param userId 目标用户 id
+     */
+    suspend fun userProfile(userId: Int, groupId: Int = 0): Result<UserProfile> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                // group_id: 传群 id = 看这个用户「在这个群里」的禁言状态; 不传/0 = 全站 (契约 F2)
+                val params = mutableMapOf<String, Any?>("user_id" to userId)
+                if (groupId > 0) params["group_id"] = groupId
+                val d = request("user_profile", params, UserStore.token)
+                    .optJSONObject("data") ?: JSONObject()
+                UserProfile.fromJson(d)
+            }
+        }
+
+    /** 私聊会话列表 (需登录): 每条含对方信息 + 最新一条消息 + 未读数, 以及全部会话未读总数 */
+    suspend fun pmConversations(): Result<PmConversationPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("pm_conversations", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            PmConversationPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { PmConversation.fromJson(arr.getJSONObject(it)) },
+                totalUnread = d?.optInt("total_unread", 0) ?: 0,
+            )
+        }
+    }
+
+    /**
+     * 私聊消息列表 (需登录), 返回已按时间正序
+     * @param convId / userId 二选一: 已有会话传 convId; 首次私聊 (还没会话) 传 userId
+     * @param beforeId >0 只取比它更早的一页 (上翻历史)
+     * @param afterId  >0 只取比它更新的消息 (轮询增量)
+     * @param aroundId >0 以该消息为中心取一屏 (定位)
+     * 服务端优先级: aroundId > beforeId > afterId > 默认(最新)
+     */
+    suspend fun pmMessages(
+        convId: Int = 0,
+        userId: Int = 0,
+        beforeId: Int = 0,
+        afterId: Int = 0,
+        aroundId: Int = 0,
+        limit: Int = 30,
+    ): Result<PmMessagesPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("limit" to limit)
+            if (convId > 0) params["conv_id"] = convId
+            if (userId > 0) params["user_id"] = userId
+            if (aroundId > 0) params["around_id"] = aroundId
+            if (beforeId > 0) params["before_id"] = beforeId
+            if (afterId > 0) params["after_id"] = afterId
+            val d = request("pm_messages", params, UserStore.token).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            PmMessagesPage(
+                convId = d?.optInt("conv_id", 0) ?: 0,
+                other = d?.optJSONObject("other")?.let { PmPeer.fromJson(it) },
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { PmMessage.fromJson(arr.getJSONObject(it)) },
+                hasMoreBefore = jsonBool(d ?: JSONObject(), "has_more_before"),
+                unread = d?.optInt("unread", 0) ?: 0,
+                firstUnreadId = d?.optInt("first_unread_id", 0) ?: 0,
+                myId = d?.optInt("my_id", 0) ?: 0,
+            )
+        }
+    }
+
+    /**
+     * 发私聊消息 (需登录)
+     * @param toUser / convId 二选一 (toUser 用于还没会话时)
+     * 失败时 ApiException.message 就是服务端中文提示, 可直接 Toast:
+     * 「不能给自己发私聊」/「你已被禁言 (…), 原因: …」/「消息不能超过 500 个字」/「发送太快了, 请稍后再试」
+     */
+    suspend fun pmSend(
+        toUser: Int = 0,
+        convId: Int = 0,
+        content: String = "",
+        /** 图片直链: 必须先走 social_image_upload (uploadChatImage), 前缀 https://fenglin.cn-nb1.rains3.com/chat/ */
+        image: String = "",
+        imageW: Int = 0,
+        imageH: Int = 0,
+    ): Result<PmSendResult> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("content" to content)
+            if (toUser > 0) params["to_user"] = toUser
+            if (convId > 0) params["conv_id"] = convId
+            // 纯图片消息: content 传空串 + 带 image 三件套; 纯文字时不带这三个键
+            if (image.isNotBlank()) {
+                params["image"] = image
+                params["image_w"] = imageW
+                params["image_h"] = imageH
+            }
+            val d = request("pm_send", params, UserStore.token).optJSONObject("data") ?: JSONObject()
+            PmSendResult.fromJson(d)
+        }
+    }
+
+    /**
+     * 把某个私聊会话标记为已读 (进会话时调一次)
+     * @param lastId 不传 (0) = 标记到最新
+     */
+    suspend fun pmRead(convId: Int, lastId: Int = 0): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>("conv_id" to convId)
+            if (lastId > 0) params["last_id"] = lastId
+            request("pm_read", params, UserStore.token)
+            Unit
+        }
+    }
+
+    /** 撤回私聊消息 (普通用户只能撤自己 5 分钟内的, 管理员不受限) */
+    suspend fun pmRecall(id: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request("pm_recall", mapOf("id" to id), UserStore.token)
+            Unit
+        }
+    }
+
+    // ===================== 抽奖 (需登录) =====================
+
+    /**
+     * 抽奖活动信息: 开关 / 标题 / 说明 / 我的剩余次数 / 奖品 / 我的中奖记录
+     *
+     * 必须带 UserStore.token: 服务端要靠它算 my_quota / my_drawn / records,
+     * 漏 token 会被当访客处理 (和之前 socialGroups 漏 token 是同一类 bug)
+     */
+    suspend fun lotteryInfo(): Result<LotteryInfo> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("lottery_info", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data") ?: JSONObject()
+            LotteryInfo.fromJson(d)
+        }
+    }
+
+    /**
+     * 抽一次奖 (无参数)
+     * 失败时 ApiException.message 就是服务端中文提示, 可直接 Toast:
+     * 「抽奖活动已关闭」/「你的抽奖次数已用完」/「奖品已抽完, 请稍后再来」
+     */
+    suspend fun lotteryDraw(): Result<LotteryResult> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("lottery_draw", emptyMap<String, Any?>(), UserStore.token)
+                .optJSONObject("data") ?: JSONObject()
+            LotteryResult.fromJson(d)
+        }
+    }
+
+    /** 我的中奖记录 (分页, 每页最多 50 条) */
+    suspend fun lotteryRecords(page: Int = 1, pageSize: Int = 20): Result<LotteryRecordPage> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val d = request(
+                    "lottery_records",
+                    mapOf("page" to page, "page_size" to pageSize),
+                    UserStore.token,
+                ).optJSONObject("data")
+                val arr = d?.optJSONArray("list")
+                LotteryRecordPage(
+                    list = if (arr == null) emptyList() else
+                        (0 until arr.length()).map { LotteryRecord.fromJson(arr.getJSONObject(it)) },
+                    total = d?.optInt("total", 0) ?: 0,
+                    page = d?.optInt("page", page) ?: page,
+                    pageSize = d?.optInt("page_size", pageSize) ?: pageSize,
+                )
+            }
+        }
 
     /**
      * 消息通知列表 (需登录)
@@ -801,6 +1109,23 @@ private fun jsonInt(j: JSONObject, key: String, def: Int = 0): Int {
     }
 }
 
+/**
+ * 标签数组解析 (契约 F1): 服务端一律返回 `tags: []`,
+ * 同时兜住「单个逗号分隔字符串」与 null 两种写法, 免得老数据把页面搞崩。
+ */
+private fun jsonStrList(j: JSONObject, key: String): List<String> {
+    val arr = j.optJSONArray(key)
+    if (arr != null) {
+        return (0 until arr.length())
+            .map { arr.optString(it, "") }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+    }
+    val single = jsonStr(j, key)
+    return if (single.isBlank()) emptyList()
+    else single.split(',').map { it.trim() }.filter { it.isNotBlank() }
+}
+
 /** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
 data class ChatImage(
     val url: String = "",
@@ -829,6 +1154,18 @@ data class SocialGroup(
     val unread: Int = 0,
     /** 第一条未读消息 id (无未读为 0); 进群时拿它当 around_id 定位 */
     val firstUnreadId: Int = 0,
+    /** 最新一条消息 (null = 群里还没人发过言) */
+    val lastMessage: LastMessage? = null,
+    /** 最新消息时间 "yyyy-MM-dd HH:mm:ss" */
+    val lastTime: String = "",
+    /** 未读里「@我」的条数 (0 = 没有) */
+    val atMe: Int = 0,
+    /** 第一条「@我」的消息 id (点「有人@你」进群用 around_id 定位) */
+    val atMeFirst: Int = 0,
+    /** 未读里「@所有人」的条数 */
+    val atAll: Int = 0,
+    /** 第一条「@所有人」的消息 id */
+    val atAllFirst: Int = 0,
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
@@ -842,6 +1179,35 @@ data class SocialGroup(
             muted = j.optInt("muted", 0) == 1,
             unread = j.optInt("unread", 0),
             firstUnreadId = j.optInt("first_unread_id", 0),
+            lastMessage = j.optJSONObject("last_message")?.let { LastMessage.fromJson(it) },
+            lastTime = jsonStr(j, "last_time"),
+            atMe = jsonInt(j, "at_me"),
+            atMeFirst = jsonInt(j, "at_me_first"),
+            atAll = jsonInt(j, "at_all"),
+            atAllFirst = jsonInt(j, "at_all_first"),
+        )
+    }
+}
+
+/** 群列表里的「最新一条消息」摘要 (social_groups.last_message) */
+data class LastMessage(
+    val id: Int = 0,
+    val userId: Int = 0,
+    /** 发消息的人 (副标题里显示「昵称: 内容」) */
+    val nickname: String = "",
+    val content: String = "",
+    /** 纯图片消息: content 为空, image 非空 → 前端显示 [图片] */
+    val image: String = "",
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LastMessage = LastMessage(
+            id = j.optInt("id", 0),
+            userId = j.optInt("user_id", 0),
+            nickname = jsonStr(j, "nickname"),
+            content = jsonStr(j, "content"),
+            image = jsonStr(j, "image"),
+            createdAt = jsonStr(j, "created_at"),
         )
     }
 }
@@ -859,6 +1225,8 @@ data class SocialGroupMember(
     /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
     val muteLeft: String = "",
     val muteReason: String = "",
+    /** 管理员打在这个成员身上的标签 (契约 F1, 防骗警示) */
+    val tags: List<String> = emptyList(),
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
@@ -870,6 +1238,7 @@ data class SocialGroupMember(
             muted = j.optInt("muted", 0) == 1,
             muteLeft = jsonStr(j, "mute_left"),
             muteReason = jsonStr(j, "mute_reason"),
+            tags = jsonStrList(j, "tags"),
         )
     }
 }
@@ -881,6 +1250,8 @@ data class SocialMessage(
     val nickname: String = "",
     val avatar: String = "",
     val role: String = "user",
+    /** 发送者的管理员标签 (契约 F1), 显示在群聊气泡昵称旁 */
+    val tags: List<String> = emptyList(),
     val content: String = "",
     /** 图片消息: 对象存储直链 (空串 = 没图; 撤回后也是空串) */
     val image: String = "",
@@ -907,6 +1278,7 @@ data class SocialMessage(
                 nickname = jsonStr(j, "nickname"),
                 avatar = jsonStr(j, "avatar"),
                 role = jsonStr(j, "role").ifBlank { "user" },
+                tags = jsonStrList(j, "tags"),
                 content = jsonStr(j, "content"),
                 image = jsonStr(j, "image"),
                 imageW = jsonInt(j, "image_w"),
@@ -945,6 +1317,341 @@ data class NotifyItem(
             type = jsonStr(j, "type").ifBlank { "system" },
             link = jsonStr(j, "link"),
             isRead = jsonBool(j, "is_read"),
+            createdAt = jsonStr(j, "created_at"),
+        )
+    }
+}
+
+/** 抽奖奖项 (服务端只下发「启用 且 还有库存」的奖项) */
+data class LotteryPrize(
+    val id: Int = 0,
+    val name: String = "",
+    /** 卡密类型: 天卡 / 周卡 / 月卡 (也可以是后台自定义的任意文本) */
+    val cardType: String = "",
+    /** 该奖项剩余可抽数量 */
+    val left: Int = 0,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryPrize = LotteryPrize(
+            id = j.optInt("id", 0),
+            name = jsonStr(j, "name"),
+            cardType = jsonStr(j, "card_type"),
+            left = j.optInt("left", 0),
+        )
+    }
+}
+
+/** 我的中奖记录 (含卡密, 客户端可直接复制) */
+data class LotteryRecord(
+    val id: Int = 0,
+    val prizeId: Int = 0,
+    val prizeName: String = "",
+    val cardType: String = "",
+    val code: String = "",
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryRecord = LotteryRecord(
+            id = j.optInt("id", 0),
+            prizeId = j.optInt("prize_id", 0),
+            prizeName = jsonStr(j, "prize_name"),
+            cardType = jsonStr(j, "card_type"),
+            code = jsonStr(j, "code"),
+            createdAt = jsonStr(j, "created_at"),
+        )
+    }
+}
+
+/** 抽奖总览 (lottery_info) */
+data class LotteryInfo(
+    /** 后台开关: false = 抽奖活动已关闭, 客户端要禁用抽奖按钮 */
+    val enabled: Boolean = false,
+    val title: String = "",
+    /** 抽奖说明, 可含换行 (客户端用 SelectionContainer 包住方便复制) */
+    val content: String = "",
+    /** 默认每人可抽次数 (仅展示用) */
+    val perUserLimit: Int = 0,
+    /** 我还能抽几次 (>=0, 已扣掉已抽的) */
+    val myQuota: Int = 0,
+    /** 我已经抽了几次 */
+    val myDrawn: Int = 0,
+    /** 每日次数上限 (0 = 不限次数, 客户端不显示每日次数) */
+    val dailyLimit: Int = 0,
+    /** 我今天已经抽了几次 */
+    val myTodayDrawn: Int = 0,
+    /** 我今天还能抽几次 (dailyLimit = 0 时为不限) */
+    val myTodayLeft: Int = 0,
+    val prizes: List<LotteryPrize> = emptyList(),
+    /** 我最近的中奖记录 */
+    val records: List<LotteryRecord> = emptyList(),
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryInfo {
+            val prizeArr = j.optJSONArray("prizes")
+            val recordArr = j.optJSONArray("records")
+            return LotteryInfo(
+                enabled = jsonBool(j, "enabled"),
+                title = jsonStr(j, "title"),
+                content = jsonStr(j, "content"),
+                perUserLimit = jsonInt(j, "per_user_limit"),
+                myQuota = jsonInt(j, "my_quota"),
+                myDrawn = jsonInt(j, "my_drawn"),
+                dailyLimit = jsonInt(j, "daily_limit"),
+                myTodayDrawn = jsonInt(j, "my_today_drawn"),
+                myTodayLeft = jsonInt(j, "my_today_left"),
+                prizes = if (prizeArr == null) emptyList() else
+                    (0 until prizeArr.length()).map { LotteryPrize.fromJson(prizeArr.getJSONObject(it)) },
+                records = if (recordArr == null) emptyList() else
+                    (0 until recordArr.length()).map { LotteryRecord.fromJson(recordArr.getJSONObject(it)) },
+            )
+        }
+    }
+}
+
+/** 一次抽奖的结果 (lottery_draw) */
+data class LotteryResult(
+    val prizeId: Int = 0,
+    val prizeName: String = "",
+    val cardType: String = "",
+    /** 抽中的卡密 (要大字等宽显示 + 可复制) */
+    val code: String = "",
+    /** 抽完后我还剩几次 */
+    val left: Int = 0,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryResult = LotteryResult(
+            prizeId = j.optInt("prize_id", 0),
+            prizeName = jsonStr(j, "prize_name"),
+            cardType = jsonStr(j, "card_type"),
+            code = jsonStr(j, "code"),
+            left = jsonInt(j, "left"),
+        )
+    }
+}
+
+/** 中奖记录一页 (lottery_records) */
+data class LotteryRecordPage(
+    val list: List<LotteryRecord> = emptyList(),
+    val total: Int = 0,
+    val page: Int = 1,
+    val pageSize: Int = 20,
+)
+
+// ===================== 私聊 / 用户主页 数据模型 (接口契约 2026-10-04 A 节) =====================
+
+/**
+ * 用户主页 (user_profile)
+ * - canChat = false 或 isMe = true 时不显示「发消息」按钮
+ * - convId = 0 表示还没聊过 (第一次发消息用 user_id, 服务端会自动建会话)
+ */
+data class UserProfile(
+    val id: Int = 0,
+    val username: String = "",
+    val nickname: String = "",
+    val avatar: String = "",
+    val bio: String = "",
+    /** admin = 管理员, 其它 = 普通用户 */
+    val role: String = "user",
+    val createdAt: String = "",
+    /** 发过的消息数 */
+    val messageCount: Int = 0,
+    /** 和我共同所在的群数 */
+    val sameGroups: Int = 0,
+    /** 是不是我自己 (1 = 自己) */
+    val isMe: Boolean = false,
+    /** 还能不能和我私聊 (0 = 不能, 例如被封禁) */
+    val canChat: Boolean = true,
+    /** 已有私聊会话 id (0 = 还没聊过) */
+    val convId: Int = 0,
+    /** 管理员打的标签 (契约 F1, 防骗警示) */
+    val tags: List<String> = emptyList(),
+    /** 本页是按哪个群看的 (回显; 0 = 全站视角) */
+    val groupId: Int = 0,
+    /** 该群已被禁言 (group_id 传 0 时即全站禁言) */
+    val muted: Boolean = false,
+    /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
+    val muteLeft: String = "",
+    /** 禁言原因 */
+    val muteReason: String = "",
+    /** 全站禁言状态 (不管 group_id 传了什么都会返回) */
+    val globalMuted: Boolean = false,
+    val globalMuteLeft: String = "",
+    val globalMuteReason: String = "",
+    /** 我是不是管理员 */
+    val isAdminMe: Boolean = false,
+    /** 我能不能禁言他 (管理员=1 / 自己=0 / 目标是管理员=0) */
+    val canMute: Boolean = false,
+) {
+    /** 展示名: 昵称优先, 没有昵称用用户名 */
+    val displayName: String get() = nickname.ifBlank { username }
+
+    /** 头像首字占位 */
+    val initial: String get() = displayName.take(1).ifBlank { "铃" }
+
+    val isAdmin: Boolean get() = role == "admin"
+
+    /** 是否显示「发消息」按钮 */
+    val canStartChat: Boolean get() = !isMe && canChat
+
+    companion object {
+        fun fromJson(j: JSONObject): UserProfile = UserProfile(
+            id = j.optInt("id", 0),
+            username = jsonStr(j, "username"),
+            nickname = jsonStr(j, "nickname"),
+            avatar = jsonStr(j, "avatar"),
+            bio = jsonStr(j, "bio"),
+            role = jsonStr(j, "role").ifBlank { "user" },
+            createdAt = jsonStr(j, "created_at"),
+            messageCount = jsonInt(j, "message_count"),
+            sameGroups = jsonInt(j, "same_groups"),
+            isMe = jsonBool(j, "is_me"),
+            canChat = jsonBool(j, "can_chat"),
+            convId = jsonInt(j, "conv_id"),
+            tags = jsonStrList(j, "tags"),
+            groupId = jsonInt(j, "group_id"),
+            muted = jsonBool(j, "muted"),
+            muteLeft = jsonStr(j, "mute_left"),
+            muteReason = jsonStr(j, "mute_reason"),
+            globalMuted = jsonBool(j, "global_muted"),
+            globalMuteLeft = jsonStr(j, "global_mute_left"),
+            globalMuteReason = jsonStr(j, "global_mute_reason"),
+            isAdminMe = jsonBool(j, "is_admin_me"),
+            canMute = jsonBool(j, "can_mute"),
+        )
+    }
+}
+
+/** 私聊会话里的对方 (pm_conversations.list[].user / pm_messages.other) */
+data class PmPeer(
+    val id: Int = 0,
+    val username: String = "",
+    val nickname: String = "",
+    val avatar: String = "",
+    val bio: String = "",
+    val role: String = "user",
+    val createdAt: String = "",
+    /** 管理员标签 (契约 F1), 私聊页顶部显示 */
+    val tags: List<String> = emptyList(),
+) {
+    val displayName: String get() = nickname.ifBlank { username }
+
+    val initial: String get() = displayName.take(1).ifBlank { "铃" }
+
+    companion object {
+        fun fromJson(j: JSONObject): PmPeer = PmPeer(
+            id = j.optInt("id", 0),
+            username = jsonStr(j, "username"),
+            nickname = jsonStr(j, "nickname"),
+            avatar = jsonStr(j, "avatar"),
+            bio = jsonStr(j, "bio"),
+            role = jsonStr(j, "role").ifBlank { "user" },
+            createdAt = jsonStr(j, "created_at"),
+            tags = jsonStrList(j, "tags"),
+        )
+    }
+}
+
+/** 一条私聊消息 (mine = true 时是自己发的, 显示在右边) */
+data class PmMessage(
+    val id: Int = 0,
+    val convId: Int = 0,
+    val userId: Int = 0,
+    val toUser: Int = 0,
+    val content: String = "",
+    /** 图片直链 (空串 = 没图; 撤回后也是空串) */
+    val image: String = "",
+    val imageW: Int = 0,
+    val imageH: Int = 0,
+    val isRecalled: Boolean = false,
+    /** 服务端直接告诉我们这条是不是自己发的 */
+    val mine: Boolean = false,
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): PmMessage = PmMessage(
+            id = j.optInt("id", 0),
+            convId = jsonInt(j, "conv_id"),
+            userId = jsonInt(j, "user_id"),
+            toUser = jsonInt(j, "to_user"),
+            content = jsonStr(j, "content"),
+            image = jsonStr(j, "image"),
+            imageW = jsonInt(j, "image_w"),
+            imageH = jsonInt(j, "image_h"),
+            isRecalled = jsonBool(j, "is_recalled"),
+            mine = jsonBool(j, "mine"),
+            createdAt = jsonStr(j, "created_at"),
+        )
+    }
+}
+
+/** 私聊会话 (会话列表一行) */
+data class PmConversation(
+    val convId: Int = 0,
+    val userId: Int = 0,
+    val username: String = "",
+    val nickname: String = "",
+    val avatar: String = "",
+    /** 对方的管理员标签 (契约 F1), 会话列表昵称旁显示 */
+    val tags: List<String> = emptyList(),
+    /** 最新一条消息 (null = 会话里还没有消息) */
+    val last: PmMessage? = null,
+    val lastTime: String = "",
+    val unread: Int = 0,
+    /** 第一条未读消息 id (无未读为 0); 进会话时拿它定位 */
+    val firstUnreadId: Int = 0,
+) {
+    val displayName: String get() = nickname.ifBlank { username }
+
+    val initial: String get() = displayName.take(1).ifBlank { "铃" }
+
+    companion object {
+        fun fromJson(j: JSONObject): PmConversation {
+            val u = j.optJSONObject("user")
+            return PmConversation(
+                convId = jsonInt(j, "conv_id"),
+                userId = u?.optInt("id", 0) ?: 0,
+                username = if (u == null) "" else jsonStr(u, "username"),
+                nickname = if (u == null) "" else jsonStr(u, "nickname"),
+                avatar = if (u == null) "" else jsonStr(u, "avatar"),
+                tags = if (u == null) emptyList() else jsonStrList(u, "tags"),
+                last = j.optJSONObject("last")?.let { PmMessage.fromJson(it) },
+                lastTime = jsonStr(j, "last_time"),
+                unread = jsonInt(j, "unread"),
+                firstUnreadId = jsonInt(j, "first_unread_id"),
+            )
+        }
+    }
+}
+
+/** 私聊会话列表一页 (totalUnread = 所有会话未读之和) */
+data class PmConversationPage(
+    val list: List<PmConversation> = emptyList(),
+    val totalUnread: Int = 0,
+)
+
+/** 私聊消息一页 */
+data class PmMessagesPage(
+    /** 0 = 还没建立会话 */
+    val convId: Int = 0,
+    /** 对方信息 (首次私聊传 user_id 时也会返回) */
+    val other: PmPeer? = null,
+    val list: List<PmMessage> = emptyList(),
+    val hasMoreBefore: Boolean = false,
+    val unread: Int = 0,
+    val firstUnreadId: Int = 0,
+    val myId: Int = 0,
+)
+
+/** 发送私聊消息的结果 */
+data class PmSendResult(
+    val id: Int = 0,
+    val convId: Int = 0,
+    val createdAt: String = "",
+) {
+    companion object {
+        fun fromJson(j: JSONObject): PmSendResult = PmSendResult(
+            id = j.optInt("id", 0),
+            convId = jsonInt(j, "conv_id"),
             createdAt = jsonStr(j, "created_at"),
         )
     }

@@ -1,5 +1,6 @@
 package com.fengling.share.ui.main.my
 
+import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -54,8 +55,10 @@ import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
+import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.CaptchaDialog
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -134,6 +137,58 @@ fun AccountScreen(
     }
 }
 
+// ===================== 账号免密切换 (契约 F5) =====================
+
+/**
+ * 免密切换账号到 [username]。
+ *
+ * 「账号保险箱」(UserStore.account_vault) 里按用户名存了 {token, nickname, avatar, userId},
+ * 所以切换账号**不需要再输密码**:
+ * 1. 保险箱里有 token → UserStore.switchTo() 直接把登录态切过去, 再调 user_me 校验:
+ *    校验通过 = 切换完成 (群列表 / 未读 / 私聊都会按新账号重新拉取);
+ *    校验失败 (token 过期) = 清掉这条记录 + [onNeedPassword] 回填用户名让用户重新输密码。
+ * 2. 没有 token (老版本只存了用户名的记录) → 直接 [onNeedPassword] 回填用户名。
+ *
+ * ⚠️ 这里**绝对不能**调 ApiClient.logoutAccount() —— 服务端 logout 会执行
+ * `DELETE FROM sessions WHERE token = ?`, 把这条 session 删掉, 下次就没法免密切回来了。
+ * 只有用户主动点「退出登录」时才允许调 logout。
+ */
+private fun switchAccountNoPassword(
+    username: String,
+    context: Context,
+    scope: CoroutineScope,
+    onBusy: (Boolean) -> Unit = {},
+    onSwitched: (User) -> Unit = {},
+    onNeedPassword: (String) -> Unit = {},
+) {
+    val name = username.trim()
+    if (name.isEmpty()) return
+    if (!UserStore.switchTo(name)) {
+        // 保险箱里没有这个账号的 token (老版本数据) → 只能回填用户名让用户输密码
+        onNeedPassword(name)
+        Toast.makeText(context, "该账号需要重新输入密码登录", Toast.LENGTH_SHORT).show()
+        return
+    }
+    onBusy(true)
+    scope.launch {
+        ApiClient.getMe()
+            .onSuccess { user ->
+                // 用服务端最新资料刷新本地缓存与会话 (昵称/头像可能在别处改过)
+                UserStore.updateUser(user)
+                onSwitched(user)
+                Toast.makeText(context, "已切换到 " + user.displayName, Toast.LENGTH_SHORT).show()
+            }
+            .onFailure {
+                // token 已失效: 清掉这条记录, 回填用户名让用户重新登录
+                UserStore.forgetAccount(name)
+                UserStore.clear()
+                onNeedPassword(name)
+                Toast.makeText(context, "登录已过期，请重新输入密码", Toast.LENGTH_SHORT).show()
+            }
+        onBusy(false)
+    }
+}
+
 // ===================== 登录视图 =====================
 
 @Composable
@@ -146,8 +201,25 @@ private fun LoginView(
     var account by remember(prefill) { mutableStateOf(prefill) }
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
-    // 最近登录过的账号 (切换账号后可一键回填)
+    // 最近登录过的账号 (保险箱里有 token 的可免密切换, 老记录只能回填用户名)
     val recents = remember(prefill) { UserStore.recentAccounts() }
+    // 正在免密切换的账号名 (空 = 没有在切换)
+    var switching by remember { mutableStateOf("") }
+
+    fun quickSwitch(name: String) {
+        if (switching.isNotEmpty()) return
+        switchAccountNoPassword(
+            username = name,
+            context = context,
+            scope = scope,
+            onBusy = { busy -> switching = if (busy) name else "" },
+            onNeedPassword = { n ->
+                switching = ""
+                account = n
+                password = ""
+            },
+        )
+    }
 
     fun doLogin() {
         if (account.isBlank() || password.isBlank()) {
@@ -209,28 +281,54 @@ private fun LoginView(
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     recents.forEachIndexed { index, name ->
                         if (index > 0) ProfileDivider()
+                        val acc = UserStore.vaultAccount(name)
+                        val canQuick = !acc?.token.isNullOrBlank()
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { account = name; password = "" }
-                                .padding(horizontal = 16.dp, vertical = 13.dp),
+                                .clickable {
+                                    if (canQuick) {
+                                        quickSwitch(name)
+                                    } else {
+                                        // 老记录没有 token: 只能回填用户名
+                                        account = name
+                                        password = ""
+                                    }
+                                }
+                                .padding(horizontal = 16.dp, vertical = 11.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Person,
-                                contentDescription = null,
-                                tint = MiuixTheme.colorScheme.onBackgroundVariant,
-                                modifier = Modifier.size(18.dp),
+                            AvatarCircle(
+                                url = acc?.avatar ?: "",
+                                name = acc?.displayName ?: name,
+                                size = 34.dp,
                             )
                             Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = acc?.displayName?.takeIf { it.isNotBlank() } ?: name,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MiuixTheme.colorScheme.onBackground,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = "@$name",
+                                    fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
                             Text(
-                                text = name,
-                                fontSize = 14.sp,
-                                color = MiuixTheme.colorScheme.onBackground,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = "点击填入",
+                                text = when {
+                                    switching == name -> "切换中…"
+                                    canQuick -> "免密切换"
+                                    else -> "点击填入"
+                                },
                                 fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.primary,
                             )
@@ -456,9 +554,26 @@ private fun ProfileView(
     var newPassword by remember { mutableStateOf("") }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showEmailVerify by remember { mutableStateOf(false) }
-    // 切换账号: 弹框里选中的用户名
+    // 切换账号: 弹框 + 正在免密切换的账号名
     var showSwitchDialog by remember { mutableStateOf(false) }
-    var switchChoice by remember { mutableStateOf("") }
+    var switching by remember { mutableStateOf("") }
+
+    // 点某个最近账号: 保险箱里有 token 就直接免密切换, 否则回填登录框
+    fun doSwitch(name: String) {
+        if (switching.isNotEmpty()) return
+        switchAccountNoPassword(
+            username = name,
+            context = context,
+            scope = scope,
+            onBusy = { busy -> switching = if (busy) name else "" },
+            onNeedPassword = { n ->
+                switching = ""
+                showSwitchDialog = false
+                // 交给 AccountScreen: 清本地登录态 + 回填用户名进登录框 (不作废服务端会话)
+                onSwitchAccount(n)
+            },
+        )
+    }
 
     // 进页面拉一次最新资料 (昵称/头像可能在别处改过)
     LaunchedEffect(Unit) {
@@ -650,10 +765,7 @@ private fun ProfileView(
             ProfileRow(
                 title = "切换账号",
                 value = "当前: ${me.username}",
-                onClick = {
-                    switchChoice = UserStore.recentAccounts().firstOrNull { it != me.username } ?: me.username
-                    showSwitchDialog = true
-                },
+                onClick = { showSwitchDialog = true },
             )
             ProfileDivider()
             ProfileRow(
@@ -796,18 +908,19 @@ private fun ProfileView(
         )
     }
 
-    // ===== 切换账号 =====
+    // ===== 切换账号 (免密: 保险箱里有 token 的点一下就切, 老记录才回填让输密码) =====
     if (showSwitchDialog) {
         val others = UserStore.recentAccounts().filter { it != me.username }
         AlertDialog(
-            onDismissRequest = { showSwitchDialog = false },
+            onDismissRequest = { if (switching.isEmpty()) showSwitchDialog = false },
             title = {
                 Text(text = "切换账号", color = MiuixTheme.colorScheme.onBackground)
             },
             text = {
                 Column {
                     Text(
-                        text = "切换后需要输入所选账号的密码。当前账号不会丢失，随时可以切回来。",
+                        text = "点一下要切换的账号即可直接登录（已记住登录状态，不用再输密码）。" +
+                            "当前账号不会丢失，随时可以切回来。",
                         fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                     )
@@ -820,51 +933,73 @@ private fun ProfileView(
                         )
                     } else {
                         others.forEach { name ->
+                            val acc = UserStore.vaultAccount(name)
+                            val canQuick = !acc?.token.isNullOrBlank()
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(10.dp))
-                                    .then(
-                                        if (switchChoice == name) {
-                                            Modifier.background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
-                                        } else {
-                                            Modifier
-                                        },
-                                    )
-                                    .clickable { switchChoice = name }
-                                    .padding(horizontal = 10.dp, vertical = 11.dp),
+                                    .clickable(enabled = switching.isEmpty()) { doSwitch(name) }
+                                    .padding(horizontal = 10.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(
-                                    text = name,
-                                    fontSize = 14.sp,
-                                    color = MiuixTheme.colorScheme.onBackground,
-                                    modifier = Modifier.weight(1f),
+                                AvatarCircle(
+                                    url = acc?.avatar ?: "",
+                                    name = acc?.displayName ?: name,
+                                    size = 34.dp,
                                 )
-                                if (switchChoice == name) {
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
                                     Text(
-                                        text = "已选择",
+                                        text = acc?.displayName?.takeIf { it.isNotBlank() } ?: name,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MiuixTheme.colorScheme.onBackground,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = "@$name",
                                         fontSize = 12.sp,
-                                        color = MiuixTheme.colorScheme.primary,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = when {
+                                        switching == name -> "切换中…"
+                                        canQuick -> "免密切换"
+                                        else -> "需输密码"
+                                    },
+                                    fontSize = 12.sp,
+                                    color = if (canQuick) {
+                                        MiuixTheme.colorScheme.primary
+                                    } else {
+                                        MiuixTheme.colorScheme.onBackgroundVariant
+                                    },
+                                )
                             }
                         }
                     }
                 }
             },
             confirmButton = {
-                M3TextButton(onClick = {
-                    showSwitchDialog = false
-                    onSwitchAccount(switchChoice)
-                    Toast.makeText(context, "请输入密码登录", Toast.LENGTH_SHORT).show()
-                }) {
-                    Text(text = if (others.isEmpty()) "去登录" else "切换", color = MiuixTheme.colorScheme.primary)
-                }
-            },
-            dismissButton = {
-                M3TextButton(onClick = { showSwitchDialog = false }) {
-                    Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                M3TextButton(
+                    onClick = {
+                        showSwitchDialog = false
+                        if (others.isEmpty()) {
+                            // 没有历史账号: 清本地登录态, 回到登录框手动输
+                            onSwitchAccount(me.username)
+                        }
+                    },
+                ) {
+                    Text(
+                        text = if (others.isEmpty()) "去登录" else "关闭",
+                        color = MiuixTheme.colorScheme.primary,
+                    )
                 }
             },
         )
@@ -888,9 +1023,14 @@ private fun ProfileView(
                 M3TextButton(onClick = {
                     showLogoutDialog = false
                     scope.launch {
+                        // ⚠️ 这里是**唯一**允许调用 logout 的地方: 服务端 logout 会
+                        // `DELETE FROM sessions WHERE token = ?`, 把该账号的 session 作废。
+                        // 切换账号绝不能走这里, 否则下次就没法免密切回来了。
                         // 后端作废失败也不阻塞本地退出
                         ApiClient.logoutAccount()
                         UserStore.clear()
+                        // 主动退出就把后台常驻服务停掉: 没 token 的连接留着只会白挂一条常驻通知
+                        MessageService.stop(context)
                         Toast.makeText(context, "已退出登录", Toast.LENGTH_SHORT).show()
                     }
                 }) {

@@ -4,6 +4,12 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission 
         android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 后台常驻消息服务 (v1.0.35): 前台服务 + 通知权限 + 请求忽略电池优化 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 开机自启 (v1.0.36): 重启/更新后自动把常驻消息服务拉回来 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 包可见性: 声明 QQ 可见, 否则 Android 11+ resolveActivity(mqqapi://) 返回 null,
          无法直接拉起 QQ 加群, 只能回退网页版 -->
     <queries>
@@ -28,6 +34,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:enableOnBackInvokedCallback="true"
             android:theme="@style/Theme.Fengling">
             <intent-filter>
@@ -45,6 +52,23 @@
             android:exported="false"
             android:enableOnBackInvokedCallback="true"
             android:theme="@style/Theme.Fengling" />
+        <!-- 后台常驻消息服务: 持有唯一的 SSE 长连接, 退到后台/桌面也不断 -->
+        <service
+            android:name=".service.MessageService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- 开机 / 应用更新后恢复常驻消息服务 -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true"
+            android:directBootAware="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
