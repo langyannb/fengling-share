@@ -1,5 +1,6 @@
 package com.fengling.share.data
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -126,9 +127,11 @@ object ApiClient {
                             ?: throw ApiException("实时消息连接没有返回内容")
                         // readTimeout(0) 下 readUtf8Line 会阻塞到有数据为止, 不需要任何额外超时逻辑
                         val source = body.source()
+                        Log.i("FLS_SSE", "SSE 已连接: HTTP " + response.code)
                         var eventName = ""
                         while (true) {
                             val line = source.readUtf8Line() ?: break
+                            Log.i("FLS_SSE", "SSE 上行: " + line.take(200))
                             when {
                                 // 心跳行 `: hb` (纯注释) 直接忽略
                                 line.startsWith(":") -> Unit
