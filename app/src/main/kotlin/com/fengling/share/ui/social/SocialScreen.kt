@@ -640,6 +640,37 @@ private fun ChatView(
     var loadingMore by remember { mutableStateOf(false) }
     // 前插更早消息后要补偿的滚动目标 index (-1 = 不需要补偿)
     var pendingScrollTo by remember { mutableStateOf(-1) }
+    /**
+     * 用户当前是否贴在消息列表底部。
+     * 只有「本来就贴底」时才自动跟到最新消息; 用户上翻翻历史时收到新消息绝不能把ta拽回底部。
+     */
+    var atBottom by remember { mutableStateOf(true) }
+    /**
+     * 本次消息列表变化后要不要自动滚到底。
+     * 必须在「改写 messages 的那一刻」按当时的贴底状态算好: 新消息一进列表
+     * canScrollForward 立刻就是 true, 等到组合后再判断就永远不敢跟到底了。
+     */
+    var autoScrollPending by remember { mutableStateOf(false) }
+
+    /**
+     * 当前是否「贴在底部」(带「最后一条已进入可视区」的一格容差, 与 atBottom 判据一致)。
+     * 判据带上容差是为了防抖动: 贴底时刚来一条新消息会让 canScrollForward 立刻变 true,
+     * 只看它的话自动跟随也会失效。
+     * 注意: 必须在改写 messages 之前调用, 这样才代表「改写前」的位置。
+     */
+    fun isStuckToBottom(): Boolean {
+        if (!listState.canScrollForward) return true
+        if (messages.isEmpty()) return true
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return false
+        return lastVisible >= messages.lastIndex - 1
+    }
+
+    // 持续维护 atBottom
+    LaunchedEffect(group.id, listState) {
+        snapshotFlow { isStuckToBottom() }.collect { bottom ->
+            atBottom = bottom
+        }
+    }
     // 抽奖界面 (输入区「+」菜单进入)
     var showLottery by remember { mutableStateOf(false) }
     // 点空白处取消文本选中用的 key: 本仓库 Compose 版本的 SelectionContainer 只公开
@@ -727,12 +758,21 @@ private fun ChatView(
         }
     }
 
-    /** 合并新消息: 按 id 去重 + 正序 (轮询片段可能重复或乱序) */
-    fun mergeNew(incoming: List<SocialMessage>) {
+    /**
+     * 合并新消息: 按 id 去重 + 正序 (轮询片段可能重复或乱序)。
+     * forceScroll = true 用于「自己刚发出去的消息」: 不管当时在哪都跟到最新。
+     * 其余情况按「改写 messages 之前」的贴底状态决定要不要自动跟到底: 用户上翻看历史时绝不滚动。
+     */
+    fun mergeNew(incoming: List<SocialMessage>, forceScroll: Boolean = false) {
         if (incoming.isEmpty()) return
         val base = messages
         val merged = (base + incoming).distinctBy { it.id }.sortedBy { it.id }
+        val added = merged.size - base.size
+        if (added <= 0) return
+        // 关键: 贴底状态要在改写 messages 之前读 —— 列表一变长 canScrollForward 立刻就是 true
+        val stuck = forceScroll || isStuckToBottom()
         messages = merged
+        if (stuck) autoScrollPending = true
     }
 
     /**
@@ -749,11 +789,13 @@ private fun ChatView(
         if (!manual && (locateId > 0 || pendingScrollTo >= 0)) return
         val minId = messages.minOfOrNull { it.id } ?: return
         if (minId <= 0) return
+        // 前插前记下「用户正看着第几行」以及「顶部是否已经有加载行」
+        val firstIndex = listState.firstVisibleItemIndex
+        val headerBefore = if (hasMoreBefore) 1 else 0
+        // 同步置上 loadingMore (不等协程调度): 快速 fling 时触顶条件可能连续成立,
+        // 靠它保证同一时刻只有一个分页请求在跑
+        loadingMore = true
         scope.launch {
-            loadingMore = true
-            // 前插前记下「用户正看着第几行」以及「顶部是否已经有加载行」
-            val firstIndex = listState.firstVisibleItemIndex
-            val headerBefore = if (hasMoreBefore) 1 else 0
             ApiClient.socialMessagesPage(group.id, limit = 30, beforeId = minId)
                 .onSuccess { page ->
                     hasMoreBefore = page.hasMoreBefore
@@ -812,15 +854,18 @@ private fun ChatView(
         }
     }
 
-    // 有新消息时滚到底部
-    LaunchedEffect(messages.size) {
-        // 从通知点进来定位消息时不要抢滚动
-        if (locateId > 0) return@LaunchedEffect
-        // 前插更早消息也会让 messages.size 变大, 这时要保住用户当前位置, 不能滚到底
-        if (pendingScrollTo >= 0 || loadingMore) return@LaunchedEffect
-        if (messages.isNotEmpty()) {
-            runCatching { listState.animateScrollToItem(messages.lastIndex) }
+    // 有新消息时滚到底部 —— 只有「本来就贴在底部」时 mergeNew 才会把 autoScrollPending 置上,
+    // 用户正在上翻看历史时这里不会跑 (这正是「滑快了被强行拉回最新消息」的修复)
+    LaunchedEffect(messages.size, autoScrollPending) {
+        if (!autoScrollPending) return@LaunchedEffect
+        // 定位消息 / 前插补偿滚动 / 正在拉更早一页时都不抢滚动, 并放弃这一次跟随
+        if (locateId > 0 || pendingScrollTo >= 0 || loadingMore) {
+            autoScrollPending = false
+            return@LaunchedEffect
         }
+        autoScrollPending = false
+        if (messages.isEmpty()) return@LaunchedEffect
+        runCatching { listState.animateScrollToItem(messages.lastIndex) }
     }
 
     // 从通知点进来 / 未读定位: 滚到那条消息并高亮一下, 然后恢复正常
@@ -1008,7 +1053,7 @@ private fun ChatView(
                     quoteTarget = null
                     val after = messages.maxOfOrNull { it.id } ?: 0
                     ApiClient.socialMessages(group.id, afterId = after)
-                        .onSuccess { new -> mergeNew(new) }
+                        .onSuccess { new -> mergeNew(new, forceScroll = true) }
                 }
                 .onFailure { e -> onToast(e.message ?: "发送失败") }
             sending = false
