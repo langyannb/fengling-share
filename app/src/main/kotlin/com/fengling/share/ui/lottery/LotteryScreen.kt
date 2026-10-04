@@ -144,6 +144,11 @@ fun LotteryScreen(
                 onToast("抽奖次数已用完")
                 return
             }
+            // 每日次数限制 (daily_limit = 0 表示不限): 用完直接用服务端原文提示
+            cur.dailyLimit > 0 && cur.myTodayLeft <= 0 -> {
+                onToast("今天的抽奖次数已用完, 明天再来")
+                return
+            }
         }
         drawing = true
         scope.launch {
@@ -250,6 +255,20 @@ fun LotteryScreen(
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
                     }
+                    // 每日次数限制 (daily_limit = 0 表示不限, 这时不显示这一行)
+                    if (cur.dailyLimit > 0) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "今日已抽 " + cur.myTodayDrawn + " 次 · 今日还剩 " +
+                                cur.myTodayLeft + " 次 (每天 " + cur.dailyLimit + " 次)",
+                            fontSize = 11.sp,
+                            color = if (cur.myTodayLeft > 0) {
+                                MiuixTheme.colorScheme.onBackgroundVariant
+                            } else {
+                                Color(0xFFE5484D)
+                            },
+                        )
+                    }
 
                     // ===== 活动说明 (可长按选中复制) =====
                     if (cur.content.isNotBlank()) {
@@ -289,7 +308,8 @@ fun LotteryScreen(
 
                     // ===== 立即抽奖大按钮 =====
                     Spacer(Modifier.height(14.dp))
-                    val canDraw = cur.enabled && cur.myQuota > 0 && !drawing
+                    val dailyOut = cur.dailyLimit > 0 && cur.myTodayLeft <= 0
+                    val canDraw = cur.enabled && cur.myQuota > 0 && !dailyOut && !drawing
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -310,6 +330,7 @@ fun LotteryScreen(
                                 drawing -> "抽奖中…"
                                 !cur.enabled -> "抽奖活动已关闭"
                                 cur.myQuota <= 0 -> "抽奖次数已用完"
+                                dailyOut -> "今天的抽奖次数已用完"
                                 else -> "🎁 立即抽奖"
                             },
                             fontSize = 16.sp,
@@ -327,6 +348,14 @@ fun LotteryScreen(
                             text = "抽奖次数已用完, 关注后续活动吧",
                             fontSize = 11.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    } else if (cur.enabled && dailyOut) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            // 服务端原文: 今天的抽奖次数已用完, 明天再来
+                            text = "今天的抽奖次数已用完, 明天再来",
+                            fontSize = 11.sp,
+                            color = Color(0xFFE5484D),
                         )
                     }
 

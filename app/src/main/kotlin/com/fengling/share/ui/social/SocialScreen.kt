@@ -102,6 +102,7 @@ import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.lottery.LotteryScreen
+import com.fengling.share.ui.pm.PmScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -141,7 +142,7 @@ private class ChatMenuState {
  * 「从通知点进某个群」这类直达路径, 避免出现一片空白。
  */
 @Composable
-private fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?) {
+internal fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = { if (onBack != null) AppTopBar(title = "群组", onBack = onBack) },
@@ -207,6 +208,12 @@ fun SocialScreen(
     onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     /** 未登录时点「去登录」的回调 (跳账号页登录/注册) */
     onNeedLogin: (() -> Unit)? = null,
+    /** 点头像 / 点昵称: 打开某个用户的主页 (含自己; 主页里自己看不显示「发消息」) */
+    onOpenUser: ((userId: Int) -> Unit)? = null,
+    /** 「私聊」tab 里点会话: 打开私聊聊天页 (convId = 0 表示还没会话说, 用 userId 首次私聊) */
+    onOpenPm: ((userId: Int, convId: Int) -> Unit)? = null,
+    /** 点「有人@你 / 有人@所有人」提示: 进群并定位到那条消息 */
+    onOpenGroupAt: ((groupId: Int, messageId: Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -223,11 +230,17 @@ fun SocialScreen(
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var currentGroup by remember { mutableStateOf<SocialGroup?>(null) }
+    // 当前群的定位消息 id (点「有人@你」进来时用它, 进群后自动定位并高亮)
+    var locateMsgId by remember { mutableStateOf(0) }
     // 顶栏「三条横杠」菜单与公告弹框的状态 (聊天页顶栏在这里, 内容在 ChatView)
     val chatMenu = remember { ChatMenuState() }
     // 群公告通知点进来: 直接把公告弹框打开
     LaunchedEffect(Unit) { if (openNotice) chatMenu.showNoticeViewer = true }
     var refreshTick by remember { mutableStateOf(0) }
+    // 顶部「群组 / 私聊」分段: 只在底部 tab 常驻模式显示
+    // (从「消息」点通知进来的全屏页 onBack != null, 直接进群聊/私聊, 不需要分段)
+    val showTabs = onBack == null && onOpenGroup != null
+    var tab by remember { mutableStateOf(0) }
 
     /**
      * 拉群列表。
@@ -377,38 +390,126 @@ fun SocialScreen(
             }
         },
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
             val group = currentGroup
-            if (group == null) {
-                GroupList(
-                    groups = groups,
-                    loading = loading,
-                    refreshing = refreshing,
-                    error = error,
-                    onRefresh = { loadGroups(true) },
-                    onRetry = { loadGroups(false) },
-                    onOpen = { g ->
-                        if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+            // 顶部「群组 / 私聊」分段 (只在 tab 常驻模式且没进群聊时显示)
+            if (showTabs && group == null) {
+                SocialTabBar(selected = tab, onSelect = { tab = it })
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                when {
+                    // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
+                    showTabs && tab == 1 && group == null -> PmScreen(
+                        onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
+                        onOpenUser = onOpenUser,
+                        onNeedLogin = onNeedLogin,
+                    )
+                    group == null -> GroupList(
+                        groups = groups,
+                        loading = loading,
+                        refreshing = refreshing,
+                        error = error,
+                        onRefresh = { loadGroups(true) },
+                        onRetry = { loadGroups(false) },
+                        onOpen = { g ->
+                            locateMsgId = 0
+                            if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                        },
+                        // 点「有人@你」: 进群并定位到那条消息
+                        onOpenAt = { g, mid ->
+                            if (onOpenGroupAt != null) {
+                                onOpenGroupAt(g.id, mid)
+                            } else {
+                                locateMsgId = mid
+                                if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                            }
+                        },
+                    )
+                    else -> ChatView(
+                        group = group,
+                        me = UserStore.current,
+                        menu = chatMenu,
+                        refreshTick = refreshTick,
+                        locateMessageId = if (locateMsgId > 0) locateMsgId else initialMessageId,
+                        onOpenWeb = onOpenWeb,
+                        onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                        // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
+                        onMarkRead = { clearUnread(group.id) },
+                        onOpenUser = onOpenUser,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 顶部「群组 / 私聊」分段控件 (和项目其它页面的圆角胶囊风格一致) */
+@Composable
+private fun SocialTabBar(selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+            .padding(3.dp),
+    ) {
+        listOf("群组", "私聊").forEachIndexed { index, label ->
+            val active = selected == index
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (active) MiuixTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { onSelect(index) }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 14.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (active) {
+                        MiuixTheme.colorScheme.onPrimary
+                    } else {
+                        MiuixTheme.colorScheme.onBackgroundVariant
                     },
-                )
-            } else {
-                ChatView(
-                    group = group,
-                    me = UserStore.current,
-                    menu = chatMenu,
-                    refreshTick = refreshTick,
-                    locateMessageId = initialMessageId,
-                    onOpenWeb = onOpenWeb,
-                    onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
-                    // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
-                    onMarkRead = { clearUnread(group.id) },
                 )
             }
         }
+    }
+}
+
+/**
+ * 群列表右侧的时间文案: 今天显示 HH:mm, 昨天显示「昨天」, 更早显示 MM-dd。
+ * 解析失败 (格式不对) 就返回空串, 不显示时间也不崩。
+ */
+private fun groupTimeText(raw: String): String {
+    if (raw.isBlank()) return ""
+    return try {
+        val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).parse(raw)
+            ?: return ""
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val day = dayFmt.format(date)
+        val today = dayFmt.format(Date())
+        val yesterday = java.util.Calendar.getInstance().apply {
+            add(java.util.Calendar.DAY_OF_YEAR, -1)
+        }
+        when {
+            day == today -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            day == dayFmt.format(yesterday.time) -> "昨天"
+            else -> SimpleDateFormat("MM-dd", Locale.getDefault()).format(date)
+        }
+    } catch (_: Exception) {
+        ""
     }
 }
 
@@ -423,6 +524,8 @@ private fun GroupList(
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onOpen: (SocialGroup) -> Unit,
+    /** 点「有人@你 / 有人@所有人」: 进群并定位到第一条相关消息 */
+    onOpenAt: (SocialGroup, Int) -> Unit = { _, _ -> },
 ) {
     PullToRefresh(
         isRefreshing = refreshing,
@@ -466,15 +569,39 @@ private fun GroupList(
                     )
                 }
                 items(groups, key = { it.id }) { g ->
-                    GroupCard(group = g, onClick = { onOpen(g) })
+                    GroupCard(
+                        group = g,
+                        onClick = { onOpen(g) },
+                        onOpenAt = { mid -> onOpenAt(g, mid) },
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * 群列表卡片 (照 QQ 群列表做):
+ * - 第一行: 群名 (+ 免打扰小图标)
+ * - 第二行: 「有人@你」(红) / 「有人@所有人」(橙) 提示 + 最新一条消息摘要
+ * - 第三行: 群公告 (有公告才显示)
+ * - 右侧: 最新消息时间 (今天 HH:mm / 昨天 / MM-dd) + 未读角标
+ */
 @Composable
-private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
+private fun GroupCard(
+    group: SocialGroup,
+    onClick: () -> Unit,
+    onOpenAt: (Int) -> Unit = {},
+) {
+    val last = group.lastMessage
+    // 副标题: 别人发的显示「昵称: 内容」; 纯图片显示 [图片]; 撤回/空显示「暂无消息」
+    val subtitle = when {
+        last == null -> "暂无消息"
+        last.content.isNotBlank() ->
+            last.nickname.ifBlank { "群友" } + ": " + last.content.replace('\n', ' ')
+        last.image.isNotBlank() -> last.nickname.ifBlank { "群友" } + ": [图片]"
+        else -> "暂无消息"
+    }
     Card(
         onClick = onClick,
         modifier = Modifier
@@ -541,13 +668,50 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    text = group.description.ifBlank { "暂无群简介" },
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // @提示: 有人@我用红色, 只有@所有人时用橙色 (两种颜色必须区分开)
+                    // 点提示条 → 直接进群并定位到第一条相关消息
+                    if (group.atMe > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFE5484D).copy(alpha = 0.12f))
+                                .clickable { onOpenAt(group.atMeFirst) }
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "有人@你",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFE5484D),
+                            )
+                        }
+                        Spacer(Modifier.width(5.dp))
+                    } else if (group.atAll > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFE08A00).copy(alpha = 0.12f))
+                                .clickable { onOpenAt(group.atAllFirst) }
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "有人@所有人",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFE08A00),
+                            )
+                        }
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        text = subtitle,
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (group.notice.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -568,10 +732,24 @@ private fun GroupCard(group: SocialGroup, onClick: () -> Unit) {
                     }
                 }
             }
-            // 未读角标: 免打扰的群用灰点 (不打扰), 正常的用红底数字, >99 显示 99+
-            if (group.unread > 0) {
-                Spacer(Modifier.width(10.dp))
-                UnreadBadge(count = group.unread, muted = group.muted)
+            Spacer(Modifier.width(10.dp))
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                val timeText = groupTimeText(group.lastTime)
+                if (timeText.isNotBlank()) {
+                    Text(
+                        text = timeText,
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                }
+                // 未读角标: 免打扰的群用灰点 (不打扰), 正常的用红底数字, >99 显示 99+
+                if (group.unread > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    UnreadBadge(count = group.unread, muted = group.muted)
+                }
             }
         }
     }
@@ -619,10 +797,11 @@ private fun ChatView(
     refreshTick: Int,
     /** 从通知点进来时要定位的消息 id (0 = 不定位) */
     locateMessageId: Int = 0,
-    onOpenWeb: ((url: String, title: String) -> Unit)?,
+    onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     onToast: (String) -> Unit,
-    /** 进群定位/首次加载完成后标记已读, 用于清掉群列表上的未读角标 */
     onMarkRead: () -> Unit = {},
+    /** 点头像: 打开用户主页 (为 null 时退回旧的成员操作面板) */
+    onOpenUser: ((Int) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
@@ -1334,7 +1513,11 @@ private fun ChatView(
                                         onToast("没有可用的内置浏览器")
                                     }
                                 },
-                                onAvatarTap = { openMemberPanel(msg) },
+                                // 点头像/昵称: 打开用户主页 (含自己, 主页里自己看不显示「发消息」);
+                                // 没接主页时退回旧的成员操作面板
+                                onAvatarTap = {
+                                    if (onOpenUser != null) onOpenUser(msg.userId) else openMemberPanel(msg)
+                                },
                                 // 点图片: 全屏查看大图
                                 onImageTap = { url -> previewImage = url },
                                 // 长按对方头像 = @ 他
@@ -2409,7 +2592,14 @@ private fun MessageRow(
         }
         if (mine) {
             Spacer(Modifier.width(8.dp))
-            MessageAvatar(url = msg.avatar, name = msg.nickname)
+            // 自己的头像也能点开主页 (主页里自己看不显示「发消息」按钮)
+            Box(
+                modifier = Modifier.pointerInput(msg.userId) {
+                    detectTapGestures(onTap = { onAvatarTap() })
+                },
+            ) {
+                MessageAvatar(url = msg.avatar, name = msg.nickname)
+            }
         }
     }
 }

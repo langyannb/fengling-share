@@ -91,6 +91,8 @@ import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MessagesScreen
+import com.fengling.share.ui.pm.PmChatScreen
+import com.fengling.share.ui.user.UserProfileScreen
 import com.fengling.share.ui.main.my.MyScreen
 import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
@@ -120,10 +122,17 @@ object Routes {
     // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
     const val SOCIAL_GROUP = "social/group/{groupId}?messageId={messageId}&notice={notice}"
     const val MESSAGES = "messages"
+    // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知 进入)
+    const val PM_CHAT = "pm/chat?convId={convId}&userId={userId}&messageId={messageId}"
+    // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
+    const val USER_PROFILE = "user/profile/{userId}"
 
     fun detail(appId: Int) = "detail/$appId"
     fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
         "social/group/$groupId?messageId=$messageId&notice=" + if (notice) 1 else 0
+    fun pmChat(convId: Int = 0, userId: Int = 0, messageId: Int = 0) =
+        "pm/chat?convId=$convId&userId=$userId&messageId=$messageId"
+    fun userProfile(userId: Int) = "user/profile/$userId"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -336,6 +345,12 @@ fun MainScreen(
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
                                 onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
+                                // 点群聊里任何人的头像: 打开用户主页
+                                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
+                                // 私聊会话列表点一条: 进私聊会话页
+                                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
+                                // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
+                                onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
                             )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
@@ -454,6 +469,9 @@ fun MainScreen(
                 openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
                 // 群聊消息里的链接: 内置浏览器打开
                 onOpenWeb = { url, title -> openLink(url, title) },
+                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
+                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
+                onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
             )
         }
 
@@ -468,6 +486,42 @@ fun MainScreen(
                 onOpenGroup = { groupId, messageId, showNotice ->
                     navController.navigate(Routes.socialGroup(groupId, messageId, showNotice))
                 },
+                // 私聊通知 (link = pm:<conv_id>:<msg_id>): 进私聊会话并定位到那条消息
+                onOpenPm = { convId, messageId ->
+                    navController.navigate(Routes.pmChat(convId = convId, messageId = messageId))
+                },
+            )
+        }
+
+        // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己; 自己看时没有「发消息」按钮)
+        composable(
+            route = Routes.USER_PROFILE,
+            arguments = listOf(navArgument("userId") { type = NavType.IntType }),
+        ) { backStackEntry ->
+            UserProfileScreen(
+                userId = backStackEntry.arguments?.getInt("userId") ?: 0,
+                onBack = { navController.popBackStack() },
+                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(convId = cid, userId = uid)) },
+            )
+        }
+
+        // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知进入)
+        composable(
+            route = Routes.PM_CHAT,
+            arguments = listOf(
+                navArgument("convId") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("userId") { type = NavType.IntType; defaultValue = 0 },
+                // 从私聊通知点进来时定位到那条消息
+                navArgument("messageId") { type = NavType.IntType; defaultValue = 0 },
+            ),
+        ) { backStackEntry ->
+            PmChatScreen(
+                initialConvId = backStackEntry.arguments?.getInt("convId") ?: 0,
+                initialUserId = backStackEntry.arguments?.getInt("userId") ?: 0,
+                initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
+                onBack = { navController.popBackStack() },
+                onOpenWeb = { url, title -> openLink(url, title) },
+                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
             )
         }
 

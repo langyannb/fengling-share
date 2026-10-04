@@ -153,6 +153,8 @@ fun MessagesScreen(
     onOpenWeb: (url: String, title: String) -> Unit,
     /** 群聊类通知: 跳进对应群聊, messageId>0 时定位到那条消息, showNotice=true 时直接弹群公告 */
     onOpenGroup: ((groupId: Int, messageId: Int, showNotice: Boolean) -> Unit)? = null,
+    /** 私聊通知: 跳进对应私聊会话, messageId>0 时定位到那条消息 */
+    onOpenPm: ((convId: Int, messageId: Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -197,6 +199,7 @@ fun MessagesScreen(
      * - msg:<群id>:<消息id>  群消息/@我  -> 进群聊并定位到那条消息
      * - notice:<群id>        群公告更新 -> 进群聊并弹出公告
      * - group:<群id>         旧格式兼容 -> 只进群聊
+     * - pm:<会话id>:<消息id>  私聊消息   -> 进私聊会话并定位到那条消息
      * - http(s) 开头         普通链接   -> 内置浏览器
      */
     fun openLinkOf(item: NotifyItem) {
@@ -217,6 +220,14 @@ fun MessagesScreen(
             link.startsWith("group:") -> {
                 val gid = link.removePrefix("group:").toIntOrNull() ?: 0
                 if (gid > 0 && onOpenGroup != null) onOpenGroup(gid, 0, false)
+            }
+            link.startsWith("pm:") -> {
+                // 私聊通知: pm:<会话id>:<消息id>
+                val p = link.removePrefix("pm:").split(":")
+                val cid = p.getOrNull(0)?.toIntOrNull() ?: 0
+                val mid = p.getOrNull(1)?.toIntOrNull() ?: 0
+                if (cid > 0 && onOpenPm != null) onOpenPm(cid, mid)
+                else onOpenWeb(link, item.title)
             }
             else -> onOpenWeb(link, item.title)
         }
@@ -584,12 +595,13 @@ private fun NotificationCard(
     }
 }
 
-/** 通知类型标签: system=系统 / admin=管理员 / social=社交 / lottery=抽奖 */
+/** 通知类型标签: system=系统 / admin=管理员 / social=社交 / pm=私聊 / lottery=抽奖 */
 @Composable
 private fun TypeTag(type: String) {
     val (label, color) = when (type) {
         "admin" -> "管理员" to Color(0xFFE5484D)
         "social" -> "社交" to Color(0xFF2F9E5F)
+        "pm" -> "私聊" to Color(0xFF3B82F6)
         "lottery" -> "抽奖" to Color(0xFFE08A00)
         else -> "系统" to MiuixTheme.colorScheme.primary
     }
