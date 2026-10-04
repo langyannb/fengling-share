@@ -117,6 +117,7 @@ import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.glassStroke
 import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
