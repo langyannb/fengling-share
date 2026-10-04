@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -57,6 +58,7 @@ class MessageService : Service() {
         runCatching { Settings.init(applicationContext) }
         runCatching { UserStore.init(applicationContext) }
         createChannels()
+        Log.i(TAG, "服务创建: 已登录=" + UserStore.isLoggedIn())
         // Android 14+ 的 dataSync 前台服务必须带类型; 少数机型 (后台启动受限) 会抛异常, 兜住别崩
         val started = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -86,6 +88,7 @@ class MessageService : Service() {
     }
 
     override fun onDestroy() {
+        Log.i(TAG, "服务销毁")
         running = false
         runCatching { scope.cancel() }
         job = null
@@ -104,15 +107,23 @@ class MessageService : Service() {
         var firstConnect = true
         while (true) {
             if (!UserStore.isLoggedIn()) {
+                Log.i(TAG, "未登录, 3 秒后再看")
                 firstConnect = true
                 delay(LOGIN_POLL_MS)
                 continue
             }
             val beganAt = System.currentTimeMillis()
+            Log.i(TAG, "发起 SSE 连接")
             val result = runCatching {
                 ApiClient.streamMessages { event -> onEvent(event) }
             }.getOrElse { Result.failure<Unit>(it) }
             // 「连上了」= 服务端正常收尾 (isSuccess) 或这条连接活了够久 (中途断的)
+            Log.i(
+                TAG,
+                "SSE 结束: success=" + result.isSuccess +
+                    " 时长=" + (System.currentTimeMillis() - beganAt) + "ms" +
+                    " err=" + result.exceptionOrNull(),
+            )
             val connected = result.isSuccess ||
                 System.currentTimeMillis() - beganAt >= MessageStream.CONNECTED_MIN_MS
             // 第一次连接不算「重连」, 不广播 —— 免得一进 App 所有页面就各刷一次
@@ -130,6 +141,7 @@ class MessageService : Service() {
      */
     private fun onEvent(event: StreamEvent) {
         MessageStream.emit(event)
+        Log.i(TAG, "收到事件 " + event::class.simpleName + " foreground=" + AppState.foreground)
         // App 在前台: 不弹通知 (前台由 MainScreen 的订阅逻辑响提示音), 前后台不重复打扰
         if (AppState.foreground) return
         runCatching {
@@ -255,7 +267,9 @@ class MessageService : Service() {
 
     /** 真正发通知: 权限没了 / 被系统限流都只是静默失败, 绝不让服务挂掉 */
     private fun post(id: Int, title: String, body: String, pmConvId: Int, groupId: Int) {
-        if (!canNotify()) return
+        val allowed = canNotify()
+        Log.i(TAG, "弹通知 id=" + id + " canNotify=" + allowed + " title=" + title)
+        if (!allowed) return
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -283,6 +297,7 @@ class MessageService : Service() {
             .setVibrate(longArrayOf(0, 200, 120, 200))
             .build()
         runCatching { NotificationManagerCompat.from(this).notify(id, notification) }
+            .onFailure { Log.w(TAG, "notify 失败 id=" + id, it) }
     }
 
     /** Android 13+ 没给 POST_NOTIFICATIONS 时 notify 会静默失败, 先问一句免得白忙 */
@@ -291,6 +306,9 @@ class MessageService : Service() {
             .getOrDefault(false)
 
     companion object {
+
+        /** 日志 TAG (只打状态变化与事件, 不打消息内容) */
+        private const val TAG = "FLS_MSG"
         /** 常驻通知 id (固定) */
         const val NOTIF_ID_KEEPALIVE = 1000
 
