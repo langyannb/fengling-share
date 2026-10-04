@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.NotifyItem
 import com.fengling.share.ui.components.AppTopBar
 import kotlinx.coroutines.launch
@@ -193,6 +194,12 @@ fun MessagesScreen(
     }
 
     LaunchedEffect(Unit) { load(1, false) }
+
+    // SSE 实时流: 收到任意事件 (私聊 / 群 / 重连) -> 静默刷新一次通知列表。
+    // 复用已有的 load(): 界面只在 items 为空时才显示加载态, 有数据时用户看到的是原列表被换掉。
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { load(1, false) }
+    }
 
     /**
      * 点通知后的去向 (链接约定, 服务端写入 link 字段):

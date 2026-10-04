@@ -77,7 +77,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PmMessage
+import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
@@ -313,6 +315,24 @@ fun PmChatScreen(
             val after = messages.maxOfOrNull { it.id } ?: 0
             ApiClient.pmMessages(convId = convId, afterId = after)
                 .onSuccess { page -> mergeNew(page.list) }
+        }
+    }
+
+    // SSE 实时流: 只对「本会话」的消息立即 loadLatest(), 旁人的消息不打扰本页。
+    // convId > 0 时按会话 id 匹配; 会话还没建立 (convId == 0) 时退回按对方 user id 匹配。
+    // 断开重连 -> 也补一次 (断线窗口里可能漏了消息)。上面的 3 秒兜底轮询保留不动。
+    // ⚠️ 必须放在局部函数 loadLatest() 之后 (Kotlin 局部函数先声明后使用)。
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { event ->
+            when (event) {
+                is StreamEvent.Pm -> {
+                    val mine = if (event.convId > 0) event.convId == convId
+                    else event.fromUser == peerUserId
+                    if (mine) loadLatest(false)
+                }
+                StreamEvent.Reconnected -> loadLatest(false)
+                else -> Unit
+            }
         }
     }
 

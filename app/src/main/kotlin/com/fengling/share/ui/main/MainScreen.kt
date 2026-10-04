@@ -72,7 +72,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.NoticeInfo
+import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
 import com.fengling.share.utils.NotifySound
@@ -770,6 +772,9 @@ private fun PmNotifyWatcher() {
     // 已经见过的最新私聊消息 id; -1 = 还没建立基线 (首次只记录, 不响, 免得一进 App 就响)
     var seenMaxId by remember { mutableStateOf(-1) }
 
+    // ---------- 兜底轮询 (SSE 挂了 / 断线窗口里也能响) ----------
+    // 每 8 秒静默拉一次私聊会话列表, 发现「别人发来的」新消息就响一声。
+    // ⚠️ 接上 SSE 后这条轮询**保留不动** (契约: 现有轮询一律保留作兜底)。
     LaunchedEffect(foreground) {
         if (!foreground) return@LaunchedEffect
         while (true) {
@@ -790,6 +795,37 @@ private fun PmNotifyWatcher() {
                 }
             }
             kotlinx.coroutines.delay(8000L)
+        }
+    }
+
+    // ---------- SSE 实时流: 按「前台 + 已登录」启停 ----------
+    // 整个 App 只维持这一条连接; 退到后台立刻断开 (省电), 回到前台再连。
+    // key 带上 hasToken: 登录/退出后立刻重估, 不用等下次切前后台。
+    LaunchedEffect(foreground, UserStore.hasToken) {
+        if (foreground && UserStore.isLoggedIn()) {
+            MessageStream.start(context)
+        } else {
+            MessageStream.stop()
+        }
+    }
+
+    // 订阅流事件:
+    // - 私聊 -> 响
+    // - 群消息且 atMe == 1 || atAll == 1 -> 也响 (群里刷屏不响, 只有被 @ 才响)
+    // - Reconnected -> 这里什么都不用做 (各页面自己补一次全量刷新)
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { event ->
+            when (event) {
+                is StreamEvent.Pm -> {
+                    // 同步兜底轮询的基线, 免得 8 秒后同一条消息又响一次
+                    if (event.msgId > seenMaxId) seenMaxId = event.msgId
+                    NotifySound.play(context)
+                }
+                is StreamEvent.Group -> {
+                    if (event.atMe == 1 || event.atAll == 1) NotifySound.play(context)
+                }
+                StreamEvent.Reconnected -> Unit
+            }
         }
     }
 }

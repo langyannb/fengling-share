@@ -1,6 +1,8 @@
 package com.fengling.share.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -9,6 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
@@ -74,6 +77,115 @@ object ApiClient {
             return obj
         }
     }
+
+    // ===================== SSE 实时消息流 (契约 A 章节) =====================
+
+    /**
+     * 专用流式 client: readTimeout(0) = 永不读超时 (SSE 长连接靠服务端 25 秒收尾 + 10 秒心跳)。
+     * ⚠️ 用 newBuilder() 派生, 绝不动上面那个 15 秒读超时的 client。
+     */
+    private val streamClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    /**
+     * SSE 实时消息流 (契约 A1/A2/A3): 阻塞读到服务端 `event: bye` 收尾或连接断开为止。
+     *
+     * - URL 里 action 必须放查询串 (api.php 用 $_GET['action'] 路由), token 也走查询串
+     *   (current_user() 支持 param('token'); 不用 Authorization 头, 免得 nginx 丢头)。
+     * - `pm_id=0&group_id=0` = 服务端从「现在」开始, 不重放历史 (见契约 A1)。
+     * - 逐行解析 `event:` / `data:`; `:` 开头是心跳注释行, 忽略; `event: bye` 视为服务端
+     *   正常收尾 -> 返回 Result.success, 让外层 (MessageStream) 立刻重连。
+     * - onEvent 在 IO 线程回调, UI 侧自己 withContext。
+     *
+     * @return 成功 = 服务端正常收尾 / 连接自然结束; 失败 = 建连失败 (含 401)
+     */
+    suspend fun streamMessages(onEvent: (StreamEvent) -> Unit): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = StringBuilder(BASE_URL)
+                    .append("?action=stream&token=")
+                    .append(URLEncoder.encode(UserStore.token, "UTF-8"))
+                    .append("&pm_id=0&group_id=0")
+                    .toString()
+                val call = streamClient.newCall(Request.Builder().url(url).get().build())
+                // 协程被取消 (App 退后台 -> MessageStream.stop()) 时 cancel 掉 Call,
+                // 否则 readUtf8Line 会一直阻塞到服务端 25 秒收尾才放手, 留下悬挂连接
+                val completion = currentCoroutineContext()[Job]?.invokeOnCompletion {
+                    runCatching { call.cancel() }
+                }
+                try {
+                    call.execute().use { response ->
+                        if (!response.isSuccessful) {
+                            throw ApiException("实时消息连接失败 (HTTP ${response.code})")
+                        }
+                        val body = response.body
+                            ?: throw ApiException("实时消息连接没有返回内容")
+                        // readTimeout(0) 下 readUtf8Line 会阻塞到有数据为止, 不需要任何额外超时逻辑
+                        val source = body.source()
+                        var eventName = ""
+                        while (true) {
+                            val line = source.readUtf8Line() ?: break
+                            when {
+                                // 心跳行 `: hb` (纯注释) 直接忽略
+                                line.startsWith(":") -> Unit
+                                // 空行 = 一条 SSE 事件结束, 清掉事件名
+                                line.isEmpty() -> eventName = ""
+                                line.startsWith("event:") -> eventName = line.substring(5).trim()
+                                line.startsWith("data:") -> {
+                                    val payload = line.substring(5).trim()
+                                    when (eventName) {
+                                        "pm" -> parsePmStreamEvent(payload)?.let(onEvent)
+                                        "group" -> parseGroupStreamEvent(payload)?.let(onEvent)
+                                        // 服务端正常收尾 (25 秒到点) -> 成功返回让外层重连
+                                        "bye" -> {
+                                            return@use
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    completion?.dispose()
+                }
+                Unit
+            }
+        }
+
+    /** 解析 `event: pm` 的 data 行 (契约 A3) */
+    private fun parsePmStreamEvent(payload: String): StreamEvent.Pm? = runCatching {
+        val j = JSONObject(payload)
+        StreamEvent.Pm(
+            msgId = j.optInt("id", 0),
+            convId = j.optInt("conv_id", 0),
+            fromUser = j.optInt("from_user", 0),
+            nickname = j.optString("nickname", ""),
+            content = j.optString("content", ""),
+            image = j.optString("image", ""),
+            createdAt = j.optString("created_at", ""),
+        )
+    }.getOrNull()
+
+    /** 解析 `event: group` 的 data 行 (契约 A3) */
+    private fun parseGroupStreamEvent(payload: String): StreamEvent.Group? = runCatching {
+        val j = JSONObject(payload)
+        StreamEvent.Group(
+            msgId = j.optInt("id", 0),
+            groupId = j.optInt("group_id", 0),
+            groupName = j.optString("group_name", ""),
+            userId = j.optInt("user_id", 0),
+            nickname = j.optString("nickname", ""),
+            content = j.optString("content", ""),
+            image = j.optString("image", ""),
+            atMe = j.optInt("at_me", 0),
+            atAll = j.optInt("at_all", 0),
+            createdAt = j.optString("created_at", ""),
+        )
+    }.getOrNull()
 
     /** 轮播图 */
     suspend fun getBanners(): List<Banner> = withContext(Dispatchers.IO) {

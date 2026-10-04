@@ -95,7 +95,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.SocialGroup
+import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
@@ -288,6 +290,25 @@ fun SocialScreen(
         while (true) {
             kotlinx.coroutines.delay(8000L)
             loadGroups(true, silent = true)
+        }
+    }
+
+    // SSE 实时流: 收到群消息 -> 立刻静默刷新群列表 (未读红标不用等 8 秒);
+    // 如果用户正在看这个群 -> 再顺手刷一次当前会话消息 (改 refreshTick 触发 ChatView 的 loadLatest)。
+    // 断线重连 -> 群列表和当前会话都补刷一次。上面的 8 秒兜底轮询保留不动。
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { event ->
+            when (event) {
+                is StreamEvent.Group -> {
+                    loadGroups(true, silent = true)
+                    if (currentGroup?.id == event.groupId) refreshTick++
+                }
+                StreamEvent.Reconnected -> {
+                    loadGroups(true, silent = true)
+                    if (currentGroup != null) refreshTick++
+                }
+                else -> Unit
+            }
         }
     }
 

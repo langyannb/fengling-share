@@ -44,7 +44,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PmConversation
+import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.TagChips
@@ -122,6 +124,19 @@ fun PmScreen(
         while (true) {
             delay(PM_LIST_POLL_MS)
             load(isRefresh = true, silent = true)
+        }
+    }
+
+    // SSE 实时流: 收到私聊消息 / 断线重连 -> 立刻静默重拉会话列表。
+    // 静默 = 不显示加载态、失败不动界面; 上面的 8 秒兜底轮询保留不动。
+    // ⚠️ 必须放在局部函数 load() 之后 (Kotlin 局部函数先声明后使用)。
+    LaunchedEffect(Unit) {
+        MessageStream.events.collect { event ->
+            when (event) {
+                is StreamEvent.Pm -> load(isRefresh = true, silent = true)
+                StreamEvent.Reconnected -> load(isRefresh = true, silent = true)
+                else -> Unit
+            }
         }
     }
 
