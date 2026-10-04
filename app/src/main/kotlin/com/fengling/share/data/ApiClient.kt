@@ -131,25 +131,31 @@ object ApiClient {
                         var eventName = ""
                         while (true) {
                             val line = source.readUtf8Line() ?: break
-                            Log.i("FLS_SSE", "SSE 上行: " + line.take(200))
                             when {
                                 // 心跳行 `: hb` (纯注释) 直接忽略
                                 line.startsWith(":") -> Unit
                                 // 空行 = 一条 SSE 事件结束, 清掉事件名
                                 line.isEmpty() -> eventName = ""
-                                line.startsWith("event:") -> eventName = line.substring(5).trim()
+                                // "event:" 是 6 个字符, 必须按前缀剥离 (substring(5) 会留下 ": pm")
+                                line.startsWith("event:") -> eventName = line.removePrefix("event:").trim()
                                 line.startsWith("data:") -> {
-                                    val payload = line.substring(5).trim()
+                                    val payload = line.removePrefix("data:").trim()
                                     when (eventName) {
                                         "pm" -> {
                                             val ev = parsePmStreamEvent(payload)
-                                            Log.i("FLS_SSE", "解析 pm 结果=" + ev)
-                                            ev?.let(onEvent)
+                                            if (ev == null) {
+                                                Log.w("FLS_SSE", "SSE 私聊事件解析失败 (已丢弃)")
+                                            } else {
+                                                onEvent(ev)
+                                            }
                                         }
                                         "group" -> {
                                             val ev = parseGroupStreamEvent(payload)
-                                            Log.i("FLS_SSE", "解析 group 结果=" + ev)
-                                            ev?.let(onEvent)
+                                            if (ev == null) {
+                                                Log.w("FLS_SSE", "SSE 群事件解析失败 (已丢弃)")
+                                            } else {
+                                                onEvent(ev)
+                                            }
                                         }
                                         // 服务端正常收尾 (25 秒到点) -> 成功返回让外层重连
                                         "bye" -> {
@@ -179,7 +185,7 @@ object ApiClient {
             image = j.optString("image", ""),
             createdAt = j.optString("created_at", ""),
         )
-    }.onFailure { Log.e("FLS_SSE", "解析 pm 抛异常", it) }.getOrNull()
+    }.getOrNull()
 
     /** 解析 `event: group` 的 data 行 (契约 A3) */
     private fun parseGroupStreamEvent(payload: String): StreamEvent.Group? = runCatching {
@@ -196,7 +202,7 @@ object ApiClient {
             atAll = j.optInt("at_all", 0),
             createdAt = j.optString("created_at", ""),
         )
-    }.onFailure { Log.e("FLS_SSE", "解析 group 抛异常", it) }.getOrNull()
+    }.getOrNull()
 
     /** 轮播图 */
     suspend fun getBanners(): List<Banner> = withContext(Dispatchers.IO) {
