@@ -2,7 +2,10 @@ package com.fengling.share.ui.pm
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -445,6 +448,54 @@ fun PmChatScreen(
         onToast("已复制")
     }
 
+    /**
+     * 下载私聊里的图片并保存到相册 (MediaStore, Android 10+ 无需存储权限)。
+     * 与群聊的保存逻辑完全一致: 相册里归到「风铃分享库」相簿。
+     */
+    fun saveImageToGallery(url: String) {
+        if (url.isBlank()) {
+            onToast("这条消息没有图片")
+            return
+        }
+        scope.launch {
+            val bytes = ApiClient.downloadChatImage(url).getOrElse { e ->
+                onToast(e.message?.takeIf { it.isNotBlank() } ?: "图片下载失败")
+                return@launch
+            }
+            val mime = when {
+                url.endsWith(".png", true) -> "image/png"
+                url.endsWith(".webp", true) -> "image/webp"
+                else -> "image/jpeg"
+            }
+            val ext = when (mime) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            // IO 线程 insert + 写字节; 出错只把文案带回来, Toast 一定在主线程弹
+            val errMsg = withContext(Dispatchers.IO) {
+                runCatching {
+                    val values = ContentValues().apply {
+                        put(
+                            MediaStore.Images.Media.DISPLAY_NAME,
+                            "fl_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "." + ext,
+                        )
+                        put(MediaStore.Images.Media.MIME_TYPE, mime)
+                        put(
+                            MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES + "/风铃分享库",
+                        )
+                    }
+                    val cr = context.contentResolver
+                    val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: error("相册写入失败")
+                    cr.openOutputStream(uri)?.use { out -> out.write(bytes) } ?: error("相册写入失败")
+                }.exceptionOrNull()?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: "未知错误" }
+            }
+            if (errMsg == null) onToast("已保存到相册") else onToast("保存失败: " + errMsg)
+        }
+    }
+
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -685,6 +736,11 @@ fun PmChatScreen(
                         if (acting.image.isNotBlank()) previewImage = acting.image else onToast("这条消息没有图片")
                         actionTarget = null
                     })
+                    PmActionRow(text = "保存到相册", danger = false, onClick = {
+                        val img = acting.image
+                        actionTarget = null
+                        saveImageToGallery(img)
+                    })
                     PmActionRow(text = "复制", danger = false, onClick = {
                         copyMessage(acting.content)
                         actionTarget = null
@@ -779,16 +835,32 @@ fun PmChatScreen(
                         .fillMaxWidth()
                         .padding(12.dp),
                 )
-                Text(
-                    text = "关闭",
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
+                // 右上角: 保存到相册 / 关闭 (点图片本身仍是关闭)
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(18.dp)
-                        .clickable { previewImage = "" },
-                )
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "保存",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable {
+                            val img = previewImage
+                            saveImageToGallery(img)
+                        },
+                    )
+                    Text(
+                        text = "关闭",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable { previewImage = "" },
+                    )
+                }
             }
         }
     }
