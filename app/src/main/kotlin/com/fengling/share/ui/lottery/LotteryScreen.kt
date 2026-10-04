@@ -859,8 +859,10 @@ private fun windowTitle(w: LotteryWindow, elapsed: Int): String {
         "disabled" -> "抽奖活动已关闭"
         "before_start" -> "抽奖活动还没开始"
         "after_end" -> "抽奖活动已经结束"
-        "outside_window" -> "未在抽奖时间"
-        else -> w.reasonText.ifBlank { "未在抽奖时间" }
+        // 服务端原文就是「现在不在抽奖时间内, 下次开放: ...」, 这里只取前半句,
+        // 后半句的日期时间交给副标题做「今天 19:30 · 00:42 后开放」的友好渲染
+        "outside_window" -> "现在不在抽奖时间内"
+        else -> w.reasonText.substringBefore(", 下次开放").ifBlank { "未在抽奖时间" }
     }
 }
 
