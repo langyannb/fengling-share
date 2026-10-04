@@ -94,6 +94,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
@@ -113,6 +114,8 @@ import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.isSystemMessage
 import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
@@ -121,6 +124,19 @@ import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.glassStroke
 import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
+import com.fengling.share.ui.components.SegmentBarHeight
+
+/**
+ * 群组列表的**进程内缓存** (用户 m00464 反馈「群组里面返回的话会卡一下」)。
+ *
+ * 点会话/群都走 NavHost 路由, 导航过去时 SocialScreen 被 dispose; 返回时重建,
+ * groups 是空的 + loading = true → 先闪一屏「加载中…」再等一次网络往返, 看着就是「卡一下」。
+ * 用进程内缓存垫一层: 返回立刻出上次的数据, 再后台静默刷新, 视觉上无跳变。
+ * 只在内存里, 不落盘、不跨进程, 退出 App 即失效, 不会显示过期很久的脏数据。
+ */
+private object SocialListCache {
+    var groups: List<SocialGroup>? = null
+}
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.MuteOptionPicker
@@ -257,8 +273,9 @@ fun SocialScreen(
         return
     }
 
-    var groups by remember { mutableStateOf<List<SocialGroup>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    // 返回重建时直接吃缓存 (非空 → 不显示加载态), 首启动才走「加载中…」
+    var groups by remember { mutableStateOf(SocialListCache.groups ?: emptyList<SocialGroup>()) }
+    var loading by remember { mutableStateOf(SocialListCache.groups == null) }
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var currentGroup by remember { mutableStateOf<SocialGroup?>(null) }
@@ -279,6 +296,8 @@ fun SocialScreen(
     val selectTab: (Int) -> Unit = { v -> if (v != tab) onTabChange?.invoke(v) }
     // 私聊未读总数 (契约 B2): 只用来画顶部「私聊」分段上的红点
     var pmUnread by remember { mutableStateOf(0) }
+    // 任何一处改动 (加载成功 / 已读清零 / 加入群聊) 都同步进缓存, 免得返回后看到旧红点
+    LaunchedEffect(groups) { SocialListCache.groups = groups }
 
     /**
      * 拉群列表。
@@ -438,8 +457,13 @@ fun SocialScreen(
     // 契约 B: 预测返回手势 —— 手势进度 0→1 跟手位移 + 缩小淡出, 松手 <50% 回弹, ≥50% 完成。
     // 全屏路由模式(从「群组」tab 点进某个群)直接回上一页, 一次到位;
     // 内嵌模式(群组列表 + 聊天同屏)则先回到群组列表。用户反馈原来要点两次才回去。
+    // 用户反馈 (m00464)「预测返回还很奇怪」的根因:
+    // 路由模式 (onBack != null) 下 navigation-compose 2.8+ 的 NavHost 自带预测返回动画,
+    // 这里又注册了一个后注册的自定义回调把它顶掉 → 手势先按本地的 progress 跟手缩放,
+    // 松手完成时本体 snapTo(1f) 再瞬间弹回 0f, 之后才走 NavHost 的转场 → 「一卡二弹」。
+    // 现在只在**内嵌模式**(群组列表 + 群聊同屏、不走 NavHost)注册, 路由模式整个交回框架, 一次到位。
     val backProgress = rememberPredictiveBackProgress(
-        enabled = currentGroup != null || onBack != null,
+        enabled = onBack == null && currentGroup != null,
     ) {
         // 契约 B1: 离开群聊回列表之前, 补一次已读上报 + 清掉本地红标
         if (currentGroup != null) leaveCurrentGroup()
@@ -452,9 +476,9 @@ fun SocialScreen(
             .predictiveBackTransform(
                 progress = backProgress,
                 // 内嵌模式没有横向的上一级页面, 只做缩小淡出 (露出底部渐变), 免得滑出一片空白
-                slideFraction = if (onBack != null) 0.25f else 0f,
+                slideFraction = 0f,
                 scaleDown = 0.06f,
-                fadeOut = if (onBack != null) 0.30f else 0.45f,
+                fadeOut = 0.45f,
             ),
         topBar = {
             val g = currentGroup
@@ -508,40 +532,27 @@ fun SocialScreen(
             // 页面级柔和渐变底 (静态绘制, 零模糊开销):
             // 顶栏 / 分段控件 / 输入栏这些玻璃层靠它才有可模糊的层次, 否则模糊纯色仍是纯色
             AppGradientBackground()
-            Column(modifier = Modifier.fillMaxSize()) {
-                val group = currentGroup
-                // 顶部「群组 / 私聊」分段 (只在 tab 常驻模式且没进群聊时显示)
-                if (showTabs && group == null) {
-                    // 契约 C: 「群组 / 私聊」改为液体玻璃分段控件
-                    // (backdrop 毛玻璃 + 高光描边 + 内阴影; 选中滑块过冲 spring 平移 + 速度驱动拉伸)
-                    LiquidSegmentedBar(
-                        tabs = listOf("群组", "私聊"),
-                        selected = tab,
-                        onSelect = { selectTab(it) },
-                        // 注意: 不能用 MainScreen 的 backdrop —— 该层捕获范围包含本控件自身,
-                        // 自引用会让 hwui 的 RenderNode 树无限递归 (真机 SIGSEGV stack overflow),
-                        // 且本控件在流内布局、背后无滚动内容可模糊, 故退化为半透明+描边玻璃。
-                        backdrop = null,
-                        unread = listOf(
-                            // 契约 B2: 群组未读 = 所有群未读之和
-                            groups.sumOf { it.unread },
-                            // 私聊未读 = 会话未读总数
-                            pmUnread,
-                        ),
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
-                }
+            // 局部捕获层: 只捕获「列表内容」这一层, **不包含上面的分段控件自身**。
+            // 不能复用 MainScreen 的页面捕获层 —— 那一层包含本控件, 自引用会让 hwui 的
+            // RenderNode 树无限递归 (真机 SIGSEGV stack overflow, 已经踩过一次)。
+            // 列表内容从玻璃底下穿过 = 真模糊 + 真折射; 分段控件固定在顶部, 不随列表滚动。
+            val listBackdrop = rememberLayerBackdrop()
+            val tabTopSpace = if (showTabs && currentGroup == null) SegmentBarHeight + 16.dp else 0.dp
+            Box(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxSize()
+                        .layerBackdrop(listBackdrop),
                 ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                val group = currentGroup
                     when {
                         // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
                         showTabs && tab == 1 && group == null -> PmScreen(
                             onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
                             // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
                             onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
+                            topPadding = tabTopSpace,
                             onNeedLogin = onNeedLogin,
                         )
                         group == null -> GroupList(
@@ -549,6 +560,8 @@ fun SocialScreen(
                             loading = loading,
                             refreshing = refreshing,
                             error = error,
+                            // 分段控件浮在列表上方, 列表顶部让出等高的空档
+                            topPadding = tabTopSpace,
                             onRefresh = { loadGroups(true) },
                             onRetry = { loadGroups(false) },
                             onOpen = { g ->
@@ -589,6 +602,26 @@ fun SocialScreen(
                             },
                         )
                 }
+                }
+                }
+                // 顶部「群组 / 私聊」分段: 浮动在列表上方 (固定层, 不随列表滚动 → 可安全用 backdrop)
+                if (showTabs && currentGroup == null) {
+                    LiquidSegmentedBar(
+                        tabs = listOf("群组", "私聊"),
+                        selected = tab,
+                        onSelect = { selectTab(it) },
+                        // 局部捕获层只含列表内容、不含本控件自身 → 安全 (页面级整层会自引用递归崩溃)
+                        backdrop = listBackdrop,
+                        unread = listOf(
+                            // 契约 B2: 群组未读 = 所有群未读之和
+                            groups.sumOf { it.unread },
+                            // 私聊未读 = 会话未读总数
+                            pmUnread,
+                        ),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
                 }
             }
         }
@@ -633,6 +666,8 @@ private fun GroupList(
     onOpen: (SocialGroup) -> Unit,
     /** 点「有人@你 / 有人@所有人」: 进群并定位到第一条相关消息 */
     onOpenAt: (SocialGroup, Int) -> Unit = { _, _ -> },
+    /** 顶部留给浮动分段控件的高度 (液体玻璃要能从下面透出内容才有模糊可看) */
+    topPadding: Dp = 0.dp,
 ) {
     PullToRefresh(
         isRefreshing = refreshing,
@@ -661,7 +696,7 @@ private fun GroupList(
             }
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 100.dp),
+                contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
             ) {
                 item {
                     // 顺手汇总一下未读总数 (免打扰的群也算在里面)

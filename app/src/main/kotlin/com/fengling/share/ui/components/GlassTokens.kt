@@ -136,6 +136,40 @@ fun Modifier.glassSurface(
 }
 
 /**
+ * [AppGradientBackground] 的 Modifier 版本 (契约 C)
+ *
+ * 有些页面 Scaffold 的 content 根就是一个 Column —— 往里面插一个 fillMaxSize 的
+ * 兄弟 Box 会把真实内容挤出屏幕, 所以这里做成 Modifier, 直接挂在那个 Column/Box 上。
+ * 同样 drawBehind + 两个大半径径向渐变, 静态绘制, 尺寸不变就不重绘, 列表滚动不触发。
+ */
+@Composable
+fun Modifier.appGradientBackground(glow: Color = MiuixTheme.colorScheme.primary): Modifier {
+    val dark = isSystemInDarkTheme()
+    val base = MiuixTheme.colorScheme.background
+    val a1 = if (dark) 0.20f else 0.11f
+    val a2 = if (dark) 0.14f else 0.07f
+    val second = Color(0xFF4C6FFF)
+    return this
+        .background(base)
+        .drawBehind {
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(glow.copy(alpha = a1), Color.Transparent),
+                    center = Offset(size.width * 0.10f, -size.height * 0.02f),
+                    radius = size.width * 0.95f,
+                ),
+            )
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(second.copy(alpha = a2), Color.Transparent),
+                    center = Offset(size.width * 1.02f, size.height * 0.30f),
+                    radius = size.width * 0.85f,
+                ),
+            )
+        }
+}
+
+/**
  * 页面级柔和渐变背景 (静态, 不逐帧重绘)
  *
  * 作用: ①统一各页面底色观感; ②给顶栏 / 分段控件这些玻璃层提供可被模糊的层次,

@@ -237,14 +237,23 @@ fun LiquidBottomBar(
                 .drawBackdrop(
                     backdrop = backdrop,
                     shape = { RoundedCornerShape(28.dp) },
-                    // 静止状态不要默认的白色高光描边 + 底部投影 (用户要求干净无白边/阴影);
-                    // 按下反馈由下方拖动层单独提供
-                    highlight = { null },
+                    // 对齐 AndroidLiquidGlass: 静止态也保留一圈**柔和棱边高光** (不是以前那种刺眼白边)
+                    // + 轻微内阴影, 让玻璃有厚度; 按下时高光/内阴影一起变强。
+                    // 外投影仍然关掉 (用户之前明确不要底部投影)。
+                    highlight = {
+                        val progress = dampedDragAnimation.pressProgress
+                        Highlight.Default.copy(alpha = 0.20f + 0.55f * progress)
+                    },
                     shadow = { null },
+                    innerShadow = {
+                        val progress = dampedDragAnimation.pressProgress
+                        InnerShadow(radius = 14f.dp, alpha = 0.10f + 0.26f * progress)
+                    },
                     effects = {
                         vibrancy()
                         blur(8f.dp.toPx())
-                        lens(24f.dp.toPx(), 24f.dp.toPx())
+                        // 常驻折射: 玻璃边缘始终在掰弯背后的内容 (液体玻璃核心观感)
+                        lens(28f.dp.toPx(), 30f.dp.toPx())
                     },
                     layerBlock = {
                         val progress = dampedDragAnimation.pressProgress
@@ -275,15 +284,17 @@ fun LiquidBottomBar(
                         .drawBackdrop(
                             backdrop = backdrop,
                             shape = { RoundedCornerShape(28.dp) },
-                            highlight = { // (格式更新，逻辑不变)
+                            highlight = {
                                 val progress = dampedDragAnimation.pressProgress
-                                Highlight.Default.copy(alpha = progress)
+                                Highlight.Default.copy(alpha = 0.12f + 0.88f * progress)
                             },
                             effects = {
                                 val progress = dampedDragAnimation.pressProgress
                                 vibrancy()
                                 blur(8f.dp.toPx())
-                                lens(24f.dp.toPx() * progress, 24f.dp.toPx() * progress)
+                                // 静止态保留 35% 折射 → 选中胶囊里始终有被放大的标签 (放大镜常亮)
+                                val strength = 0.35f + 0.65f * progress
+                                lens(26f.dp.toPx() * strength, 26f.dp.toPx() * strength)
                             },
                             onDrawSurface = { drawRect(containerColor) }
                         )
@@ -312,28 +323,27 @@ fun LiquidBottomBar(
                 .drawBackdrop(
                     backdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop),
                     shape = { RoundedCornerShape(28.dp) },
-                    highlight = { // (格式更新，逻辑不变)
+                    highlight = {
                         val progress = dampedDragAnimation.pressProgress
-                        Highlight.Default.copy(alpha = progress)
+                        Highlight.Default.copy(alpha = 0.30f + 0.70f * progress)
                     },
-                    shadow = { // (格式更新，逻辑不变)
+                    // 胶囊保留一点很淡的投影做层次 (alpha 低, 不会变成脏边)
+                    shadow = {
                         val progress = dampedDragAnimation.pressProgress
-                        Shadow(alpha = progress)
+                        Shadow(radius = 16f.dp, alpha = 0.08f + 0.20f * progress)
                     },
-                    innerShadow = { // (格式更新，逻辑不变)
+                    innerShadow = {
                         val progress = dampedDragAnimation.pressProgress
-                        InnerShadow(
-                            radius = 8f.dp * progress,
-                            alpha = progress
-                        )
+                        InnerShadow(radius = 10f.dp, alpha = 0.12f + 0.28f * progress)
                     },
                     effects = {
-                        // --- MIGRATION: 更新 lens 参数和 chromaticAberration ---
                         val progress = dampedDragAnimation.pressProgress
+                        // 静止态 45% 折射 + 色散 → 选中胶囊像一颗液态玻璃珠
+                        val strength = 0.45f + 0.55f * progress
                         lens(
-                            10f.dp.toPx() * progress,
-                            14f.dp.toPx() * progress,
-                            chromaticAberration = true // 变为 Boolean
+                            12f.dp.toPx() * strength,
+                            18f.dp.toPx() * strength,
+                            chromaticAberration = true
                         )
                     },
                     layerBlock = {

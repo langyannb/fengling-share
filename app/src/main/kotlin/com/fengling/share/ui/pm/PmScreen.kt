@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -87,6 +88,8 @@ fun PmScreen(
     /** 点头像看对方主页 */
     onOpenUser: ((userId: Int) -> Unit)? = null,
     onNeedLogin: (() -> Unit)? = null,
+    /** 顶部留给浮动分段控件的高度 (液体玻璃要能从下面透出内容才有模糊可看) */
+    topPadding: Dp = 0.dp,
     modifier: Modifier = Modifier,
 ) {
     if (!UserStore.isLoggedIn()) {
@@ -98,10 +101,15 @@ fun PmScreen(
     val context = LocalContext.current
     val foreground = rememberPmForeground()
 
-    var conversations by remember { mutableStateOf<List<PmConversation>>(emptyList()) }
+    // 返回重建时直接吃缓存 (非空 → 不显示加载态), 首启动才走「加载中…」
+    var conversations by remember {
+        mutableStateOf(PmListCache.conversations ?: emptyList<PmConversation>())
+    }
     var totalUnread by remember { mutableStateOf(0) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(PmListCache.conversations == null) }
     var refreshing by remember { mutableStateOf(false) }
+    // 任何一处改动都同步进缓存 (拉取成功 / 已读清零 / SSE 变化)
+    LaunchedEffect(conversations) { PmListCache.conversations = conversations }
     var error by remember { mutableStateOf("") }
 
     /** 拉会话列表; silent = true 时不显示加载态 (后台轮询用) */
@@ -186,7 +194,7 @@ fun PmScreen(
 
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 100.dp),
+                contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
             ) {
                 item {
                     val hint = "点击会话进入私聊 · 和群聊消息分开显示" +
@@ -407,4 +415,15 @@ private fun rememberPmForeground(): Boolean {
         }
     }
     return foreground
+}
+
+/**
+ * 私聊会话列表的**进程内缓存** (用户 m00464 反馈「返回会卡一下」)。
+ *
+ * 点会话进聊天页走 NavHost 路由, 返回时本页重建, conversations 为空 + loading = true
+ * → 闪一次「加载中…」再等网络往返。返回时先吃缓存立刻出图, 再后台静默刷新。
+ * 只在内存里, 不落盘、不跨进程, 退出 App 即失效。
+ */
+private object PmListCache {
+    var conversations: List<PmConversation>? = null
 }

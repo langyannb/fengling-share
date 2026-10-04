@@ -5,8 +5,12 @@ import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -59,7 +64,11 @@ import com.fengling.share.data.SocialGroup
 import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +78,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -342,6 +352,8 @@ fun GroupInfoScreen(
             }
 
             else -> Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                // 契约 C: 页面级柔和渐变底 (静态绘制, 零模糊开销) —— 玻璃卡片要靠它才有层次
+                AppGradientBackground()
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 20.dp),
@@ -565,11 +577,18 @@ fun GroupInfoScreen(
 @Composable
 private fun GroupHeaderCard(group: SocialGroup) {
     Card(
-        cornerRadius = 16.dp,
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片自身底色透明, 由 glassCard 画半透明填充 + 细描边
+        // (零模糊: 只在卡片边缘描一道, 不用 textureBlur, 列表滑动不受影响)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(top = 10.dp),
+            .padding(horizontal = GlassSpacing.page)
+            .padding(top = GlassSpacing.section)
+            .glassCard(radius = GlassRadius.card),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -623,11 +642,18 @@ private fun NoticeCard(
     onEdit: () -> Unit,
 ) {
     Card(
-        cornerRadius = 16.dp,
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片自身底色透明, 由 glassCard 画半透明填充 + 细描边
+        // (零模糊: 只在卡片边缘描一道, 不用 textureBlur, 列表滑动不受影响)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(top = 10.dp),
+            .padding(horizontal = GlassSpacing.page)
+            .padding(top = GlassSpacing.section)
+            .glassCard(radius = GlassRadius.card),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -692,11 +718,18 @@ private fun AlbumCard(
     onLoadMore: () -> Unit,
 ) {
     Card(
-        cornerRadius = 16.dp,
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片自身底色透明, 由 glassCard 画半透明填充 + 细描边
+        // (零模糊: 只在卡片边缘描一道, 不用 textureBlur, 列表滑动不受影响)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(top = 10.dp),
+            .padding(horizontal = GlassSpacing.page)
+            .padding(top = GlassSpacing.section)
+            .glassCard(radius = GlassRadius.card),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -782,11 +815,18 @@ private fun MembersCard(
     onOpenUser: (Int) -> Unit,
 ) {
     Card(
-        cornerRadius = 16.dp,
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片自身底色透明, 由 glassCard 画半透明填充 + 细描边
+        // (零模糊: 只在卡片边缘描一道, 不用 textureBlur, 列表滑动不受影响)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(top = 10.dp),
+            .padding(horizontal = GlassSpacing.page)
+            .padding(top = GlassSpacing.section)
+            .glassCard(radius = GlassRadius.card),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
             Row(
@@ -887,11 +927,18 @@ private fun SettingsCard(
     onLeave: () -> Unit,
 ) {
     Card(
-        cornerRadius = 16.dp,
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片自身底色透明, 由 glassCard 画半透明填充 + 细描边
+        // (零模糊: 只在卡片边缘描一道, 不用 textureBlur, 列表滑动不受影响)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(top = 10.dp),
+            .padding(horizontal = GlassSpacing.page)
+            .padding(top = GlassSpacing.section)
+            .glassCard(radius = GlassRadius.card),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             SettingRow(
@@ -929,11 +976,27 @@ private fun SettingRow(
     danger: Boolean = false,
     onClick: () -> Unit,
 ) {
+    // 契约 C: 按压缩放回弹 (和群列表卡片、私聊会话卡片同一套手感)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 700f),
+        label = "groupSettingPress",
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled) { onClick() }
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .clip(RoundedCornerShape(GlassRadius.icon))
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+            ) { onClick() }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

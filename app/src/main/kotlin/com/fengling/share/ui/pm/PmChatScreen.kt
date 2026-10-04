@@ -9,9 +9,11 @@ import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +32,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -83,7 +86,10 @@ import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.glassStroke
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.Dispatchers
@@ -556,6 +562,8 @@ fun PmChatScreen(
                 .padding(innerPadding),
         ) {
             Box(Modifier.weight(1f)) {
+                // 契约 C: 页面级柔和渐变底 (静态绘制, 零模糊开销), 给气泡/图片垫层次
+                AppGradientBackground()
                 PullToRefresh(
                     isRefreshing = refreshing,
                     onRefresh = { loadLatest(true) },
@@ -591,9 +599,16 @@ fun PmChatScreen(
                                     }
                                 }
                             }
-                            items(messages, key = { it.id }) { msg ->
+                            itemsIndexed(messages, key = { _, m -> m.id }) { index, msg ->
                                 val mine = if (myId > 0) msg.userId == myId else msg.mine
+                                // 契约 C: 连续同作者消息收紧间距; 进场只淡入 (placementSpec = null,
+                                // 否则「加载更早的消息」往顶部插数据时整列被推着走)
+                                val prev = messages.getOrNull(index - 1)
+                                val compact = prev != null && !prev.isRecalled && !msg.isRecalled &&
+                                    prev.userId == msg.userId
                                 PmMessageRow(
+                                    modifier = Modifier.pmMessageItemEnter(),
+                                    compact = compact,
                                     msg = msg,
                                     mine = mine,
                                     peerName = peer?.displayName.orEmpty(),
@@ -629,6 +644,7 @@ fun PmChatScreen(
                                 .shadow(6.dp, CircleShape)
                                 .clip(CircleShape)
                                 .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .border(1.dp, glassStroke(), CircleShape)
                                 .clickable { jumpToLatest() },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -666,7 +682,7 @@ fun PmChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MiuixTheme.colorScheme.surface)
+                    .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.94f))
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -717,6 +733,8 @@ fun PmChatScreen(
                             color = MiuixTheme.colorScheme.onBackground,
                         ),
                         maxLines = 4,
+                        // 契约 C: 药丸输入框
+                        shape = RoundedCornerShape(22.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(inputFocus),
@@ -915,6 +933,8 @@ fun PmChatScreen(
 /** 一条私聊消息的气泡行 (复刻群聊 MessageRow 的视觉, 去掉 @ / 引用 / 群管理员相关逻辑) */
 @Composable
 private fun PmMessageRow(
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
     msg: PmMessage,
     mine: Boolean,
     peerName: String,
@@ -928,7 +948,7 @@ private fun PmMessageRow(
 ) {
     if (msg.isRecalled) {
         Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            modifier = modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 6.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -940,27 +960,41 @@ private fun PmMessageRow(
         return
     }
 
+    // 契约 C: 大圆角 + 靠自己那一侧的「尾角」; 别人的气泡补一道细玻璃描边做层次
+    // (与群聊 MessageRow 同一套观感, 私聊页面不再是一根灰条)
+    val bubbleShape = if (mine) RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
+    else RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
+    val bubbleStroke = glassStroke()
+
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+            .padding(
+                horizontal = GlassSpacing.page,
+                vertical = if (compact) 2.dp else 5.dp,
+            ),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         if (!mine) {
-            Box(
-                modifier = Modifier.pointerInput(msg.userId) {
-                    detectTapGestures(onTap = { onAvatarTap() })
-                },
-            ) {
-                PmAvatar(name = peerName, url = peerAvatar)
+            if (compact) {
+                // 连续消息: 用等宽占位顶住头像位, 气泡左右仍对齐, 但不重复画头像
+                Spacer(Modifier.width(42.dp))
+            } else {
+                Box(
+                    modifier = Modifier.pointerInput(msg.userId) {
+                        detectTapGestures(onTap = { onAvatarTap() })
+                    },
+                ) {
+                    PmAvatar(name = peerName, url = peerAvatar)
+                }
+                Spacer(Modifier.width(8.dp))
             }
-            Spacer(Modifier.width(8.dp))
         }
 
         Column(
             modifier = Modifier
                 .widthIn(max = 260.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(bubbleShape)
                 .background(
                     when {
                         highlight -> MiuixTheme.colorScheme.primary.copy(alpha = 0.22f)
@@ -968,6 +1002,7 @@ private fun PmMessageRow(
                         else -> MiuixTheme.colorScheme.surfaceContainerHigh
                     },
                 )
+                .then(if (mine) Modifier else Modifier.border(1.dp, bubbleStroke, bubbleShape))
                 .pointerInput(msg.id) {
                     detectTapGestures(onLongPress = { onLongPress() })
                 }
@@ -986,7 +1021,7 @@ private fun PmMessageRow(
                     modifier = Modifier
                         .width(if (ratio >= 1f) 200.dp else (200f * ratio).dp)
                         .aspectRatio(ratio)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .pointerInput(msg.id) {
                             detectTapGestures(
                                 onTap = { onImageTap(msg.image) },
@@ -1012,25 +1047,41 @@ private fun PmMessageRow(
                 text = pmMessageTime(msg.createdAt),
                 fontSize = 10.sp,
                 color = if (mine) {
-                    MiuixTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                    MiuixTheme.colorScheme.onPrimary.copy(alpha = 0.55f)
                 } else {
-                    MiuixTheme.colorScheme.onBackgroundVariant
+                    MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.88f)
                 },
             )
         }
 
         if (mine) {
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier.pointerInput(Unit) {
-                    detectTapGestures(onTap = { onAvatarTap() })
-                },
-            ) {
-                PmAvatar(name = myName, url = myAvatar)
+            if (compact) {
+                Spacer(Modifier.width(42.dp))
+            } else {
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier.pointerInput(Unit) {
+                        detectTapGestures(onTap = { onAvatarTap() })
+                    },
+                ) {
+                    PmAvatar(name = myName, url = myAvatar)
+                }
             }
         }
     }
 }
+
+/**
+ * 消息 item 进场动画 (契约 C)
+ *
+ * 只保留淡入: placementSpec = null —— 否则「加载更早的消息」往列表顶部插数据时,
+ * 整列消息会被动画推着走, 和顶部锚定逻辑打架 (与群聊 messageItemEnter 同一决定)。
+ */
+private fun LazyItemScope.pmMessageItemEnter(): Modifier = Modifier.animateItem(
+    fadeInSpec = tween(durationMillis = 200),
+    placementSpec = null,
+    fadeOutSpec = null,
+)
 
 /** 消息里的时间只显示 HH:mm */
 private fun pmMessageTime(raw: String): String {

@@ -6,6 +6,17 @@ import android.content.Context
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
+import com.fengling.share.ui.components.glassStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -54,6 +65,7 @@ import com.fengling.share.ui.components.LoadingBox
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
@@ -303,7 +315,9 @@ fun LotteryScreen(
                         .fillMaxSize()
                         .padding(innerPadding)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = GlassSpacing.page)
+                        // 契约 C: 页面级柔和渐变底 (静态, 零模糊)
+                        .appGradientBackground(),
                 ) {
                     Spacer(Modifier.height(6.dp))
 
@@ -445,7 +459,16 @@ fun LotteryScreen(
                     // ===== 活动说明 (可长按选中复制) =====
                     if (cur.content.isNotBlank()) {
                         Spacer(Modifier.height(10.dp))
-                        Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .glassCard(radius = GlassRadius.card),
+                            cornerRadius = GlassRadius.card,
+                            colors = CardDefaults.defaultColors(
+                                color = Color.Transparent,
+                                contentColor = MiuixTheme.colorScheme.onBackground,
+                            ),
+                        ) {
                             SelectionContainer {
                                 Text(
                                     text = cur.content,
@@ -491,11 +514,24 @@ fun LotteryScreen(
                     val winBlocked = winClosedText != null || winNoPerm
                     val canDraw = cur.enabled && !winBlocked && cur.myQuota > 0 && !dailyOut &&
                         !weekOut && cdLeft <= 0 && !drawing
+                    // 契约 C: 抽奖大按钮 —— 按压缩放回弹; 条件不满足时补一道玻璃描边
+                    val drawInteraction = remember { MutableInteractionSource() }
+                    val drawPressed by drawInteraction.collectIsPressedAsState()
+                    val drawScale by animateFloatAsState(
+                        targetValue = if (drawPressed && canDraw) 0.97f else 1f,
+                        animationSpec = spring(dampingRatio = 0.55f, stiffness = 700f),
+                        label = "lotteryDrawPress",
+                    )
+                    val drawShape = RoundedCornerShape(GlassRadius.icon)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .graphicsLayer {
+                                scaleX = drawScale
+                                scaleY = drawScale
+                            }
+                            .clip(drawShape)
                             .background(
                                 if (canDraw) {
                                     MiuixTheme.colorScheme.primary
@@ -503,7 +539,12 @@ fun LotteryScreen(
                                     MiuixTheme.colorScheme.surfaceContainerHigh
                                 },
                             )
-                            .clickable(enabled = canDraw) { doDraw() },
+                            .then(if (canDraw) Modifier else Modifier.border(1.dp, glassStroke(), drawShape))
+                            .clickable(
+                                interactionSource = drawInteraction,
+                                indication = null,
+                                enabled = canDraw,
+                            ) { doDraw() },
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -715,8 +756,17 @@ fun LotteryScreen(
 
 /** 奖品行: 名称 + 类型标签 + 剩余数量 */
 @Composable
-private fun PrizeRow(p: LotteryPrize, showStock: Boolean = true) {
-    Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp) {
+private fun PrizeRow(p: LotteryPrize, showStock: Boolean = true) {    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .glassCard(radius = GlassRadius.card),
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -748,8 +798,17 @@ private fun PrizeRow(p: LotteryPrize, showStock: Boolean = true) {
 
 /** 中奖记录行: 奖项名 + 类型 + 卡密 + 复制按钮 + 时间 */
 @Composable
-private fun RecordRow(r: LotteryRecord, onCopy: (String) -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 14.dp) {
+private fun RecordRow(r: LotteryRecord, onCopy: (String) -> Unit) {    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .glassCard(radius = GlassRadius.card),
+        cornerRadius = GlassRadius.card,
+        // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

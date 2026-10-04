@@ -46,12 +46,17 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.UserProfile
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.MuteOptionPicker
 import com.fengling.share.ui.components.TagChips
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -204,12 +209,24 @@ fun UserProfileScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = GlassSpacing.page)
+                    // 契约 C: 页面级柔和渐变底 (静态, 零模糊)
+                    .appGradientBackground(),
             ) {
                 Spacer(Modifier.height(10.dp))
 
                 // ===== 大头像 + 昵称 + 管理员标签 + @用户名 + 角色标签 =====
-                Card(cornerRadius = 16.dp) {
+                Card(
+                    cornerRadius = GlassRadius.card,
+                    // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+                    colors = CardDefaults.defaultColors(
+                        color = Color.Transparent,
+                        contentColor = MiuixTheme.colorScheme.onBackground,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassCard(radius = GlassRadius.card),
+                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -247,7 +264,17 @@ fun UserProfileScreen(
                 // ===== 当前禁言状态 (本群 / 全站) =====
                 if (p.muted || p.globalMuted || p.canMute) {
                     Spacer(Modifier.height(10.dp))
-                    Card(cornerRadius = 16.dp) {
+                    Card(
+                    cornerRadius = GlassRadius.card,
+                    // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+                    colors = CardDefaults.defaultColors(
+                        color = Color.Transparent,
+                        contentColor = MiuixTheme.colorScheme.onBackground,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassCard(radius = GlassRadius.card),
+                ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -294,7 +321,17 @@ fun UserProfileScreen(
                 // 管理员不能被禁言, UI 这里再挡一次 (契约 F2/F3)
                 if (p.canMute && !p.isAdmin && !p.isMe) {
                     Spacer(Modifier.height(10.dp))
-                    Card(cornerRadius = 16.dp) {
+                    Card(
+                    cornerRadius = GlassRadius.card,
+                    // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+                    colors = CardDefaults.defaultColors(
+                        color = Color.Transparent,
+                        contentColor = MiuixTheme.colorScheme.onBackground,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassCard(radius = GlassRadius.card),
+                ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -368,7 +405,17 @@ fun UserProfileScreen(
                 Spacer(Modifier.height(10.dp))
 
                 // ===== 简介 =====
-                Card(cornerRadius = 16.dp) {
+                Card(
+                    cornerRadius = GlassRadius.card,
+                    // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+                    colors = CardDefaults.defaultColors(
+                        color = Color.Transparent,
+                        contentColor = MiuixTheme.colorScheme.onBackground,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassCard(radius = GlassRadius.card),
+                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -391,7 +438,17 @@ fun UserProfileScreen(
                 Spacer(Modifier.height(10.dp))
 
                 // ===== 注册时间 / 发消息数 / 共同群数 =====
-                Card(cornerRadius = 16.dp) {
+                Card(
+                    cornerRadius = GlassRadius.card,
+                    // 契约 C: 玻璃卡片 —— 卡片底色透明, 由 glassCard 画半透明填充 + 细描边 (零模糊)
+                    colors = CardDefaults.defaultColors(
+                        color = Color.Transparent,
+                        contentColor = MiuixTheme.colorScheme.onBackground,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassCard(radius = GlassRadius.card),
+                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -409,8 +466,14 @@ fun UserProfileScreen(
                     Spacer(Modifier.height(16.dp))
                     Card(
                         onClick = { onOpenPm(p.id, p.convId) },
-                        cornerRadius = 14.dp,
-                        modifier = Modifier.fillMaxWidth(),
+                        cornerRadius = GlassRadius.card,
+                        colors = CardDefaults.defaultColors(
+                            color = Color.Transparent,
+                            contentColor = MiuixTheme.colorScheme.primary,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .glassCard(radius = GlassRadius.card),
                     ) {
                         Box(
                             modifier = Modifier
