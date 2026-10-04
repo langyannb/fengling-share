@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -57,6 +56,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,7 +104,12 @@ import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.isSystemMessage
+import com.kyant.backdrop.Backdrop
+import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.LiquidSegmentedBar
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.MuteOptionPicker
 import com.fengling.share.ui.components.TagChips
 import com.fengling.share.ui.lottery.LotteryScreen
@@ -222,6 +227,8 @@ fun SocialScreen(
     onOpenGroupAt: ((groupId: Int, messageId: Int) -> Unit)? = null,
     /** 点右上角「☰」: 打开群详情页 (群头像/成员/公告/相册/设置; 契约 B6) */
     onOpenGroupInfo: ((groupId: Int) -> Unit)? = null,
+    /** 页面级捕获层 (MainScreen 的 backdrop): 液体玻璃分段控件用它做真实 backdrop 模糊 */
+    glassBackdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -248,7 +255,9 @@ fun SocialScreen(
     // 顶部「群组 / 私聊」分段: 只在底部 tab 常驻模式显示
     // (从「消息」点通知进来的全屏页 onBack != null, 直接进群聊/私聊, 不需要分段)
     val showTabs = onBack == null && onOpenGroup != null
-    var tab by remember { mutableStateOf(0) }
+    // 契约 A: 分段选中状态改成 rememberSaveable, 从私聊会话页/群聊返回后不再掉回「群组」
+    // (原来用 remember, 返回时 SocialScreen 重建 → 状态丢, 用户 2026-10-05 反馈的 bug)
+    var tab by rememberSaveable { mutableStateOf(0) }
     // 私聊未读总数 (契约 B2): 只用来画顶部「私聊」分段上的红点
     var pmUnread by remember { mutableStateOf(0) }
 
@@ -407,16 +416,27 @@ fun SocialScreen(
         }
     }
 
-    // 返回键: 全屏路由模式(从「群组」tab 点进某个群)直接回上一页, 一次到位;
+    // 契约 B: 预测返回手势 —— 手势进度 0→1 跟手位移 + 缩小淡出, 松手 <50% 回弹, ≥50% 完成。
+    // 全屏路由模式(从「群组」tab 点进某个群)直接回上一页, 一次到位;
     // 内嵌模式(群组列表 + 聊天同屏)则先回到群组列表。用户反馈原来要点两次才回去。
-    BackHandler(enabled = currentGroup != null || onBack != null) {
+    val backProgress = rememberPredictiveBackProgress(
+        enabled = currentGroup != null || onBack != null,
+    ) {
         // 契约 B1: 离开群聊回列表之前, 补一次已读上报 + 清掉本地红标
         if (currentGroup != null) leaveCurrentGroup()
         if (onBack != null) onBack()
     }
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier
+            .fillMaxSize()
+            .predictiveBackTransform(
+                progress = backProgress,
+                // 内嵌模式没有横向的上一级页面, 只做缩小淡出 (露出底部渐变), 免得滑出一片空白
+                slideFraction = if (onBack != null) 0.25f else 0f,
+                scaleDown = 0.06f,
+                fadeOut = if (onBack != null) 0.30f else 0.45f,
+            ),
         topBar = {
             val g = currentGroup
             when {
@@ -461,131 +481,91 @@ fun SocialScreen(
             }
         },
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            val group = currentGroup
-            // 顶部「群组 / 私聊」分段 (只在 tab 常驻模式且没进群聊时显示)
-            if (showTabs && group == null) {
-                SocialTabBar(
-                    selected = tab,
-                    onSelect = { tab = it },
-                    // 契约 B2: 群组未读 = 所有群未读之和; 私聊未读 = 会话未读总数
-                    groupUnread = groups.sumOf { it.unread },
-                    pmUnread = pmUnread,
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-            ) {
-                when {
-                    // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
-                    showTabs && tab == 1 && group == null -> PmScreen(
-                        onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
-                        // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
-                        onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
-                        onNeedLogin = onNeedLogin,
-                    )
-                    group == null -> GroupList(
-                        groups = groups,
-                        loading = loading,
-                        refreshing = refreshing,
-                        error = error,
-                        onRefresh = { loadGroups(true) },
-                        onRetry = { loadGroups(false) },
-                        onOpen = { g ->
-                            locateMsgId = 0
-                            if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
-                        },
-                        // 点「有人@你」: 进群并定位到那条消息
-                        onOpenAt = { g, mid ->
-                            if (onOpenGroupAt != null) {
-                                onOpenGroupAt(g.id, mid)
-                            } else {
-                                locateMsgId = mid
-                                if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
-                            }
-                        },
-                    )
-                    else -> ChatView(
-                        group = group,
-                        me = UserStore.current,
-                        menu = chatMenu,
-                        refreshTick = refreshTick,
-                        locateMessageId = if (locateMsgId > 0) locateMsgId else initialMessageId,
-                        onOpenWeb = onOpenWeb,
-                        onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
-                        // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
-                        onMarkRead = { clearUnread(group.id) },
-                        // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
-                        onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
-                        // 契约 B3: 加入群聊成功 → 本地马上把 isMember 置 true, 并刷新群资料
-                        // (标题里的成员数 +1) 与群列表; 底部输入区随即从「加入群聊」变回输入框
-                        onJoined = {
-                            currentGroup = currentGroup?.copy(isMember = true)
-                            groups = groups.map { row ->
-                                if (row.id == group.id) row.copy(isMember = true) else row
-                            }
-                            loadGroups(true, silent = true)
-                        },
+            // 页面级柔和渐变底 (静态绘制, 零模糊开销):
+            // 顶栏 / 分段控件 / 输入栏这些玻璃层靠它才有可模糊的层次, 否则模糊纯色仍是纯色
+            AppGradientBackground()
+            Column(modifier = Modifier.fillMaxSize()) {
+                val group = currentGroup
+                // 顶部「群组 / 私聊」分段 (只在 tab 常驻模式且没进群聊时显示)
+                if (showTabs && group == null) {
+                    // 契约 C: 「群组 / 私聊」改为液体玻璃分段控件
+                    // (backdrop 毛玻璃 + 高光描边 + 内阴影; 选中滑块过冲 spring 平移 + 速度驱动拉伸)
+                    LiquidSegmentedBar(
+                        tabs = listOf("群组", "私聊"),
+                        selected = tab,
+                        onSelect = { tab = it },
+                        backdrop = glassBackdrop,
+                        unread = listOf(
+                            // 契约 B2: 群组未读 = 所有群未读之和
+                            groups.sumOf { it.unread },
+                            // 私聊未读 = 会话未读总数
+                            pmUnread,
+                        ),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
-            }
-        }
-    }
-}
-
-/** 顶部「群组 / 私聊」分段控件 (和项目其它页面的圆角胶囊风格一致) */
-@Composable
-private fun SocialTabBar(
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    /** 「群组」分段未读总数 (契约 B2) */
-    groupUnread: Int = 0,
-    /** 「私聊」分段未读总数 (契约 B2) */
-    pmUnread: Int = 0,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(50))
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-            .padding(3.dp),
-    ) {
-        listOf("群组", "私聊").forEachIndexed { index, label ->
-            val active = selected == index
-            val unread = if (index == 0) groupUnread else pmUnread
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(50))
-                    .background(if (active) MiuixTheme.colorScheme.primary else Color.Transparent)
-                    .clickable { onSelect(index) }
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = label,
-                        fontSize = 14.sp,
-                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (active) {
-                            MiuixTheme.colorScheme.onPrimary
-                        } else {
-                            MiuixTheme.colorScheme.onBackgroundVariant
-                        },
-                    )
-                    // 契约 B2: 分段上的未读红点 (复用群列表那个 UnreadBadge, >99 自动显示 99+)
-                    if (unread > 0) {
-                        Box(modifier = Modifier.padding(start = 4.dp)) {
-                            UnreadBadge(count = unread, muted = false)
-                        }
-                    }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                ) {
+                    when {
+                        // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
+                        showTabs && tab == 1 && group == null -> PmScreen(
+                            onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
+                            // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
+                            onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
+                            onNeedLogin = onNeedLogin,
+                        )
+                        group == null -> GroupList(
+                            groups = groups,
+                            loading = loading,
+                            refreshing = refreshing,
+                            error = error,
+                            onRefresh = { loadGroups(true) },
+                            onRetry = { loadGroups(false) },
+                            onOpen = { g ->
+                                locateMsgId = 0
+                                if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                            },
+                            // 点「有人@你」: 进群并定位到那条消息
+                            onOpenAt = { g, mid ->
+                                if (onOpenGroupAt != null) {
+                                    onOpenGroupAt(g.id, mid)
+                                } else {
+                                    locateMsgId = mid
+                                    if (onOpenGroup != null) onOpenGroup(g) else currentGroup = g
+                                }
+                            },
+                        )
+                        else -> ChatView(
+                            group = group,
+                            me = UserStore.current,
+                            menu = chatMenu,
+                            refreshTick = refreshTick,
+                            locateMessageId = if (locateMsgId > 0) locateMsgId else initialMessageId,
+                            onOpenWeb = onOpenWeb,
+                            onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                            // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
+                            onMarkRead = { clearUnread(group.id) },
+                            // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
+                            onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
+                            // 契约 B3: 加入群聊成功 → 本地马上把 isMember 置 true, 并刷新群资料
+                            // (标题里的成员数 +1) 与群列表; 底部输入区随即从「加入群聊」变回输入框
+                            onJoined = {
+                                currentGroup = currentGroup?.copy(isMember = true)
+                                groups = groups.map { row ->
+                                    if (row.id == group.id) row.copy(isMember = true) else row
+                                }
+                                loadGroups(true, silent = true)
+                            },
+                        )
+                }
                 }
             }
         }
