@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -216,9 +217,7 @@ private fun PmConversationCard(
                     .clip(CircleShape)
                     .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                     .pointerInput(conversation.userId) {
-                        androidx.compose.foundation.gestures.detectTapGestures {
-                            onAvatarClick()
-                        }
+                        detectTapGestures { onAvatarClick() }
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -354,7 +353,7 @@ private fun rememberPmForeground(): Boolean {
             }
             owner.lifecycle.addObserver(observer)
             foreground = owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-            androidx.compose.runtime.onDispose { owner.lifecycle.removeObserver(observer) }
+            onDispose { owner.lifecycle.removeObserver(observer) }
         }
     }
     return foreground

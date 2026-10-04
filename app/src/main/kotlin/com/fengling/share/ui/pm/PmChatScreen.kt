@@ -299,7 +299,8 @@ fun PmChatScreen(
         }.collect { atTop -> if (atTop) loadOlder() }
     }
 
-    LaunchedEffect(convId, peerUserId) { loadLatest(false) }
+    // 首屏只加载一次: convId 在加载成功后会被服务端回填, 用它当 key 会导致重复请求
+    LaunchedEffect(Unit) { loadLatest(false) }
 
     // 3 秒轮询: 仅前台 + 会话已建立时
     LaunchedEffect(convId, foreground) {
@@ -530,7 +531,7 @@ fun PmChatScreen(
                 }
 
                 // 右下角「回到最新消息」
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = !atBottom && messages.isNotEmpty(),
                     enter = fadeIn(),
                     exit = fadeOut(),
@@ -999,7 +1000,7 @@ private fun rememberPmChatForeground(): Boolean {
             }
             owner.lifecycle.addObserver(observer)
             foreground = owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-            androidx.compose.runtime.onDispose { owner.lifecycle.removeObserver(observer) }
+            onDispose { owner.lifecycle.removeObserver(observer) }
         }
     }
     return foreground
