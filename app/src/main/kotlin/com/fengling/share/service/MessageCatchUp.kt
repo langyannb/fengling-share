@@ -6,6 +6,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.Settings
 import com.fengling.share.data.StreamCursor
 import com.fengling.share.data.UserStore
+import com.fengling.share.data.isSystemMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -103,6 +104,8 @@ object MessageCatchUp {
                 if (last.id <= baseGrp) continue
                 if (myId > 0 && last.userId == myId) continue
                 if (g.muted) continue
+                // 系统消息(「xxx加入了群聊」)不弹通知 (契约 B5)
+                if (isSystemMessage(last.msgType, last.content)) continue
                 // at_me_first / at_all_first 是「未读里第一条 @」的消息 id: 等于最新消息 id 才说明的最新这条就是 @
                 val atMe = g.atMeFirst > 0 && g.atMeFirst >= last.id
                 val atAll = g.atAllFirst > 0 && g.atAllFirst >= last.id

@@ -38,6 +38,8 @@ sealed interface StreamEvent {
         val atAll: Int,
         /** 收件人 (我) 是否对该群开了「消息免打扰」; true = 这条不要弹通知 */
         val muted: Boolean = false,
+        /** 消息类型: "system" = 系统消息(加入了群聊等), 一律不弹通知 (契约 A3) */
+        val msgType: String = "",
         val createdAt: String,
     ) : StreamEvent
 

@@ -391,6 +391,7 @@ class MessageService : Service() {
      * 跳过条件 (契约 B7):
      * - `event.userId == 自己` —— 自己发的不提醒;
      * - `event.muted` —— 我把这个群设了「消息免打扰」, 一条都不弹;
+     * - `event.msgType == "system"` —— 系统消息(「xxx加入了群聊」)只在群聊里看, 不弹通知 (契约 B5);
      * - `Settings.notifyGroupAll == false` —— 用户在设置页关掉了「群消息提醒」,
      *   退回老行为: 只有 @我 / @所有人 才弹。
      *
@@ -401,6 +402,8 @@ class MessageService : Service() {
         val myId = runCatching { UserStore.current?.id ?: 0 }.getOrDefault(0)
         if (myId > 0 && event.userId == myId) return
         if (event.muted) return
+        // 系统消息(「xxx加入了群聊」)不弹通知 (契约 B5)
+        if (event.msgType == "system") return
         val atMe = event.atMe == 1
         val atAll = event.atAll == 1
         if (!atMe && !atAll && !Settings.notifyGroupAll) return

@@ -216,6 +216,7 @@ object ApiClient {
             atAll = j.optInt("at_all", 0),
             // 服务端在 group 事件里带上「我是否对该群开了免打扰」(契约 A6), 老服务端没有这个键 -> false
             muted = j.optInt("muted", 0) == 1,
+            msgType = j.optString("msg_type", ""),
             createdAt = j.optString("created_at", ""),
         )
     }.getOrNull()
@@ -607,6 +608,149 @@ object ApiClient {
                 d?.optInt("all_muted", if (muted) 1 else 0)?.let { it == 1 } ?: muted
             }
         }
+
+    /**
+     * 加入群聊 (契约 A2, action=social_group_join)。
+     *
+     * 群聊「先加入才能发消息」: 未加入时服务端会拒绝 social_send,
+     * 客户端在输入框位置显示「加入群聊」按钮, 点它调这个接口。
+     * @return true = 已在群里 (joined=1 或 already=1)
+     */
+    suspend fun socialGroupJoin(groupId: Int): Result<Boolean> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "social_group_join",
+                mapOf<String, Any?>("group_id" to groupId),
+                UserStore.token,
+            ).optJSONObject("data")
+            // 服务端返回 data.joined=1 / data.already=0|1, 缺字段按成功兜底
+            (d?.optInt("joined", 1) ?: 1) == 1
+        }
+    }
+
+    /**
+     * 退出群聊 (契约 A2, action=social_group_leave)。
+     * 群主不能退 (服务端返回中文错误文案, 客户端 Toast 原文)。
+     */
+    suspend fun socialGroupLeave(groupId: Int): Result<Boolean> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "social_group_leave",
+                mapOf<String, Any?>("group_id" to groupId),
+                UserStore.token,
+            ).optJSONObject("data")
+            (d?.optInt("left", 1) ?: 1) == 1
+        }
+    }
+
+    /** 群相册里的一张图 (契约 A3, image 是原图地址) */
+    data class GroupImage(
+        val id: Int = 0,
+        val userId: Int = 0,
+        val nickname: String = "",
+        val username: String = "",
+        val avatar: String = "",
+        val image: String = "",
+        val imageW: Int = 0,
+        val imageH: Int = 0,
+        val createdAt: String = "",
+    ) {
+        companion object {
+            fun fromJson(j: JSONObject): GroupImage = GroupImage(
+                id = j.optInt("id", 0),
+                userId = j.optInt("user_id", 0),
+                nickname = jsonStr(j, "nickname"),
+                username = jsonStr(j, "username"),
+                avatar = jsonStr(j, "avatar"),
+                image = jsonStr(j, "image"),
+                imageW = jsonInt(j, "image_w"),
+                imageH = jsonInt(j, "image_h"),
+                createdAt = jsonStr(j, "created_at"),
+            )
+        }
+    }
+
+    /** 群相册一页 (契约 A3, page 从 1 开始, page_size 默认 30 最大 60) */
+    data class GroupImagesPage(
+        val list: List<GroupImage> = emptyList(),
+        val page: Int = 1,
+        val pageSize: Int = 30,
+        val total: Int = 0,
+        val hasMore: Boolean = false,
+    )
+
+    /** 群相册 (需登录): 按时间倒序分页, 返回原图地址 */
+    suspend fun socialGroupImages(
+        groupId: Int,
+        page: Int = 1,
+        pageSize: Int = 30,
+    ): Result<GroupImagesPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "social_group_images",
+                mapOf<String, Any?>("group_id" to groupId, "page" to page, "page_size" to pageSize),
+                UserStore.token,
+            ).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            val total = d?.optInt("total", 0) ?: 0
+            val size = d?.optInt("page_size", pageSize) ?: pageSize
+            GroupImagesPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { GroupImage.fromJson(arr.getJSONObject(it)) },
+                page = d?.optInt("page", page) ?: page,
+                pageSize = size,
+                total = total,
+                hasMore = if (d != null && !d.isNull("has_more")) jsonBool(d, "has_more")
+                else page * size < total,
+            )
+        }
+    }
+
+    /** 群成员一页 (契约 A3): 带 is_member / member_count, 排序 群主 > 管理员 > 成员, 加入时间升序 */
+    data class GroupMembersPage(
+        val list: List<SocialGroupMember> = emptyList(),
+        val page: Int = 1,
+        val pageSize: Int = 50,
+        val total: Int = 0,
+        val isMember: Boolean = true,
+        val memberCount: Int = 0,
+        val hasMore: Boolean = false,
+    )
+
+    /**
+     * 群成员分页 (需登录)
+     * @param keyword 非空时按昵称 / 用户名模糊搜索
+     */
+    suspend fun socialGroupMembersPage(
+        groupId: Int,
+        keyword: String = "",
+        page: Int = 1,
+        pageSize: Int = 50,
+    ): Result<GroupMembersPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>(
+                "group_id" to groupId,
+                "page" to page,
+                "page_size" to pageSize,
+            )
+            if (keyword.isNotBlank()) params["keyword"] = keyword
+            val d = request("social_group_members", params, UserStore.token).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            val total = d?.optInt("total", 0) ?: 0
+            val size = d?.optInt("page_size", pageSize) ?: pageSize
+            GroupMembersPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { SocialGroupMember.fromJson(arr.getJSONObject(it)) },
+                page = d?.optInt("page", page) ?: page,
+                pageSize = size,
+                total = total,
+                isMember = if (d == null || d.isNull("is_member")) true else jsonBool(d, "is_member"),
+                memberCount = d?.optInt("member_count", 0) ?: 0,
+                hasMore = if (d != null && !d.isNull("has_more")) jsonBool(d, "has_more")
+                else page * size < total,
+            )
+        }
+    }
 
     /** 群成员候选 (可 @ 的人): 该群发过言的活跃用户 + 管理员, 已排除自己 */
     suspend fun socialGroupMembers(groupId: Int): Result<List<SocialGroupMember>> = withContext(Dispatchers.IO) {
@@ -1161,6 +1305,19 @@ private fun jsonStrList(j: JSONObject, key: String): List<String> {
     else single.split(',').map { it.trim() }.filter { it.isNotBlank() }
 }
 
+/**
+ * 是不是「系统消息」(契约 A3/B5): msg_type=system, 例如「xxx加入了群聊」。
+ *
+ * 系统消息在群聊里居中灰字显示、不弹系统通知、不进未读。
+ * 服务端还没上线 msg_type 时, 用文案兜底(加群/退群提示), 免得回归期弹通知。
+ */
+fun isSystemMessage(msgType: String, content: String): Boolean {
+    if (msgType.equals("system", ignoreCase = true)) return true
+    if (msgType.isNotBlank()) return false
+    val c = content.trim()
+    return c.endsWith("加入了群聊") || c.endsWith("退出了群聊")
+}
+
 /** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
 data class ChatImage(
     val url: String = "",
@@ -1203,6 +1360,8 @@ data class SocialGroup(
     val atAll: Int = 0,
     /** 第一条「@所有人」的消息 id */
     val atAllFirst: Int = 0,
+    /** 我是否已加入这个群 (false = 未加入, 只能看不能发言; 契约 A2 is_member; 老服务端不返回时按已加入兜底) */
+    val isMember: Boolean = true,
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
@@ -1223,6 +1382,7 @@ data class SocialGroup(
             atMeFirst = jsonInt(j, "at_me_first"),
             atAll = jsonInt(j, "at_all"),
             atAllFirst = jsonInt(j, "at_all_first"),
+            isMember = if (j.isNull("is_member")) true else jsonBool(j, "is_member"),
         )
     }
 }
@@ -1236,6 +1396,8 @@ data class LastMessage(
     val content: String = "",
     /** 纯图片消息: content 为空, image 非空 → 前端显示 [图片] */
     val image: String = "",
+    /** 消息类型: "system" = 系统消息(加入了群聊等); 老服务端没有这个键 → 空串 (契约 A3) */
+    val msgType: String = "",
     val createdAt: String = "",
 ) {
     companion object {
@@ -1245,6 +1407,7 @@ data class LastMessage(
             nickname = jsonStr(j, "nickname"),
             content = jsonStr(j, "content"),
             image = jsonStr(j, "image"),
+            msgType = jsonStr(j, "msg_type"),
             createdAt = jsonStr(j, "created_at"),
         )
     }
@@ -1265,6 +1428,8 @@ data class SocialGroupMember(
     val muteReason: String = "",
     /** 管理员打在这个成员身上的标签 (契约 F1, 防骗警示) */
     val tags: List<String> = emptyList(),
+    /** 加入群聊时间 "yyyy-MM-dd HH:mm:ss" (契约 A3 social_group_members; 空串 = 未知) */
+    val joinedAt: String = "",
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
@@ -1277,6 +1442,7 @@ data class SocialGroupMember(
             muteLeft = jsonStr(j, "mute_left"),
             muteReason = jsonStr(j, "mute_reason"),
             tags = jsonStrList(j, "tags"),
+            joinedAt = jsonStr(j, "joined_at"),
         )
     }
 }
@@ -1290,6 +1456,8 @@ data class SocialMessage(
     val role: String = "user",
     /** 发送者的管理员标签 (契约 F1), 显示在群聊气泡昵称旁 */
     val tags: List<String> = emptyList(),
+    /** 消息类型: "" = 普通 / "system" = 系统消息(如「xxx加入了群聊」, 居中灰字, 不弹通知) 契约 A3 */
+    val msgType: String = "",
     val content: String = "",
     /** 图片消息: 对象存储直链 (空串 = 没图; 撤回后也是空串) */
     val image: String = "",
@@ -1317,6 +1485,7 @@ data class SocialMessage(
                 avatar = jsonStr(j, "avatar"),
                 role = jsonStr(j, "role").ifBlank { "user" },
                 tags = jsonStrList(j, "tags"),
+                msgType = jsonStr(j, "msg_type"),
                 content = jsonStr(j, "content"),
                 image = jsonStr(j, "image"),
                 imageW = jsonInt(j, "image_w"),
