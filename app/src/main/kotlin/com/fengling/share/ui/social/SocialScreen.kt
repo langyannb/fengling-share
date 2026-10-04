@@ -1806,8 +1806,8 @@ private fun ChatView(
         }
 
         // ===== 全员禁言横幅 (v1.1.1): 管理员开了之后, 普通成员只能看不能发 =====
-        val canSpeak = !group.allMuted || isAdmin
-        if (!canSpeak) {
+        val canSpeak = (!group.allMuted || isAdmin) && group.isMember
+        if (!canSpeak && group.isMember) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2328,12 +2328,8 @@ private fun ChatView(
             text = {
                 Column {
                     Text(
-                        text = memberActing.nickname.ifBlank { "群成员" } + when {
-                            memberActing.isAdmin -> " · 管理员"
-                            memberActing.role == "owner" -> " · 群主"
-                            memberActing.role == "admin" -> " · 群管理员"
-                            else -> ""
-                        },
+                        text = memberActing.nickname.ifBlank { "群成员" } +
+                            if (memberActing.role == "admin") " · 管理员" else "",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onBackground,
@@ -2350,7 +2346,7 @@ private fun ChatView(
                         fontSize = 12.sp,
                         color = if (muted) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackgroundVariant,
                     )
-                    if (memberActing.isAdmin) {
+                    if (memberActing.role == "admin") {
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = "管理员不能被禁言",
