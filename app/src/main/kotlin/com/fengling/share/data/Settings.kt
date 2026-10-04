@@ -107,6 +107,18 @@ object Settings {
         get() = prefs.getBoolean("msg_service_on", true)
         set(value) = prefs.edit().putBoolean("msg_service_on", value).apply()
 
+    // ===== 群消息提醒范围 (v1.1.1) =====
+    /**
+     * 群消息是否「全部提醒」(key = notify_group_all)。
+     *
+     * 默认 **true**: 群里任何人发消息都提醒 (QQ/微信群消息默认行为);
+     * 用户嫌吵时可在「我的 → 消息通知 → 群消息提醒」里关掉, 退回「只提醒 @我 / @所有人」。
+     * 单群的「消息免打扰」优先级更高, 由服务端随事件下发的 muted 字段判定。
+     */
+    var notifyGroupAll: Boolean
+        get() = prefs.getBoolean("notify_group_all", true)
+        set(value) = prefs.edit().putBoolean("notify_group_all", value).apply()
+
     // ===== 启动权限引导节流 (v1.0.36) =====
     /**
      * 上次走完「启动权限引导」的时间戳 (毫秒, key = perm_guide_ts)。

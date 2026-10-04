@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.AlertDialog
@@ -256,8 +257,18 @@ fun SocialScreen(
                 if (isRefresh) refreshing = true else loading = true
             }
             ApiClient.socialGroups()
-                .onSuccess {
-                    groups = it
+                .onSuccess { list ->
+                    groups = list
+                    // v1.1.1: 当前正在看的那个群也要跟着刷新 (公告 / 免打扰 / 全员禁言 / 人数),
+                    // 否则别人刚开的「全员禁言」要退出群再进来才看得到
+                    val cur = currentGroup
+                    if (cur != null) {
+                        val fresh = list.firstOrNull { it.id == cur.id }
+                        if (fresh != null && fresh != cur) {
+                            currentGroup = fresh
+                            if (fresh.muted != cur.muted) chatMenu.muted = fresh.muted
+                        }
+                    }
                     error = ""
                 }
                 .onFailure { e -> if (!silent) error = e.message ?: "加载失败" }
@@ -369,6 +380,44 @@ fun SocialScreen(
                                         menuOpen = false
                                         chatMenu.draft = g.notice
                                         chatMenu.showNoticeEditor = true
+                                    },
+                                )
+                            }
+                            // 全员禁言 (仅管理员可见, v1.1.1): 开启后除管理员外谁都不能发言
+                            if (admin) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(if (g.allMuted) "全员禁言: 已开启" else "全员禁言: 已关闭")
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        val next = !g.allMuted
+                                        // 先本地乐观更新 (列表 + 当前群), 失败再回滚
+                                        currentGroup = currentGroup?.copy(allMuted = next)
+                                        groups = groups.map { row ->
+                                            if (row.id == g.id) row.copy(allMuted = next) else row
+                                        }
+                                        scope.launch {
+                                            ApiClient.socialGroupAllMuteSet(g.id, next)
+                                                .onSuccess { on ->
+                                                    currentGroup = currentGroup?.copy(allMuted = on)
+                                                    groups = groups.map { row ->
+                                                        if (row.id == g.id) row.copy(allMuted = on) else row
+                                                    }
+                                                    Toast.makeText(
+                                                        context,
+                                                        if (on) "已开启全员禁言, 仅群管理员可发言" else "已关闭全员禁言",
+                                                        Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                }
+                                                .onFailure { e ->
+                                                    currentGroup = currentGroup?.copy(allMuted = !next)
+                                                    groups = groups.map { row ->
+                                                        if (row.id == g.id) row.copy(allMuted = !next) else row
+                                                    }
+                                                    Toast.makeText(context, e.message ?: "设置失败", Toast.LENGTH_SHORT).show()
+                                                }
+                                        }
                                     },
                                 )
                             }
@@ -689,6 +738,19 @@ private fun GroupCard(
                             contentDescription = "消息免打扰",
                             tint = MiuixTheme.colorScheme.onBackgroundVariant,
                             modifier = Modifier.size(13.dp),
+                        )
+                    }
+                    // 全员禁言小标 (v1.1.1)
+                    if (group.allMuted) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "全员禁言",
+                            fontSize = 10.sp,
+                            color = MiuixTheme.colorScheme.error,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MiuixTheme.colorScheme.error.copy(alpha = 0.12f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
                         )
                     }
                 }
@@ -1289,6 +1351,11 @@ private fun ChatView(
     fun doSend() {
         val text = input.text.trim()
         if (text.isEmpty() || sending) return
+        // 全员禁言 (v1.1.1): 普通成员在本地就拦住; 服务端还会再拦一次并返回中文错误
+        if (group.allMuted && !isAdmin) {
+            onToast("全员禁言中, 仅群管理员可发言")
+            return
+        }
         sending = true
         scope.launch {
             // 管理员 + (选过「所有人」或内容里写了 @所有人) -> 全体提醒
@@ -1665,6 +1732,31 @@ private fun ChatView(
             }
         }
 
+        // ===== 全员禁言横幅 (v1.1.1): 管理员开了之后, 普通成员只能看不能发 =====
+        val canSpeak = !group.allMuted || isAdmin
+        if (!canSpeak) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MiuixTheme.colorScheme.error.copy(alpha = 0.10f))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Lock,
+                    contentDescription = null,
+                    tint = MiuixTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "全员禁言中, 仅群管理员可发言",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.error,
+                )
+            }
+        }
+
         // ===== 底部输入区 (QQ 那种布局: 左边「+」, 中间输入框占满, 右边发送) =====
         Row(
             modifier = Modifier
@@ -1681,7 +1773,7 @@ private fun ChatView(
                         .size(40.dp)
                         .clip(CircleShape)
                         .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                        .clickable { plusMenuOpen = true },
+                        .clickable { if (canSpeak) plusMenuOpen = true },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -1748,6 +1840,7 @@ private fun ChatView(
             Box(Modifier.weight(1f)) {
                 OutlinedTextField(
                     value = input,
+                    enabled = canSpeak,
                     onValueChange = { nv ->
                         if (nv.text.length <= 500) {
                             // 刚敲下一个 '@' 就自动弹成员选择器 (选择器里还能搜索)
@@ -1760,7 +1853,7 @@ private fun ChatView(
                     },
                     placeholder = {
                         Text(
-                            text = "说点什么… 用 @昵称 提醒对方",
+                            text = if (canSpeak) "说点什么… 用 @昵称 提醒对方" else "全员禁言中, 仅群管理员可发言",
                             fontSize = 13.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )

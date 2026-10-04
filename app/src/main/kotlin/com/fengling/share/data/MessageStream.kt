@@ -36,6 +36,8 @@ sealed interface StreamEvent {
         val atMe: Int,
         /** 1 = 这条消息 @ 了所有人 */
         val atAll: Int,
+        /** 收件人 (我) 是否对该群开了「消息免打扰」; true = 这条不要弹通知 */
+        val muted: Boolean = false,
         val createdAt: String,
     ) : StreamEvent
 

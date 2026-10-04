@@ -200,6 +200,8 @@ object ApiClient {
             image = j.optString("image", ""),
             atMe = j.optInt("at_me", 0),
             atAll = j.optInt("at_all", 0),
+            // 服务端在 group 事件里带上「我是否对该群开了免打扰」(契约 A6), 老服务端没有这个键 -> false
+            muted = j.optInt("muted", 0) == 1,
             createdAt = j.optString("created_at", ""),
         )
     }.getOrNull()
@@ -572,6 +574,25 @@ object ApiClient {
             body.optJSONObject("data")?.optInt("muted", 0)?.let { it == 1 } ?: muted
         }
     }
+
+    /**
+     * 管理员: 开启 / 关闭某个群的「全体禁言」(action=social_group_allmute_set, 契约 A3)。
+     *
+     * 开启后除管理员外任何人都不能发言, 服务端会返回 403 + 中文文案
+     * (客户端在群聊页另有一层「输入框禁用 + 横幅」的前置拦截)。
+     */
+    suspend fun socialGroupAllMuteSet(groupId: Int, muted: Boolean): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val d = request(
+                    "social_group_allmute_set",
+                    mapOf<String, Any?>("group_id" to groupId, "muted" to if (muted) 1 else 0),
+                    UserStore.token,
+                ).optJSONObject("data")
+                // 服务端返回 data.all_muted (0/1); 拿不到就按本地意图返回
+                d?.optInt("all_muted", if (muted) 1 else 0)?.let { it == 1 } ?: muted
+            }
+        }
 
     /** 群成员候选 (可 @ 的人): 该群发过言的活跃用户 + 管理员, 已排除自己 */
     suspend fun socialGroupMembers(groupId: Int): Result<List<SocialGroupMember>> = withContext(Dispatchers.IO) {
@@ -1150,6 +1171,8 @@ data class SocialGroup(
     val messageCount: Int = 0,
     /** 我是否对这个世界开了消息免打扰 */
     val muted: Boolean = false,
+    /** 群主 / 管理员是否开启了「全体禁言」(true = 只有管理员能发言, 契约 A2) */
+    val allMuted: Boolean = false,
     /** 该群未读条数 (只算别人发的、未撤回的消息; 0 = 全部已读) */
     val unread: Int = 0,
     /** 第一条未读消息 id (无未读为 0); 进群时拿它当 around_id 定位 */
@@ -1177,6 +1200,7 @@ data class SocialGroup(
             memberCount = j.optInt("member_count", 0),
             messageCount = j.optInt("message_count", 0),
             muted = j.optInt("muted", 0) == 1,
+            allMuted = j.optInt("all_muted", 0) == 1,
             unread = j.optInt("unread", 0),
             firstUnreadId = j.optInt("first_unread_id", 0),
             lastMessage = j.optJSONObject("last_message")?.let { LastMessage.fromJson(it) },

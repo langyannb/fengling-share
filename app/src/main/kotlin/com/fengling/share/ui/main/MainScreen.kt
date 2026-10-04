@@ -853,7 +853,8 @@ private fun PmNotifyWatcher() {
 
     // 订阅流事件:
     // - 私聊 -> 响
-    // - 群消息且 atMe == 1 || atAll == 1 -> 也响 (群里刷屏不响, 只有被 @ 才响)
+    // - 群消息 -> 也响 (v1.1.1: 群里任何人发消息都有提示音, 和 QQ/微信一致);
+    //   自己发的消息不响; 该群被我设了「消息免打扰」(event.muted) 时不响
     // - Reconnected -> 这里什么都不用做 (各页面自己补一次全量刷新)
     LaunchedEffect(Unit) {
         MessageStream.events.collect { event ->
@@ -864,7 +865,8 @@ private fun PmNotifyWatcher() {
                     NotifySound.play(context)
                 }
                 is StreamEvent.Group -> {
-                    if (event.atMe == 1 || event.atAll == 1) NotifySound.play(context)
+                    val mine = event.userId != 0 && event.userId == UserStore.current?.id
+                    if (!mine && !event.muted) NotifySound.play(context)
                 }
                 StreamEvent.Reconnected -> Unit
             }

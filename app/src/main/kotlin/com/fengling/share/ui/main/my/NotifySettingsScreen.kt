@@ -57,6 +57,8 @@ fun NotifySettingsScreen(
     val context = LocalContext.current
 
     var serviceOn by remember { mutableStateOf(Settings.msgServiceOn) }
+    // v1.1.1: 群消息提醒范围 (默认全提醒)
+    var notifyGroupAll by remember { mutableStateOf(Settings.notifyGroupAll) }
     var running by remember { mutableStateOf(MessageService.isRunning) }
     var notifGranted by remember { mutableStateOf(PermissionHelper.notificationsEnabled(context)) }
     var batteryFree by remember { mutableStateOf(PermissionHelper.ignoringBattery(context)) }
@@ -143,6 +145,48 @@ fun NotifySettingsScreen(
                         Spacer(Modifier.width(12.dp))
                         Switch(
                             checked = serviceOn,
+                            onCheckedChange = null,
+                        )
+                    }
+                }
+            }
+            // v1.1.1: 群消息提醒范围 (所有人发的都提醒 / 只提醒 @ 我的)
+            item {
+                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val next = !notifyGroupAll
+                                notifyGroupAll = next
+                                Settings.notifyGroupAll = next
+                                Toast.makeText(
+                                    context,
+                                    if (next) "群消息将全部提醒" else "只提醒 @ 我 / @所有人的群消息",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "群消息提醒",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onBackground,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "打开后群里任何人发言都提醒; 关闭后只提醒 @ 我 / @所有人的消息",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                maxLines = 2,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Switch(
+                            checked = notifyGroupAll,
                             onCheckedChange = null,
                         )
                     }

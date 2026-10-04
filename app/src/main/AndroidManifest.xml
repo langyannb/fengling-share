@@ -53,10 +53,25 @@
             android:enableOnBackInvokedCallback="true"
             android:theme="@style/Theme.Fengling" />
         <!-- 后台常驻消息服务: 持有唯一的 SSE 长连接, 退到后台/桌面也不断 -->
+        <!--
+            android:stopWithTask="false" 是「被划掉也能收消息」的主机制 (v1.1.1):
+            默认情况下用户把 App 从最近任务里划掉, 系统会连带 stopService 掉本服务;
+            置 false 后划掉只回调 onTaskRemoved(), 前台服务继续持有 SSE 收消息。
+        -->
         <service
             android:name=".service.MessageService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
+        <!-- 兜底: 被 ROM 强杀 / 服务异常退出后由闹钟把服务拉回来 -->
+        <receiver
+            android:name=".receiver.ServiceRestartReceiver"
+            android:exported="false" />
+        <!-- 兜底: 15 分钟周期的看门狗任务 (setPersisted), 进程被杀也会被系统重新拉起 -->
+        <service
+            android:name=".service.MessageJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <!-- 开机 / 应用更新后恢复常驻消息服务 -->
         <receiver
             android:name=".receiver.BootReceiver"
