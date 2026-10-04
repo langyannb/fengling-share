@@ -42,6 +42,8 @@ import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.appGradientBackground
 import com.fengling.share.ui.components.glassCard
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -68,7 +70,12 @@ fun ContributorsScreen(
         loading = false
     }
 
+    // 契约 B: 预测性返回(跟手) —— 跟手右移+缩小淡出, 松手过半分提交返回, 否则回弹;
+    // 未开「预测性返回手势动画」的系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(), 功能不变。
+    val backProgress = rememberPredictiveBackProgress(enabled = true) { onBack() }
+
     Scaffold(
+        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = "投稿名单",

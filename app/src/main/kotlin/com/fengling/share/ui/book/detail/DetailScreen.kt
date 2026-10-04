@@ -70,6 +70,8 @@ import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.ScreenshotSaveDialog
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.main.home.formatCount
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -109,7 +111,12 @@ fun DetailScreen(
         loading = false
     }
 
+    // 契约 B: 预测性返回(跟手) —— 跟手右移+缩小淡出, 松手过半分提交返回, 否则回弹;
+    // 未开「预测性返回手势动画」的系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(), 功能不变。
+    val backProgress = rememberPredictiveBackProgress(enabled = true) { onBack() }
+
     Scaffold(
+        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = app?.name ?: "软件详情",

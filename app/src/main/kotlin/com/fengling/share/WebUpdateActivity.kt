@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +19,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 
 /**
  * WebUpdateActivity - 内置更新浏览器
@@ -41,7 +42,10 @@ class WebUpdateActivity : ComponentActivity() {
 private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val webView = remember { WebView(context) }
-    BackHandler { onBack() }
+    // 契约 B: 预测性返回(跟手) —— 有网页历史先跟手回退网页, 没有历史整页退回上一页
+    val backProgress = rememberPredictiveBackProgress(enabled = true) {
+        if (webView.canGoBack()) webView.goBack() else onBack()
+    }
 
     // 配置 WebView (一次性, 与主浏览器同配置)
     remember {
@@ -65,6 +69,7 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
     }
 
     Scaffold(
+        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(title = "更新下载", onBack = onBack)
         },

@@ -32,6 +32,8 @@ import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.utils.PermissionHelper
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
@@ -84,7 +86,12 @@ fun NotifySettingsScreen(
         }
     }
 
+    // 契约 B: 预测性返回(跟手) —— 跟手右移+缩小淡出, 松手过半分提交返回, 否则回弹;
+    // 未开「预测性返回手势动画」的系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(), 功能不变。
+    val backProgress = rememberPredictiveBackProgress(enabled = true) { onBack() }
+
     Scaffold(
+        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = "消息通知",
