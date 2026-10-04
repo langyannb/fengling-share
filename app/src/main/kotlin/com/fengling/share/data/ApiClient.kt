@@ -1279,6 +1279,13 @@ private fun jsonBool(j: JSONObject, key: String): Boolean {
     }
 }
 
+/**
+ * 同 jsonBool, 但缺字段时用调用方给的默认值 ——
+ * show_prizes / show_stock 这类开关默认是「开」, 老服务端没返回时不能变成隐藏。
+ */
+private fun jsonBoolOr(j: JSONObject, key: String, def: Boolean): Boolean =
+    if (j.has(key) && !j.isNull(key)) jsonBool(j, key) else def
+
 /** 兼容后端返回 int / 字符串数字 / null 三种写法 */
 private fun jsonInt(j: JSONObject, key: String, def: Int = 0): Int {
     if (j.isNull(key)) return def
@@ -1585,6 +1592,50 @@ data class LotteryRecord(
     }
 }
 
+/**
+ * 开放时段状态 (lottery_window_state, 契约 D 节新增)
+ * - open = 现在能不能抽; reason 取值 disabled / before_start / after_end / outside_window / open
+ * - secondsToOpen / secondsToClose 是服务端那一刻算出的秒数, 客户端用 serverTime 对齐后本地逐秒递减
+ * - 服务端还没部署新接口时整个对象为 null, 页面不显示状态卡也不限制抽奖
+ */
+data class LotteryWindow(
+    /** 现在是否在开放时段内 */
+    val open: Boolean = false,
+    /** disabled / before_start / after_end / outside_window / open */
+    val reason: String = "",
+    /** 服务端给的中文原因 (如「现在不在抽奖时间内」) */
+    val reasonText: String = "",
+    /** 开放时段的友好文案 (如「每天 19:30-20:00」, 未启用时段时为空) */
+    val text: String = "",
+    /** 下次开放时间 Y-m-d H:i:s (空 = 没有下一个时段) */
+    val nextOpenAt: String = "",
+    /** 本次关闭时间 Y-m-d H:i:s */
+    val nextCloseAt: String = "",
+    /** 距下次开放还有多少秒 */
+    val secondsToOpen: Int = 0,
+    /** 距本次关闭还有多少秒 */
+    val secondsToClose: Int = 0,
+    /** 服务端当前时间 Y-m-d H:i:s (数据库 NOW() 基准) */
+    val serverTime: String = "",
+    /** 服务端判断我当前是否可以参与抽奖 */
+    val myAllowed: Boolean = true,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryWindow = LotteryWindow(
+            open = jsonBool(j, "open"),
+            reason = jsonStr(j, "reason"),
+            reasonText = jsonStr(j, "reason_text"),
+            text = jsonStr(j, "text"),
+            nextOpenAt = jsonStr(j, "next_open_at"),
+            nextCloseAt = jsonStr(j, "next_close_at"),
+            secondsToOpen = jsonInt(j, "seconds_to_open"),
+            secondsToClose = jsonInt(j, "seconds_to_close"),
+            serverTime = jsonStr(j, "server_time"),
+            myAllowed = jsonBoolOr(j, "my_allowed", true),
+        )
+    }
+}
+
 /** 抽奖总览 (lottery_info) */
 data class LotteryInfo(
     /** 后台开关: false = 抽奖活动已关闭, 客户端要禁用抽奖按钮 */
@@ -1604,6 +1655,43 @@ data class LotteryInfo(
     val myTodayDrawn: Int = 0,
     /** 我今天还能抽几次 (dailyLimit = 0 时为不限) */
     val myTodayLeft: Int = 0,
+    /** 服务端当前时间 (Y-m-d H:i:s, 数据库 NOW() 基准), 客户端用它对齐倒计时 */
+    val serverTime: String = "",
+    /**
+     * 开放时段状态 (lottery_window_state); 服务端还没部署新接口时为 null,
+     * 这时客户端整块隐藏状态卡, 并按「不限制时段」处理。
+     */
+    val window: LotteryWindow? = null,
+    /** 每日重置时刻 HH:MM (次数按这个时刻切分「今日/本周」) */
+    val dailyResetTime: String = "00:00",
+    /** 每人每周次数上限 (0 = 不限) */
+    val weekLimit: Int = 0,
+    /** 我本周已经抽了几次 */
+    val myWeekDrawn: Int = 0,
+    /** 我本周还能抽几次 */
+    val myWeekLeft: Int = 0,
+    /** 两次抽奖最小间隔秒数 (0 = 不限) */
+    val cooldownSeconds: Int = 0,
+    /** 距上次抽奖还差多少秒 (0 = 可以抽) */
+    val cooldownLeft: Int = 0,
+    /** 客户端是否显示奖项列表 (false = 后台要求隐藏) */
+    val showPrizes: Boolean = true,
+    /** 客户端是否显示剩余数量 (false = 后台要求隐藏) */
+    val showStock: Boolean = true,
+    /** 全站每日发放上限 (0 = 不限) */
+    val dailyTotalLimit: Int = 0,
+    /** 全站今日还剩多少张可发 */
+    val dailyTotalLeft: Int = 0,
+    /** 抽中弹窗自定义文案 (空 = 客户端用默认标题) */
+    val successText: String = "",
+    /** 奖品抽完时的提示 (空 = 客户端用默认文案) */
+    val emptyText: String = "",
+    /** 活动开始日期 YYYY-MM-DD (空 = 不限) */
+    val startDate: String = "",
+    /** 活动结束日期 YYYY-MM-DD (空 = 不限) */
+    val endDate: String = "",
+    /** 是否启用了自定义开放时段 */
+    val windowsEnabled: Boolean = false,
     val prizes: List<LotteryPrize> = emptyList(),
     /** 我最近的中奖记录 */
     val records: List<LotteryRecord> = emptyList(),
@@ -1612,6 +1700,8 @@ data class LotteryInfo(
         fun fromJson(j: JSONObject): LotteryInfo {
             val prizeArr = j.optJSONArray("prizes")
             val recordArr = j.optJSONArray("records")
+            // window 是新增字段: 老服务端没返回时保持 null (状态卡整块隐藏, 不崩)
+            val windowObj = j.optJSONObject("window")
             return LotteryInfo(
                 enabled = jsonBool(j, "enabled"),
                 title = jsonStr(j, "title"),
@@ -1622,6 +1712,24 @@ data class LotteryInfo(
                 dailyLimit = jsonInt(j, "daily_limit"),
                 myTodayDrawn = jsonInt(j, "my_today_drawn"),
                 myTodayLeft = jsonInt(j, "my_today_left"),
+                serverTime = jsonStr(j, "server_time"),
+                window = if (windowObj == null) null else LotteryWindow.fromJson(windowObj),
+                dailyResetTime = jsonStr(j, "daily_reset_time").ifBlank { "00:00" },
+                weekLimit = jsonInt(j, "week_limit"),
+                myWeekDrawn = jsonInt(j, "my_week_drawn"),
+                myWeekLeft = jsonInt(j, "my_week_left"),
+                cooldownSeconds = jsonInt(j, "cooldown_seconds"),
+                cooldownLeft = jsonInt(j, "cooldown_left"),
+                // 缺字段时默认「显示」, 避免老服务端把奖项/库存误隐
+                showPrizes = jsonBoolOr(j, "show_prizes", true),
+                showStock = jsonBoolOr(j, "show_stock", true),
+                dailyTotalLimit = jsonInt(j, "daily_total_limit"),
+                dailyTotalLeft = jsonInt(j, "daily_total_left"),
+                successText = jsonStr(j, "success_text"),
+                emptyText = jsonStr(j, "empty_text"),
+                startDate = jsonStr(j, "start_date"),
+                endDate = jsonStr(j, "end_date"),
+                windowsEnabled = jsonBool(j, "windows_enabled"),
                 prizes = if (prizeArr == null) emptyList() else
                     (0 until prizeArr.length()).map { LotteryPrize.fromJson(prizeArr.getJSONObject(it)) },
                 records = if (recordArr == null) emptyList() else
