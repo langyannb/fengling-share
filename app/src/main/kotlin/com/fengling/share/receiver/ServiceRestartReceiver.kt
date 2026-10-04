@@ -62,35 +62,12 @@ class ServiceRestartReceiver : BroadcastReceiver() {
             Log.i(TAG, "第 " + n + " 次拉起常驻消息服务")
             MessageService.start(app)
 
-            val am = app.getSystemService(AlarmManager::class.java)
-            if (am == null) {
-                Log.w(TAG, "拿不到 AlarmManager, 不再安排复查, 交给周期任务")
-            } else if (n <= MAX_ATTEMPTS) {
-                val at = System.currentTimeMillis() + RETRY_CHECK_MS
-                val pi = pending(app)
-                val exact = runCatching {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-                    true
-                }.getOrDefault(false)
-                if (!exact) am.set(AlarmManager.RTC_WAKEUP, at, pi)
-                Log.i(TAG, "已排定 " + (RETRY_CHECK_MS / 1000) + " 秒后复查 (exact=" + exact + ")")
+            if (n <= MAX_ATTEMPTS) {
+                scheduleCheck(app, RETRY_CHECK_MS)
             } else {
                 Log.w(TAG, "已连续尝试 " + n + " 次, 停止密集重试, 交给 15 分钟的周期看护任务")
             }
         }.onFailure { Log.w(TAG, "处理服务重启请求出错", it) }
-    }
-
-    /** 复查闹钟的 PendingIntent (requestCode 1001, 与服务侧排定时是同一个) */
-    private fun pending(context: Context): PendingIntent {
-        val intent = Intent(context, ServiceRestartReceiver::class.java).apply {
-            action = MessageService.ACTION_RESTART_SERVICE
-        }
-        return PendingIntent.getBroadcast(
-            context,
-            REQUEST_CODE,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
     }
 
     /** 重启尝试计数: 存 SP 而不是内存, 否则进程被杀后计数清零, 「最多 3 次」就失效了 */
@@ -115,5 +92,41 @@ class ServiceRestartReceiver : BroadcastReceiver() {
 
         /** 最多连续尝试几次, 超过就只留 15 分钟周期任务兜底 */
         private const val MAX_ATTEMPTS = 3
+
+        /** 复查闹钟的 PendingIntent (requestCode 1001, 与服务侧排定时是同一个) */
+        private fun pending(context: Context): PendingIntent {
+            val intent = Intent(context, ServiceRestartReceiver::class.java).apply {
+                action = MessageService.ACTION_RESTART_SERVICE
+            }
+            return PendingIntent.getBroadcast(
+                context,
+                REQUEST_CODE,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        /**
+         * 排一次「复查」闹钟 (v1.1.2: 从 onReceive 里提出来 —— 闹钟守护心跳
+         * [com.fengling.share.receiver.KeepAliveReceiver] 把服务拉起来之后, 也要排同一条复查)。
+         * setExactAndAllowWhileIdle 没权限时失败, 退化成不精确的 set() (不申请 SCHEDULE_EXACT_ALARM)。
+         */
+        fun scheduleCheck(context: Context, delayMs: Long) {
+            runCatching {
+                val am = context.getSystemService(AlarmManager::class.java)
+                if (am == null) {
+                    Log.w(TAG, "拿不到 AlarmManager, 不再安排复查, 交给周期任务")
+                    return@runCatching
+                }
+                val at = System.currentTimeMillis() + delayMs
+                val pi = pending(context)
+                val exact = runCatching {
+                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+                    true
+                }.getOrDefault(false)
+                if (!exact) am.set(AlarmManager.RTC_WAKEUP, at, pi)
+                Log.i(TAG, "已排定 " + (delayMs / 1000) + " 秒后复查 (exact=" + exact + ")")
+            }.onFailure { Log.w(TAG, "排复查闹钟失败", it) }
+        }
     }
 }

@@ -2,8 +2,6 @@ package com.fengling.share.service
 
 import android.app.AlarmManager
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.app.job.JobInfo
@@ -12,9 +10,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -25,8 +23,10 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppState
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.Settings
+import com.fengling.share.data.StreamCursor
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.UserStore
+import com.fengling.share.receiver.KeepAliveReceiver
 import com.fengling.share.receiver.ServiceRestartReceiver
 import com.fengling.share.ui.main.my.MessageBadge
 import kotlinx.coroutines.CoroutineScope
@@ -62,11 +62,20 @@ class MessageService : Service() {
     private var lastGroupCount: Int = 0
     private var lastGroupAt: Long = 0L
 
+    /** 上一次 SSE 连接是不是「没连上」——没连上就说明中间有断线窗口, 下次连之前先 HTTP 补拉 (v1.1.2) */
+    private var lastConnectFailed: Boolean = false
+
     override fun onCreate() {
         super.onCreate()
         // 服务可能被系统在「全新进程」里重启 (START_STICKY), 这里两个 init 都是幂等的, 补一次最稳
         runCatching { Settings.init(applicationContext) }
         runCatching { UserStore.init(applicationContext) }
+        // SSE 游标 (已通知过的最大 pm/group id): 断线重连靠它补齐漏掉的事件 (v1.1.2)
+        runCatching { StreamCursor.init(applicationContext) }
+        instance = this
+        // 闹钟守护心跳 (v1.1.2): 先排上 —— 就算下面 startForeground 失败、服务当场收摊,
+        // 这条心跳也会继续把「服务该不该活着」和「有没有漏消息」接管过去
+        runCatching { KeepAliveReceiver.schedule(applicationContext) }
         createChannels()
         // 长期兜底: 15 分钟一次的周期看护任务 (被划掉 / 被 ROM 杀 / 重启手机后都能把服务叫回来)
         scheduleJob()
@@ -129,6 +138,7 @@ class MessageService : Service() {
         running = false
         runCatching { scope.cancel() }
         job = null
+        if (instance === this) instance = null
         super.onDestroy()
         // 不是用户主动关的 (被划掉 / 被 ROM 杀 / 被系统回收) -> 3 秒后自己回来。
         // 用户自己关的开关、或已退出登录, 绝不能拉回来 (否则就是关不掉的流氓服务)。
@@ -138,6 +148,15 @@ class MessageService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** 掐断当前连接并立刻重连 (守护心跳专用): 先起新协程再取消旧的, 避免出现「一条连接都没有」的窗口 */
+    private fun forceReconnectNow(reason: String) {
+        Log.i(TAG, "强制重连 SSE: " + reason)
+        val old = job
+        lastConnectFailed = true
+        job = scope.launch { runStream() }
+        runCatching { old?.cancel() }
+    }
 
     // ==================== 保活: 被划掉 / 被杀后自己回来 (v1.1.1) ====================
 
@@ -233,10 +252,31 @@ class MessageService : Service() {
                 delay(LOGIN_POLL_MS)
                 continue
             }
+            // 游标账号校对 (v1.1.2): 换了账号 / 退出重登必须归零, 否则会拿上一个账号的消息 id 当基线,
+            // 把新账号的历史消息当「积压」补弹出来。每轮连接前都核对一次, 成本只是一次 SP 读。
+            runCatching { StreamCursor.init(applicationContext) }
+            // 兜底补拉 (v1.1.2): 服务刚起来 / 上一次压根没连上时, 先做一次轻量 HTTP 补拉, 把断线期间
+            // 漏掉的通知当场补弹。正常的 25 秒收尾重连**不做** (那 2 秒窗口由 SSE 游标在服务端补齐)。
+            if (firstConnect || lastConnectFailed) {
+                runCatching {
+                    MessageCatchUp.pull(
+                        this,
+                        if (firstConnect) "服务起来时兜底" else "上次没连上, 重连前兜底",
+                    )
+                }.onFailure { Log.w(TAG, "补拉异常", it) }
+            }
             val beganAt = System.currentTimeMillis()
-            Log.i(TAG, "发起 SSE 连接")
+            lastStreamActivityAt = SystemClock.elapsedRealtime()
+            Log.i(
+                TAG,
+                "发起 SSE 连接 (游标 pm=" + StreamCursor.lastPmId + " grp=" + StreamCursor.lastGroupId + ")",
+            )
             val result = runCatching {
-                ApiClient.streamMessages { event -> onEvent(event) }
+                ApiClient.streamMessages(
+                    pmId = StreamCursor.lastPmId,
+                    groupId = StreamCursor.lastGroupId,
+                    onActivity = { lastStreamActivityAt = SystemClock.elapsedRealtime() },
+                ) { event -> onEvent(event) }
             }.getOrElse { Result.failure<Unit>(it) }
             // 「连上了」= 服务端正常收尾 (isSuccess) 或这条连接活了够久 (中途断的)
             Log.i(
@@ -247,6 +287,8 @@ class MessageService : Service() {
             )
             val connected = result.isSuccess ||
                 System.currentTimeMillis() - beganAt >= MessageStream.CONNECTED_MIN_MS
+            // 没连上 = 中间有一段谁也没覆盖的窗口, 下次连之前先补拉
+            lastConnectFailed = !connected
             // 第一次连接不算「重连」, 不广播 —— 免得一进 App 所有页面就各刷一次
             if (!firstConnect && connected) MessageStream.emit(StreamEvent.Reconnected)
             firstConnect = false
@@ -261,6 +303,13 @@ class MessageService : Service() {
      * 再判断要不要弹系统通知。任何异常都不许影响连接 (全 runCatching)。
      */
     private fun onEvent(event: StreamEvent) {
+        // 游标先走 (v1.1.2): 收到就算「已处理」, 下次重连从它之后开始推, 不会把历史消息重弹一遍。
+        // 免打扰 / 自己发的消息也照样推进游标 —— 否则它们会永远卡在「比游标大」的状态里被反复补拉。
+        when (event) {
+            is StreamEvent.Pm -> StreamCursor.markPm(event.msgId)
+            is StreamEvent.Group -> StreamCursor.markGroup(event.msgId)
+            StreamEvent.Reconnected -> Unit
+        }
         MessageStream.emit(event)
         Log.i(TAG, "收到事件 " + event::class.simpleName + " foreground=" + AppState.foreground)
         // App 在前台: 不弹通知 (前台由 MainScreen 的订阅逻辑响提示音), 前后台不重复打扰
@@ -276,39 +325,9 @@ class MessageService : Service() {
 
     // ==================== 通知 ====================
 
-    /** 两个渠道都幂等创建 (已存在时是空操作) */
+    /** 两个渠道都幂等创建 (已存在时是空操作); 实现搬到了 [MessageNotifier] (v1.1.2: 补拉也要弹通知) */
     private fun createChannels() {
-        val nm = getSystemService(NotificationManager::class.java) ?: return
-        runCatching {
-            nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_KEEPALIVE,
-                    "后台消息接收",
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply {
-                    description = "保持与服务器的实时消息连接 (状态栏常驻)"
-                    setShowBadge(false)
-                    enableVibration(false)
-                    setSound(null, null)
-                },
-            )
-            nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_MESSAGE,
-                    "新消息提醒",
-                    NotificationManager.IMPORTANCE_HIGH,
-                ).apply {
-                    description = "私聊消息 / 群里 @我 @所有人"
-                    setShowBadge(true)
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 200, 120, 200)
-                    setSound(
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                        null,
-                    )
-                },
-            )
-        }
+        MessageNotifier.ensureChannels(this)
     }
 
     /** 常驻通知 (id 固定 1000): 标题「风铃分享库」正文「正在接收消息 · 未读 N」 */
@@ -348,14 +367,13 @@ class MessageService : Service() {
 
     /** 私聊: 每个会话一条, id = 2000 + convId, 同一会话新消息覆盖旧的那条 (但每条都响) */
     private fun notifyPm(event: StreamEvent.Pm) {
-        val title = event.nickname.ifBlank { "用户 ${event.fromUser}" }
-        val body = summaryOf(event.content, event.image)
-        post(
-            id = NOTIF_ID_PM_BASE + event.convId,
-            title = title,
-            body = body,
-            pmConvId = event.convId,
-            groupId = 0,
+        MessageNotifier.notifyPm(
+            context = this,
+            convId = event.convId,
+            nickname = event.nickname,
+            fromUser = event.fromUser,
+            content = event.content,
+            image = event.image,
         )
         refreshKeepAlive()
     }
@@ -386,7 +404,7 @@ class MessageService : Service() {
         }
         val title = event.groupName.ifBlank { "群 ${event.groupId}" }
         val who = event.nickname.ifBlank { "有人" }
-        val one = prefix + who + "：" + summaryOf(event.content, event.image)
+        val one = prefix + who + "：" + MessageNotifier.summaryOf(event.content, event.image)
         // 同一群 3 秒内的连续消息合并计数 (成员变量, 服务实例自己维护)
         val now = System.currentTimeMillis()
         val count = if (lastGroupId == event.groupId && now - lastGroupAt <= GROUP_MERGE_MS) {
@@ -398,7 +416,8 @@ class MessageService : Service() {
         lastGroupCount = count
         lastGroupAt = now
         val body = if (count > 1) prefix + count + " 条新消息" else one
-        post(
+        MessageNotifier.post(
+            context = this,
             id = NOTIF_ID_GROUP_BASE + event.groupId,
             title = title,
             body = body,
@@ -408,86 +427,39 @@ class MessageService : Service() {
         refreshKeepAlive()
     }
 
-    /** 正文摘要: 文字取前 60 字 (截断了补省略号), 没有文字就是「[图片]」 */
-    private fun summaryOf(content: String, image: String): String {
-        val text = content.trim()
-        if (text.isEmpty()) return if (image.isNotBlank()) "[图片]" else "新消息"
-        return if (text.length > SUMMARY_MAX) text.take(SUMMARY_MAX) + "…" else text
-    }
-
-    /** 真正发通知: 权限没了 / 被系统限流都只是静默失败, 绝不让服务挂掉 */
-    private fun post(id: Int, title: String, body: String, pmConvId: Int, groupId: Int) {
-        val allowed = canNotify()
-        Log.i(TAG, "弹通知 id=" + id + " canNotify=" + allowed + " title=" + title)
-        if (!allowed) return
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP
-            // 点通知直达对应会话: MainActivity 读到 extra 后交给 PendingNav -> MainScreen 导航
-            if (pmConvId > 0) putExtra(EXTRA_OPEN_PM_CONV, pmConvId)
-            if (groupId > 0) putExtra(EXTRA_OPEN_GROUP, groupId)
-        }
-        val pi = PendingIntent.getActivity(
-            this,
-            id,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_MESSAGE)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(false)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-            .setVibrate(longArrayOf(0, 200, 120, 200))
-            .build()
-        runCatching { NotificationManagerCompat.from(this).notify(id, notification) }
-            .onFailure { Log.w(TAG, "notify 失败 id=" + id, it) }
-    }
-
     /** Android 13+ 没给 POST_NOTIFICATIONS 时 notify 会静默失败, 先问一句免得白忙 */
-    private fun canNotify(): Boolean =
-        runCatching { NotificationManagerCompat.from(this).areNotificationsEnabled() }
-            .getOrDefault(false)
+    private fun canNotify(): Boolean = MessageNotifier.canNotify(this)
 
     companion object {
 
         /** 日志 TAG (只打状态变化与事件, 不打消息内容) */
         private const val TAG = "FLS_MSG"
-        /** 常驻通知 id (固定) */
-        const val NOTIF_ID_KEEPALIVE = 1000
+        /** 通知 id / 渠道 / extra 的唯一真源在 [MessageNotifier] (v1.1.2: 补拉也要弹同一张通知) */
+        const val NOTIF_ID_KEEPALIVE = MessageNotifier.NOTIF_ID_KEEPALIVE
 
         /** 降级运行时的普通通知 id (FGS 起不来时用, v1.1.1) */
-        const val NOTIF_ID_DEGRADED = 1003
+        const val NOTIF_ID_DEGRADED = MessageNotifier.NOTIF_ID_DEGRADED
 
         /** 私聊通知 id 基址: 实际 id = 2000 + convId */
-        const val NOTIF_ID_PM_BASE = 2000
+        const val NOTIF_ID_PM_BASE = MessageNotifier.NOTIF_ID_PM_BASE
 
         /** 群通知 id 基址: 实际 id = 3000 + groupId */
-        const val NOTIF_ID_GROUP_BASE = 3000
+        const val NOTIF_ID_GROUP_BASE = MessageNotifier.NOTIF_ID_GROUP_BASE
 
         /** 常驻 (保活) 渠道 id */
-        const val CHANNEL_KEEPALIVE = "msg_keepalive"
+        const val CHANNEL_KEEPALIVE = MessageNotifier.CHANNEL_KEEPALIVE
 
         /** 消息提醒渠道 id */
-        const val CHANNEL_MESSAGE = "msg_message"
+        const val CHANNEL_MESSAGE = MessageNotifier.CHANNEL_MESSAGE
 
         /** 点通知直达私聊会话的 extra 名 */
-        const val EXTRA_OPEN_PM_CONV = "open_pm_conv"
+        const val EXTRA_OPEN_PM_CONV = MessageNotifier.EXTRA_OPEN_PM_CONV
 
         /** 点通知直达群聊的 extra 名 */
-        const val EXTRA_OPEN_GROUP = "open_group"
+        const val EXTRA_OPEN_GROUP = MessageNotifier.EXTRA_OPEN_GROUP
 
         /** 未登录时的空转间隔 */
         private const val LOGIN_POLL_MS = 3000L
-
-        /** 通知正文最多取多少字 */
-        private const val SUMMARY_MAX = 60
 
         /** 同一群多久之内的多条消息合并成「N 条新消息」(毫秒) */
         private const val GROUP_MERGE_MS = 3000L
@@ -517,6 +489,35 @@ class MessageService : Service() {
 
         /** 静态可读的「服务在跑吗」 */
         val isRunning: Boolean get() = running
+
+        /** 当前活着的服务实例 (守护心跳要调它强制重连); onDestroy 里清掉 */
+        @Volatile
+        private var instance: MessageService? = null
+
+        /** 最近一次收到任何 SSE 数据 (含 10 秒一次的心跳行) 的时刻, elapsedRealtime */
+        @Volatile
+        private var lastStreamActivityAt: Long = 0L
+
+        /** SSE 是不是卡死了 / 被冻结了: 超过 timeoutMs 一点数据都没有 (v1.1.2 守护心跳用) */
+        fun isStreamStale(timeoutMs: Long): Boolean {
+            if (!running) return false
+            val last = lastStreamActivityAt
+            if (last <= 0L) return false
+            return SystemClock.elapsedRealtime() - last > timeoutMs
+        }
+
+        /**
+         * 强制掐断当前 SSE 并立刻重连 (守护心跳判断连接卡死时调)。
+         * 必须重新 launch: job.cancel() 之后那条协程就退出了, 不补一条连接就永远断了。
+         */
+        fun requestReconnect(reason: String) {
+            val s = instance
+            if (s == null || !running) {
+                Log.i(TAG, "重连请求被忽略 (服务不在跑): " + reason)
+                return
+            }
+            s.forceReconnectNow(reason)
+        }
 
         /**
          * 启动服务 (幂等, 已在跑就什么都不做)。

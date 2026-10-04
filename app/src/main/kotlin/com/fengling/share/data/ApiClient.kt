@@ -97,20 +97,32 @@ object ApiClient {
      *
      * - URL 里 action 必须放查询串 (api.php 用 $_GET['action'] 路由), token 也走查询串
      *   (current_user() 支持 param('token'); 不用 Authorization 头, 免得 nginx 丢头)。
-     * - `pm_id=0&group_id=0` = 服务端从「现在」开始, 不重放历史 (见契约 A1)。
+     * - `pmId` / `groupId` 是「已收到的最大消息 id」游标: `0` = 服务端从「现在」开始 (不重放历史),
+     *   `> 0` = 从该 id **之后**开始推, 可以把断线期间的消息补齐 (v1.1.2 起由
+     *   [com.fengling.share.data.StreamCursor] 持久化, 见契约 A1)。
      * - 逐行解析 `event:` / `data:`; `:` 开头是心跳注释行, 忽略; `event: bye` 视为服务端
      *   正常收尾 -> 返回 Result.success, 让外层 (MessageStream) 立刻重连。
      * - onEvent 在 IO 线程回调, UI 侧自己 withContext。
+     * - `onActivity` 每读到**任何一行**(含 10 秒一次的 `: hb` 心跳注释行) 都回调一次,
+     *   给 [com.fengling.share.service.MessageService] 判断「连接是不是还活着」(v1.1.2)。
      *
      * @return 成功 = 服务端正常收尾 / 连接自然结束; 失败 = 建连失败 (含 401)
      */
-    suspend fun streamMessages(onEvent: (StreamEvent) -> Unit): Result<Unit> =
+    suspend fun streamMessages(
+        pmId: Int = 0,
+        groupId: Int = 0,
+        onActivity: (() -> Unit)? = null,
+        onEvent: (StreamEvent) -> Unit,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val url = StringBuilder(BASE_URL)
                     .append("?action=stream&token=")
                     .append(URLEncoder.encode(UserStore.token, "UTF-8"))
-                    .append("&pm_id=0&group_id=0")
+                    // 游标 (v1.1.2): 0 = 从现在开始 (首次安装 / 刚退出登录, 不重放历史);
+                    // > 0 = 从该 id 之后开始推 —— 断线期间服务端攒的积压会补推过来, 不再丢那 2 秒窗口
+                    .append("&pm_id=").append(pmId)
+                    .append("&group_id=").append(groupId)
                     .toString()
                 val call = streamClient.newCall(Request.Builder().url(url).get().build())
                 // 协程被取消 (App 退后台 -> MessageStream.stop()) 时 cancel 掉 Call,
@@ -131,6 +143,8 @@ object ApiClient {
                         var eventName = ""
                         while (true) {
                             val line = source.readUtf8Line() ?: break
+                            // 任何一行 (心跳/事件/空行) 都证明这条连接是活的
+                            onActivity?.invoke()
                             when {
                                 // 心跳行 `: hb` (纯注释) 直接忽略
                                 line.startsWith(":") -> Unit

@@ -129,4 +129,15 @@ object Settings {
     var permGuideTs: Long
         get() = prefs.getLong("perm_guide_ts", 0L)
         set(value) = prefs.edit().putLong("perm_guide_ts", value).apply()
+
+    // ===== 「划掉后台也能收消息」一次性提示 (v1.1.2) =====
+    /**
+     * 是否已经弹过「请在最近任务里锁定本应用」的一次性提示 (key = keepalive_guide_shown)。
+     *
+     * 默认 **false**: 全新安装 (或清了数据) 第一次进 App 时弹一次, 弹过就**永不再弹** ——
+     * 用户很反感反复提示, 这里刻意不做任何节流/循环, 也不看「是否已锁定」(系统不告诉我们)。
+     */
+    var keepaliveGuideShown: Boolean
+        get() = prefs.getBoolean("keepalive_guide_shown", false)
+        set(value) = prefs.edit().putBoolean("keepalive_guide_shown", value).apply()
 }
