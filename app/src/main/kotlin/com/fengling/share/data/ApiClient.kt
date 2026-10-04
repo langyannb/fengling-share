@@ -623,13 +623,17 @@ object ApiClient {
      * 用户主页 (可匿名, 带 token 时才能拿到准确的 is_me / can_chat / conv_id)
      * @param userId 目标用户 id
      */
-    suspend fun userProfile(userId: Int): Result<UserProfile> = withContext(Dispatchers.IO) {
-        apiCall {
-            val d = request("user_profile", mapOf<String, Any?>("user_id" to userId), UserStore.token)
-                .optJSONObject("data") ?: JSONObject()
-            UserProfile.fromJson(d)
+    suspend fun userProfile(userId: Int, groupId: Int = 0): Result<UserProfile> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                // group_id: 传群 id = 看这个用户「在这个群里」的禁言状态; 不传/0 = 全站 (契约 F2)
+                val params = mutableMapOf<String, Any?>("user_id" to userId)
+                if (groupId > 0) params["group_id"] = groupId
+                val d = request("user_profile", params, UserStore.token)
+                    .optJSONObject("data") ?: JSONObject()
+                UserProfile.fromJson(d)
+            }
         }
-    }
 
     /** 私聊会话列表 (需登录): 每条含对方信息 + 最新一条消息 + 未读数, 以及全部会话未读总数 */
     suspend fun pmConversations(): Result<PmConversationPage> = withContext(Dispatchers.IO) {
@@ -976,6 +980,23 @@ private fun jsonInt(j: JSONObject, key: String, def: Int = 0): Int {
     }
 }
 
+/**
+ * 标签数组解析 (契约 F1): 服务端一律返回 `tags: []`,
+ * 同时兜住「单个逗号分隔字符串」与 null 两种写法, 免得老数据把页面搞崩。
+ */
+private fun jsonStrList(j: JSONObject, key: String): List<String> {
+    val arr = j.optJSONArray(key)
+    if (arr != null) {
+        return (0 until arr.length())
+            .map { arr.optString(it, "") }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+    }
+    val single = jsonStr(j, key)
+    return if (single.isBlank()) emptyList()
+    else single.split(',').map { it.trim() }.filter { it.isNotBlank() }
+}
+
 /** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
 data class ChatImage(
     val url: String = "",
@@ -1075,6 +1096,8 @@ data class SocialGroupMember(
     /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
     val muteLeft: String = "",
     val muteReason: String = "",
+    /** 管理员打在这个成员身上的标签 (契约 F1, 防骗警示) */
+    val tags: List<String> = emptyList(),
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
@@ -1086,6 +1109,7 @@ data class SocialGroupMember(
             muted = j.optInt("muted", 0) == 1,
             muteLeft = jsonStr(j, "mute_left"),
             muteReason = jsonStr(j, "mute_reason"),
+            tags = jsonStrList(j, "tags"),
         )
     }
 }
@@ -1097,6 +1121,8 @@ data class SocialMessage(
     val nickname: String = "",
     val avatar: String = "",
     val role: String = "user",
+    /** 发送者的管理员标签 (契约 F1), 显示在群聊气泡昵称旁 */
+    val tags: List<String> = emptyList(),
     val content: String = "",
     /** 图片消息: 对象存储直链 (空串 = 没图; 撤回后也是空串) */
     val image: String = "",
@@ -1123,6 +1149,7 @@ data class SocialMessage(
                 nickname = jsonStr(j, "nickname"),
                 avatar = jsonStr(j, "avatar"),
                 role = jsonStr(j, "role").ifBlank { "user" },
+                tags = jsonStrList(j, "tags"),
                 content = jsonStr(j, "content"),
                 image = jsonStr(j, "image"),
                 imageW = jsonInt(j, "image_w"),
@@ -1307,6 +1334,24 @@ data class UserProfile(
     val canChat: Boolean = true,
     /** 已有私聊会话 id (0 = 还没聊过) */
     val convId: Int = 0,
+    /** 管理员打的标签 (契约 F1, 防骗警示) */
+    val tags: List<String> = emptyList(),
+    /** 本页是按哪个群看的 (回显; 0 = 全站视角) */
+    val groupId: Int = 0,
+    /** 该群已被禁言 (group_id 传 0 时即全站禁言) */
+    val muted: Boolean = false,
+    /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
+    val muteLeft: String = "",
+    /** 禁言原因 */
+    val muteReason: String = "",
+    /** 全站禁言状态 (不管 group_id 传了什么都会返回) */
+    val globalMuted: Boolean = false,
+    val globalMuteLeft: String = "",
+    val globalMuteReason: String = "",
+    /** 我是不是管理员 */
+    val isAdminMe: Boolean = false,
+    /** 我能不能禁言他 (管理员=1 / 自己=0 / 目标是管理员=0) */
+    val canMute: Boolean = false,
 ) {
     /** 展示名: 昵称优先, 没有昵称用用户名 */
     val displayName: String get() = nickname.ifBlank { username }
@@ -1333,6 +1378,16 @@ data class UserProfile(
             isMe = jsonBool(j, "is_me"),
             canChat = jsonBool(j, "can_chat"),
             convId = jsonInt(j, "conv_id"),
+            tags = jsonStrList(j, "tags"),
+            groupId = jsonInt(j, "group_id"),
+            muted = jsonBool(j, "muted"),
+            muteLeft = jsonStr(j, "mute_left"),
+            muteReason = jsonStr(j, "mute_reason"),
+            globalMuted = jsonBool(j, "global_muted"),
+            globalMuteLeft = jsonStr(j, "global_mute_left"),
+            globalMuteReason = jsonStr(j, "global_mute_reason"),
+            isAdminMe = jsonBool(j, "is_admin_me"),
+            canMute = jsonBool(j, "can_mute"),
         )
     }
 }
@@ -1346,6 +1401,8 @@ data class PmPeer(
     val bio: String = "",
     val role: String = "user",
     val createdAt: String = "",
+    /** 管理员标签 (契约 F1), 私聊页顶部显示 */
+    val tags: List<String> = emptyList(),
 ) {
     val displayName: String get() = nickname.ifBlank { username }
 
@@ -1360,6 +1417,7 @@ data class PmPeer(
             bio = jsonStr(j, "bio"),
             role = jsonStr(j, "role").ifBlank { "user" },
             createdAt = jsonStr(j, "created_at"),
+            tags = jsonStrList(j, "tags"),
         )
     }
 }
@@ -1404,6 +1462,8 @@ data class PmConversation(
     val username: String = "",
     val nickname: String = "",
     val avatar: String = "",
+    /** 对方的管理员标签 (契约 F1), 会话列表昵称旁显示 */
+    val tags: List<String> = emptyList(),
     /** 最新一条消息 (null = 会话里还没有消息) */
     val last: PmMessage? = null,
     val lastTime: String = "",
@@ -1424,6 +1484,7 @@ data class PmConversation(
                 username = if (u == null) "" else jsonStr(u, "username"),
                 nickname = if (u == null) "" else jsonStr(u, "nickname"),
                 avatar = if (u == null) "" else jsonStr(u, "avatar"),
+                tags = if (u == null) emptyList() else jsonStrList(u, "tags"),
                 last = j.optJSONObject("last")?.let { PmMessage.fromJson(it) },
                 lastTime = jsonStr(j, "last_time"),
                 unread = jsonInt(j, "unread"),
