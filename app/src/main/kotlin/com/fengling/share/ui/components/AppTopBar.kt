@@ -5,8 +5,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
@@ -28,12 +30,15 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * AppTopBar - 统一顶栏 (完全自定义, 紧凑标题 16sp)
  * 背景 surface 覆盖状态栏区域 (不显空白)
  * 标题单行省略, 可选返回按钮 / 右侧操作
+ *
+ * titleTags: 标题后面跟的警示标签 chip (管理员给用户打的标签, 传空则不占位)
  */
 @Composable
 fun AppTopBar(
     title: String,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    titleTags: List<String> = emptyList(),
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
@@ -61,18 +66,27 @@ fun AppTopBar(
                 )
             }
         }
-        // 标题 (16sp 紧凑, 单行省略)
-        Text(
-            text = title,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Medium,
-            color = MiuixTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        // 标题 (16sp 紧凑, 单行省略) + 可选标签 chip
+        Row(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 8.dp),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = MiuixTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (titleTags.isNotEmpty()) {
+                Spacer(Modifier.width(6.dp))
+                TagChips(tags = titleTags, max = 2, small = true)
+            }
+        }
         // 右侧操作
         actions()
     }
