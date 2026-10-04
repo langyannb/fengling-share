@@ -55,6 +55,7 @@ import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
+import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.CaptchaDialog
 import kotlinx.coroutines.CoroutineScope
@@ -1028,6 +1029,8 @@ private fun ProfileView(
                         // 后端作废失败也不阻塞本地退出
                         ApiClient.logoutAccount()
                         UserStore.clear()
+                        // 主动退出就把后台常驻服务停掉: 没 token 的连接留着只会白挂一条常驻通知
+                        MessageService.stop(context)
                         Toast.makeText(context, "已退出登录", Toast.LENGTH_SHORT).show()
                     }
                 }) {

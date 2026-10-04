@@ -73,6 +73,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
+import com.fengling.share.data.PendingNav
+import com.fengling.share.service.MessageService
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
@@ -98,6 +100,7 @@ import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MessagesScreen
+import com.fengling.share.ui.main.my.NotifySettingsScreen
 import com.fengling.share.ui.pm.PmChatScreen
 import com.fengling.share.ui.user.UserProfileScreen
 import com.fengling.share.ui.main.my.MyScreen
@@ -129,6 +132,8 @@ object Routes {
     // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
     const val SOCIAL_GROUP = "social/group/{groupId}?messageId={messageId}&notice={notice}"
     const val MESSAGES = "messages"
+    // 消息通知设置 (后台接收开关 + 通知/电池优化/自启动 权限引导)
+    const val NOTIFY_SETTINGS = "settings/notify"
     // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知 进入)
     const val PM_CHAT = "pm/chat?convId={convId}&userId={userId}&messageId={messageId}"
     // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
@@ -181,6 +186,30 @@ fun MainScreen(
 
     // 私聊新消息提示音 (不管停在哪个 tab 都能听到; 见文件末尾 PmNotifyWatcher)
     PmNotifyWatcher()
+
+    // ---------- 点通知直达会话 (v1.0.35) ----------
+    // 链路: 通知 PendingIntent 带 open_pm_conv / open_group -> MainActivity 解析写 PendingNav
+    //      -> 这里收集后真正导航 -> 立刻 consume 清空 (免得重复跳)。
+    // 复用消息中心那条老路径 (MessagesScreen 里 pm:<cid>:<mid> 的处理方式): 先切底部 tab, 再压栈到会话页。
+    LaunchedEffect(Unit) {
+        PendingNav.target.collect { target ->
+            val t = target ?: return@collect
+            PendingNav.consume()
+            if (!UserStore.isLoggedIn()) return@collect
+            when {
+                t.groupId > 0 -> {
+                    // 群聊在「群组」tab 里
+                    pagerState.scrollToPage(SOCIAL_TAB_PAGE)
+                    navController.navigate(Routes.socialGroup(t.groupId))
+                }
+                t.pmConvId > 0 -> {
+                    // 私聊会话列表也在「群组」tab 里, 先切过去再压栈, 返回时落点才自然
+                    pagerState.scrollToPage(SOCIAL_TAB_PAGE)
+                    navController.navigate(Routes.pmChat(convId = t.pmConvId))
+                }
+            }
+        }
+    }
 
     // 未登录时左右滑动也不许停在「群组」页 (3 = 0 首页 / 1 分类 / 2 群组 / 3 关于)
     var lastAllowedPage by remember { mutableStateOf(0) }
@@ -382,6 +411,9 @@ fun MainScreen(
                                 onOpenMessages = {
                                     navController.navigate(Routes.MESSAGES)
                                 },
+                                onOpenNotifySettings = {
+                                    navController.navigate(Routes.NOTIFY_SETTINGS)
+                                },
                             )
                         }
                     }
@@ -503,6 +535,13 @@ fun MainScreen(
                 onOpenPm = { convId, messageId ->
                     navController.navigate(Routes.pmChat(convId = convId, messageId = messageId))
                 },
+            )
+        }
+
+        // 消息通知设置 (我的 -> 消息通知): 后台接收开关 + 权限引导
+        composable(Routes.NOTIFY_SETTINGS) {
+            NotifySettingsScreen(
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -798,14 +837,17 @@ private fun PmNotifyWatcher() {
         }
     }
 
-    // ---------- SSE 实时流: 按「前台 + 已登录」启停 ----------
-    // 整个 App 只维持这一条连接; 退到后台立刻断开 (省电), 回到前台再连。
-    // key 带上 hasToken: 登录/退出后立刻重估, 不用等下次切前后台。
+    // ---------- 后台常驻服务: 按「已登录 + 开关」启停 (v1.0.35) ----------
+    // 那条唯一的 SSE 连接从 MainScreen 搬到了 MessageService (前台服务): 退到后台/桌面也不断,
+    // 才能像 QQ/微信一样秒收。这里只负责把「该不该跑」这个状态摆正, 不再按 foreground 断连。
+    // - 已登录 + 开关打开 -> 拉起服务 (幂等, 已在跑就什么都不做)
+    // - 未登录 -> 停掉服务 (没 token 挂着也是白发一条常驻通知)
+    // 用户在设置页关开关时那边会自己 stopService, 这里不会把它又拉起来。
+    // key 带上 foreground: 从设置页返回/回到前台时重新对一次状态。
     LaunchedEffect(foreground, UserStore.hasToken) {
-        if (foreground && UserStore.isLoggedIn()) {
-            MessageStream.start(context)
-        } else {
-            MessageStream.stop()
+        when {
+            UserStore.isLoggedIn() && Settings.msgServiceOn -> MessageService.start(context)
+            !UserStore.isLoggedIn() -> MessageService.stop(context)
         }
     }
 

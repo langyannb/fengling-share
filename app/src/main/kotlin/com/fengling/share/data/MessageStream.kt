@@ -1,16 +1,9 @@
 package com.fengling.share.data
 
-import android.content.Context
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 
 /**
  * 实时消息事件 (SSE 契约 A 章节)
@@ -57,24 +50,26 @@ sealed interface StreamEvent {
 }
 
 /**
- * 实时消息流 (SSE 长连接)
+ * 实时消息事件总线 (SSE 长连接)
  *
- * 设计要点:
- * - 全局单例: 整个 App 只维持**一条**连接, 由 MainScreen 按前后台启停, 各页面只订阅不重连。
+ * 设计要点 (v1.0.35 起):
+ * - **连接的持有者搬到了 [com.fengling.share.service.MessageService]**(常驻前台服务),
+ *   这里只剩下「事件总线」这一个职责: 服务 [emit] 事件, 各页面订阅 [events]。
+ *   这样退到后台连接也不断, 才能像 QQ/微信一样秒收。
+ * - 全局单例: 整个 App 只维持**一条**连接, 各页面只订阅不自己重连。
  * - 对外只暴露只读的 [events], 页面拿不到也改不了内部的 MutableSharedFlow。
- * - 自动重连: 每次断开 (含服务端 25 秒正常收尾) 都等 [RECONNECT_DELAY_MS] 再连, 失败也继续,
- *   异常一律内部吞掉, 绝不抛给 UI —— 轮询兜底还在, 流挂了顶多回到「慢一点」。
+ * - 缓冲区满了丢最旧的 (DROP_OLDEST): 保证 UI 一定拿到「最新的」消息, 不会被老消息堵住。
  */
 object MessageStream {
 
-    /** 断线重连间隔 (毫秒): 与服务端 `retry: 2000` 一致 */
-    private const val RECONNECT_DELAY_MS = 2000L
+    /** 断线重连间隔 (毫秒): 与服务端 `retry: 2000` 一致 (MessageService 主循环用) */
+    const val RECONNECT_DELAY_MS = 2000L
 
     /**
      * 一次连接至少活过这么久才算「真的连上了」。
      * 服务端认得 token 时连接会一直挂着 (最长 25 秒), 用它把「刚建连就失败」区分出来。
      */
-    private const val CONNECTED_MIN_MS = 3000L
+    const val CONNECTED_MIN_MS = 3000L
 
     private val _events = MutableSharedFlow<StreamEvent>(
         extraBufferCapacity = 128,
@@ -84,52 +79,13 @@ object MessageStream {
     /** 页面订阅这个 (只读) */
     val events: SharedFlow<StreamEvent> = _events.asSharedFlow()
 
-    /** 连接协程跑在自己的 scope 上, 和任何页面的生命周期都无关 */
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    private var job: Job? = null
-
-    /** 启动流 (幂等); 由 MainScreen 在「前台 + 已登录」时调用 */
-    fun start(context: Context) {
-        // context 只做「调用方确实有 Android 环境」的标记, 内部不持有它 (绝不持有 Activity);
-        // 未登录时直接不连, 登录后 MainScreen 会再调一次 (key 带了 hasToken)
-        if (!UserStore.isLoggedIn()) return
-        if (job?.isActive == true) return
-        job = scope.launch { runForever() }
-    }
-
-    /** 停止流: 取消连接协程 (内部会顺手 cancel 掉 OkHttp Call, 不留悬挂连接) */
-    fun stop() {
-        job?.cancel()
-        job = null
-    }
-
-    /** 流是否在跑 */
-    val running: Boolean get() = job?.isActive == true
-
     /**
-     * 连接主循环: 连 -> 断开 -> 等 2 秒 -> 再连, 永不退出。
-     * 未登录时只空转等待, 不浪费连接 (登录后下一次循环自然就连上了)。
+     * 投递一个事件 (只有 MessageService 调)。
+     *
+     * 用 tryEmit (非挂起): 服务在 IO 线程回调里调它, 不能阻塞读流;
+     * 缓冲区满会丢最旧的, 不会卡住 SSE 解析。
      */
-    private suspend fun runForever() {
-        var firstConnect = true
-        while (true) {
-            if (!UserStore.isLoggedIn()) {
-                firstConnect = true
-                delay(RECONNECT_DELAY_MS)
-                continue
-            }
-            val beganAt = System.currentTimeMillis()
-            val result = runCatching {
-                ApiClient.streamMessages { event -> _events.tryEmit(event) }
-            }.getOrElse { Result.failure<Unit>(it) }
-            // 「连上了」= 服务端正常收尾 (isSuccess) 或这条连接活了够久 (中途断的)
-            val connected = result.isSuccess ||
-                System.currentTimeMillis() - beganAt >= CONNECTED_MIN_MS
-            // 第一次连接不算「重连」, 不广播 —— 免得一进 App 所有页面就各刷一次
-            if (!firstConnect && connected) _events.tryEmit(StreamEvent.Reconnected)
-            firstConnect = false
-            delay(RECONNECT_DELAY_MS)
-        }
+    fun emit(event: StreamEvent) {
+        _events.tryEmit(event)
     }
 }

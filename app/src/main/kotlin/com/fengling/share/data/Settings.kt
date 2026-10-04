@@ -95,4 +95,15 @@ object Settings {
     var noticeShownContent: String
         get() = prefs.getString("notice_shown_content", "") ?: ""
         set(value) = prefs.edit().putString("notice_shown_content", value).apply()
+
+    // ===== 后台常驻消息服务 (v1.0.35) =====
+    /**
+     * 是否开启「后台接收消息」(常驻前台服务, key = msg_service_on)。
+     *
+     * 默认 **true**: 登录后就应该像 QQ/微信一样在后台秒收消息;
+     * 用户想省电/不想看到状态栏常驻通知时, 可在「我的 → 消息通知」里关掉。
+     */
+    var msgServiceOn: Boolean
+        get() = prefs.getBoolean("msg_service_on", true)
+        set(value) = prefs.edit().putBoolean("msg_service_on", value).apply()
 }
