@@ -242,6 +242,10 @@ fun SocialScreen(
     onOpenGroupInfo: ((groupId: Int) -> Unit)? = null,
     /** 页面级捕获层 (MainScreen 的 backdrop): 液体玻璃分段控件用它做真实 backdrop 模糊 */
     glassBackdrop: Backdrop? = null,
+    /** 「群组 / 私聊」分段选中值 (0 群组 / 1 私聊), 由 MainScreen 常驻持有后传入 (契约 A) */
+    initialTab: Int = 0,
+    /** 分段切换回调: 状态提升到 MainScreen, 切底部 Tab / 导航返回都不会丢 (契约 A) */
+    onTabChange: ((Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -268,9 +272,11 @@ fun SocialScreen(
     // 顶部「群组 / 私聊」分段: 只在底部 tab 常驻模式显示
     // (从「消息」点通知进来的全屏页 onBack != null, 直接进群聊/私聊, 不需要分段)
     val showTabs = onBack == null && onOpenGroup != null
-    // 契约 A: 分段选中状态改成 rememberSaveable, 从私聊会话页/群聊返回后不再掉回「群组」
-    // (原来用 remember, 返回时 SocialScreen 重建 → 状态丢, 用户 2026-10-05 反馈的 bug)
-    var tab by rememberSaveable { mutableStateOf(0) }
+    // 契约 A(强化): 分段选中值不再由本页自己持有 —— 页面重建 (导航返回 / 切底部 Tab 回收) 时,
+    // 页面内 remember / rememberSaveable 都可能丢, 用户反馈的「私聊进会话返回掉回群组」就是这样。
+    // 现在改成受控: 值由 MainScreen 常驻层传入, 切换时回调上报, 页面怎么重建都不受影响。
+    val tab = initialTab
+    val selectTab: (Int) -> Unit = { v -> if (v != tab) onTabChange?.invoke(v) }
     // 私聊未读总数 (契约 B2): 只用来画顶部「私聊」分段上的红点
     var pmUnread by remember { mutableStateOf(0) }
 
@@ -511,7 +517,7 @@ fun SocialScreen(
                     LiquidSegmentedBar(
                         tabs = listOf("群组", "私聊"),
                         selected = tab,
-                        onSelect = { tab = it },
+                        onSelect = { selectTab(it) },
                         // 注意: 不能用 MainScreen 的 backdrop —— 该层捕获范围包含本控件自身,
                         // 自引用会让 hwui 的 RenderNode 树无限递归 (真机 SIGSEGV stack overflow),
                         // 且本控件在流内布局、背后无滚动内容可模糊, 故退化为半透明+描边玻璃。

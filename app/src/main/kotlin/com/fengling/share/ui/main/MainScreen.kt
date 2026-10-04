@@ -235,6 +235,12 @@ fun MainScreen(
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
 
+    // 契约 A(强化): 「群组 / 私聊」分段的选中值提升到这里 (MainScreen 常驻组合) 持有。
+    // 原来放在 SocialScreen 内部 —— 导航返回能靠 rememberSaveable 保住, 但切底部 Tab 时
+    // pager 页面会被回收重建, 页面内状态照样丢。放这里就不随任何页面销毁:
+    // 1 私聊进会话返回仍停「私聊」 2 群聊返回仍停「群组」 3 切底部 Tab 来回切仍保持 4 冷启动默认「群组」
+    var socialTab by rememberSaveable { mutableIntStateOf(0) }
+
     // 私聊新消息提示音 (不管停在哪个 tab 都能听到; 见文件末尾 PmNotifyWatcher)
     PmNotifyWatcher()
 
@@ -432,6 +438,9 @@ fun MainScreen(
                             2 -> SocialScreen(
                                 // 「群组」tab: 常驻列表页, 无返回栏; 点群组进全屏聊天
                                 onBack = null,
+                                // 契约 A: 分段选中值由本层持有并回传 (受控), 页面重建也不丢
+                                initialTab = socialTab,
+                                onTabChange = { socialTab = it },
                                 onOpenGroup = { g -> navController.navigate(Routes.socialGroup(g.id)) },
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
