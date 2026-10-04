@@ -52,6 +52,7 @@ import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.service.MessageService
+import com.fengling.share.ui.components.PermissionGuideHost
 import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.main.MainScreen
 import com.fengling.share.ui.theme.AppTheme
@@ -116,6 +117,8 @@ class MainActivity : ComponentActivity() {
                         },
                     )
                 }
+                // 启动自动权限引导 (v1.0.36): 通知系统框 -> 应用内一键允许 -> 厂商自启动提示
+                PermissionGuideHost()
                 // 全局强制更新弹窗 (覆盖所有页面, 不可关闭)
                 forceUpdateInfo?.let { info ->
                     ForceUpdateDialog(info = info)

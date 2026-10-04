@@ -1,11 +1,6 @@
 package com.fengling.share.ui.main.my
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.os.PowerManager
-import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,11 +27,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.NotificationManagerCompat
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.utils.PermissionHelper
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -63,8 +58,8 @@ fun NotifySettingsScreen(
 
     var serviceOn by remember { mutableStateOf(Settings.msgServiceOn) }
     var running by remember { mutableStateOf(MessageService.isRunning) }
-    var notifGranted by remember { mutableStateOf(notifEnabled(context)) }
-    var batteryFree by remember { mutableStateOf(ignoringBattery(context)) }
+    var notifGranted by remember { mutableStateOf(PermissionHelper.notificationsEnabled(context)) }
+    var batteryFree by remember { mutableStateOf(PermissionHelper.ignoringBattery(context)) }
 
     // 通知权限: 系统弹框申请, 拒了就提示 (后面还有「去系统设置」兜底入口)
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -80,8 +75,8 @@ fun NotifySettingsScreen(
     LaunchedEffect(Unit) {
         while (true) {
             running = MessageService.isRunning
-            notifGranted = notifEnabled(context)
-            batteryFree = ignoringBattery(context)
+            notifGranted = PermissionHelper.notificationsEnabled(context)
+            batteryFree = PermissionHelper.ignoringBattery(context)
             delay(1000L)
         }
     }
@@ -211,7 +206,7 @@ fun NotifySettingsScreen(
                             valueHighlight = !notifGranted,
                             onClick = {
                                 if (notifGranted) {
-                                    openNotificationSettings(context)
+                                    PermissionHelper.openNotificationSettings(context)
                                 } else {
                                     permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                                 }
@@ -222,14 +217,14 @@ fun NotifySettingsScreen(
                             summary = "不让系统在息屏/省电时冻结这条连接, 否则消息会延迟",
                             value = if (batteryFree) "已允许" else "去设置",
                             valueHighlight = !batteryFree,
-                            onClick = { openIgnoreBatterySettings(context) },
+                            onClick = { PermissionHelper.openIgnoreBatterySettings(context) },
                         )
                         SettingActionRow(
                             title = "自启动 / 后台运行",
                             summary = "小米/华为/OPPO/vivo 等国产系统要手动允许, 否则服务被清理后不会自动重连",
                             value = "去设置",
                             valueHighlight = false,
-                            onClick = { openAutoStartSettings(context) },
+                            onClick = { PermissionHelper.openAutoStartSettings(context) },
                             last = true,
                         )
                     }
@@ -341,106 +336,3 @@ private fun ExplainBody(text: String) {
         color = MiuixTheme.colorScheme.onBackgroundVariant,
     )
 }
-
-// ==================== 系统设置跳转 ====================
-
-/** 通知总开关 (用户可能在系统设置里把整个应用的通知关了) */
-private fun notifEnabled(context: Context): Boolean =
-    runCatching { NotificationManagerCompat.from(context).areNotificationsEnabled() }
-        .getOrDefault(false)
-
-/** 是否已在电池优化白名单里 */
-private fun ignoringBattery(context: Context): Boolean = runCatching {
-    val pm = context.getSystemService(PowerManager::class.java) ?: return@runCatching false
-    pm.isIgnoringBatteryOptimizations(context.packageName)
-}.getOrDefault(false)
-
-/**
- * 厂商「自启动」页: 依次尝试, 跳不动 (没这个 Activity / 被系统拦) 就试下一个,
- * 全都不行最后落到应用详情页 —— 用户总能在那里找到「自启动 / 后台运行」开关。
- */
-private fun openAutoStartSettings(context: Context) {
-    for ((pkg, cls) in AUTOSTART_PAGES) {
-        val intent = Intent().apply {
-            component = ComponentName(pkg, cls)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            // 魅族那页要显式告诉它看哪个包
-            if (pkg == "com.meizu.safe") putExtra("packageName", context.packageName)
-        }
-        if (runCatching { context.startActivity(intent) }.isSuccess) return
-    }
-    openAppDetailSettings(context)
-}
-
-/** 忽略电池优化: 优先带包名的直接白名单申请, 不行退到列表页, 再不行退到应用详情 */
-private fun openIgnoreBatterySettings(context: Context) {
-    val direct = runCatching {
-        context.startActivity(
-            Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:${context.packageName}")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            },
-        )
-    }.isSuccess
-    if (direct) return
-
-    val list = runCatching {
-        context.startActivity(
-            Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            },
-        )
-    }.isSuccess
-    if (list) return
-
-    openAppDetailSettings(context)
-}
-
-/** 通知设置页 (申请被拒过 / 已授予时用这个看详情) */
-private fun openNotificationSettings(context: Context) {
-    val ok = runCatching {
-        context.startActivity(
-            Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                putExtra(AndroidSettings.EXTRA_APP_PACKAGE, context.packageName)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            },
-        )
-    }.isSuccess
-    if (!ok) openAppDetailSettings(context)
-}
-
-/** 最后的兜底: 应用详情页 (所有系统都有) */
-private fun openAppDetailSettings(context: Context) {
-    runCatching {
-        context.startActivity(
-            Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.parse("package:${context.packageName}")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            },
-        )
-    }
-}
-
-/** 各家「自启动 / 后台运行」入口, 顺序 = 尝试顺序 */
-private val AUTOSTART_PAGES: List<Pair<String, String>> = listOf(
-    // 小米 / 红米 / POCO
-    "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
-    // 华为
-    "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
-    "com.huawei.systemmanager" to "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity",
-    // 荣耀
-    "com.hihonor.systemmanager" to "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
-    "com.hihonor.systemmanager" to "com.hihonor.systemmanager.appcontrol.activity.StartupAppControlActivity",
-    // OPPO / 一加 / realme
-    "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
-    "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
-    "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
-    // vivo / iQOO
-    "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
-    "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
-    // 魅族
-    "com.meizu.safe" to "com.meizu.safe.security.SHOW_APPSEC",
-    // 三星
-    "com.samsung.android.lool" to "com.samsung.android.sm.ui.battery.BatteryActivity",
-    "com.samsung.android.sm" to "com.samsung.android.sm.ui.battery.BatteryActivity",
-)
