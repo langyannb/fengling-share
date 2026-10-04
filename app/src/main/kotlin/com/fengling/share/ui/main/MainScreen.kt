@@ -41,12 +41,16 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,6 +75,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
+import com.fengling.share.utils.NotifySound
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
@@ -171,6 +176,9 @@ fun MainScreen(
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // 私聊新消息提示音 (不管停在哪个 tab 都能听到; 见文件末尾 PmNotifyWatcher)
+    PmNotifyWatcher()
 
     // 未登录时左右滑动也不许停在「群组」页 (3 = 0 首页 / 1 分类 / 2 群组 / 3 关于)
     var lastAllowedPage by remember { mutableStateOf(0) }
@@ -744,4 +752,69 @@ private fun NoticeDialog(
             }
         }
     }
+}
+
+/**
+ * 私聊新消息提示音 (仅 App 前台生效)
+ *
+ * 每 8 秒静默拉一次私聊会话列表, 发现「别人发来的」新消息就响一声系统通知音。
+ * 放在 MainScreen 里做, 这样用户停在哪个页面都能听到, 不用每个页面各写一份。
+ *
+ * 注意: 只在 App 处于前台时轮询 (ON_RESUME ~ ON_PAUSE)。想做到「退到后台也响」
+ * 必须有常驻前台服务, 属于另一个量级的改动, 暂未做。
+ */
+@Composable
+private fun PmNotifyWatcher() {
+    val context = LocalContext.current
+    val foreground = rememberAppForeground()
+    // 已经见过的最新私聊消息 id; -1 = 还没建立基线 (首次只记录, 不响, 免得一进 App 就响)
+    var seenMaxId by remember { mutableStateOf(-1) }
+
+    LaunchedEffect(foreground) {
+        if (!foreground) return@LaunchedEffect
+        while (true) {
+            if (UserStore.isLoggedIn()) {
+                ApiClient.pmConversations().getOrNull()?.let { page ->
+                    // 只看「别人发给我的」最后一条: 自己发的不算, 撤回后字段也会是空
+                    val newestIncoming = page.list
+                        .mapNotNull { it.last }
+                        .filter { !it.mine }
+                        .maxOfOrNull { it.id } ?: 0
+                    when {
+                        seenMaxId < 0 -> seenMaxId = newestIncoming
+                        newestIncoming > seenMaxId -> {
+                            seenMaxId = newestIncoming
+                            NotifySound.play(context)
+                        }
+                    }
+                }
+            }
+            kotlinx.coroutines.delay(8000L)
+        }
+    }
+}
+
+/**
+ * 本页面是否处于前台 (ON_RESUME ~ ON_PAUSE)
+ *
+ * 从 LocalContext 拿 ComponentActivity 注册 LifecycleEventObserver,
+ * 不引额外依赖 (Lifecycle/ LifecycleEventObserver 来自项目已有的 lifecycle-common)。
+ */
+@Composable
+private fun rememberAppForeground(): Boolean {
+    val context = LocalContext.current
+    val owner = context as? LifecycleOwner
+    var foreground by remember { mutableStateOf(true) }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> foreground = true
+                Lifecycle.Event.ON_PAUSE -> foreground = false
+                else -> Unit
+            }
+        }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
+    return foreground
 }
