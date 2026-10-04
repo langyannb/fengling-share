@@ -732,19 +732,35 @@ fun PmChatScreen(
             },
             text = {
                 Column {
-                    PmActionRow(text = "放大查看图片", danger = false, onClick = {
-                        if (acting.image.isNotBlank()) previewImage = acting.image else onToast("这条消息没有图片")
-                        actionTarget = null
-                    })
-                    PmActionRow(text = "保存到相册", danger = false, onClick = {
-                        val img = acting.image
-                        actionTarget = null
-                        saveImageToGallery(img)
-                    })
-                    PmActionRow(text = "复制", danger = false, onClick = {
-                        copyMessage(acting.content)
-                        actionTarget = null
-                    })
+                    // 菜单顶部先展示这条消息的摘要, 免得点错
+                    Text(
+                        text = if (acting.image.isNotBlank()) "[图片]"
+                        else acting.content.replace('\n', ' ').take(60),
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    // 图片消息才有: 全屏看大图 / 存进系统相册
+                    if (acting.image.isNotBlank()) {
+                        PmActionRow(text = "放大查看", danger = false, onClick = {
+                            actionTarget = null
+                            previewImage = acting.image
+                        })
+                        PmActionRow(text = "保存到相册", danger = false, onClick = {
+                            val img = acting.image
+                            actionTarget = null
+                            saveImageToGallery(img)
+                        })
+                    }
+                    // 纯图片消息没有文字, 不显示「复制」
+                    if (acting.content.isNotBlank()) {
+                        PmActionRow(text = "复制", danger = false, onClick = {
+                            actionTarget = null
+                            copyMessage(acting.content)
+                        })
+                    }
                     if (!acting.isRecalled && acting.mine) {
                         PmActionRow(text = "撤回", danger = true, onClick = {
                             actionTarget = null
