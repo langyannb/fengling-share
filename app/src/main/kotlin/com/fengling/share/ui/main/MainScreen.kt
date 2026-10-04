@@ -2,6 +2,7 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -66,6 +67,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.navigation.NamedNavArgument
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -170,6 +174,44 @@ object Routes {
  * - Navigation 返回栈: main → detail → webview
  * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
  */
+
+/**
+ * 契约 B: NavHost 每个目的地统一补齐四段转场 (进入 / 退出 / 返回进入 / 返回退出)。
+ *
+ * 进入 = 右侧滑入 (与页面切换方向一致);
+ * 返回 = 当前页轻微右滑 + 缩小淡出, 上一级放大淡入 —— 与系统预测返回手势的跟手动画无缝衔接
+ * (manifest enableOnBackInvokedCallback=true 时, 松手提交后就是这段转场)。
+ * 规格统一写在这里, 新增目的地直接 appScreen(route) 即可, 不会再出现「有的页面有动画有的没有」。
+ */
+private fun NavGraphBuilder.appScreen(
+    route: String,
+    arguments: List<NamedNavArgument> = emptyList(),
+    content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit,
+) {
+    val slideSpec = spring<IntOffset>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    val popSpec = spring<Float>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    composable(
+        route = route,
+        arguments = arguments,
+        enterTransition = { slideInHorizontally(slideSpec) { it } + fadeIn(slideSpec) },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it } + fadeOut(slideSpec) },
+        popEnterTransition = {
+            slideInHorizontally(slideSpec) { -it / 4 } + fadeIn(popSpec) +
+                scaleIn(initialScale = 0.96f, animationSpec = popSpec)
+        },
+        popExitTransition = {
+            slideOutHorizontally(slideSpec) { it / 4 } + fadeOut(popSpec) +
+                scaleOut(targetScale = 0.94f, animationSpec = popSpec)
+        },
+        content = content,
+    )
+}
 
 @Composable
 fun MainScreen(
@@ -357,7 +399,7 @@ fun MainScreen(
             scaleOut(targetScale = 0.9f, animationSpec = popSpec) + fadeOut(animationSpec = popSpec)
         },
     ) {
-        composable(Routes.MAIN) {
+        appScreen(Routes.MAIN) {
             // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (kyant/backdrop, 不用 Scaffold bottomBar 槽位)
             Box(
                 Modifier
@@ -401,6 +443,8 @@ fun MainScreen(
                                 onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
                                 // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
                                 onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
+                                // 页面级捕获层: 「群组 / 私聊」液体玻璃分段控件用它做真实 backdrop 模糊
+                                glassBackdrop = backdrop,
                             )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
@@ -447,7 +491,7 @@ fun MainScreen(
         }
 
         // 详情页
-        composable(
+        appScreen(
             route = Routes.DETAIL,
             arguments = listOf(navArgument("appId") { type = NavType.IntType }),
         ) { backStackEntry ->
@@ -466,7 +510,7 @@ fun MainScreen(
         }
 
         // 内置浏览器
-        composable(
+        appScreen(
             route = Routes.WEBVIEW,
             arguments = listOf(
                 navArgument("url") { type = NavType.StringType; defaultValue = "" },
@@ -486,21 +530,21 @@ fun MainScreen(
         }
 
         // 投稿名单页
-        composable(Routes.CONTRIBUTORS) {
+        appScreen(Routes.CONTRIBUTORS) {
             ContributorsScreen(
                 onBack = { navController.popBackStack() },
             )
         }
 
         // 账号页 (登录 / 注册 / 个人资料)
-        composable(Routes.ACCOUNT) {
+        appScreen(Routes.ACCOUNT) {
             AccountScreen(
                 onBack = { navController.popBackStack() },
             )
         }
 
         // 群组聊天页 (从「群组」tab 点进来, 直接进入指定群)
-        composable(
+        appScreen(
             route = Routes.SOCIAL_GROUP,
             arguments = listOf(
                 navArgument("groupId") { type = NavType.IntType },
@@ -528,11 +572,12 @@ fun MainScreen(
                 onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
                 // 群聊右上角「☰」: 进群详情页 (群公告 / 群相册 / 群成员 / 退出群聊)
                 onOpenGroupInfo = { gid -> navController.navigate(Routes.groupInfo(gid)) },
+                glassBackdrop = backdrop,
             )
         }
 
         // 群详情页 (契约 B6): 群公告 / 群相册 / 群成员 / 消息免打扰 / 全员禁言 / 退出群聊
-        composable(
+        appScreen(
             route = Routes.GROUP_INFO,
             arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
         ) { backStackEntry ->
@@ -547,7 +592,7 @@ fun MainScreen(
         }
 
         // 群成员列表页 (契约 B6): 搜索昵称 / 用户名 + 分页 + 点成员进主页
-        composable(
+        appScreen(
             route = Routes.GROUP_MEMBERS,
             arguments = listOf(
                 navArgument("groupId") { type = NavType.IntType },
@@ -563,7 +608,7 @@ fun MainScreen(
         }
 
         // 消息中心 (通知列表; link 走统一链接分流, http(s) 内置浏览器)
-        composable(Routes.MESSAGES) {
+        appScreen(Routes.MESSAGES) {
             MessagesScreen(
                 onBack = { navController.popBackStack() },
                 onOpenWeb = { url, title ->
@@ -581,14 +626,14 @@ fun MainScreen(
         }
 
         // 消息通知设置 (我的 -> 消息通知): 后台接收开关 + 权限引导
-        composable(Routes.NOTIFY_SETTINGS) {
+        appScreen(Routes.NOTIFY_SETTINGS) {
             NotifySettingsScreen(
                 onBack = { navController.popBackStack() },
             )
         }
 
         // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己; 自己看时没有「发消息」按钮)
-        composable(
+        appScreen(
             route = Routes.USER_PROFILE,
             arguments = listOf(
                 navArgument("userId") { type = NavType.IntType },
@@ -605,7 +650,7 @@ fun MainScreen(
         }
 
         // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知进入)
-        composable(
+        appScreen(
             route = Routes.PM_CHAT,
             arguments = listOf(
                 navArgument("convId") { type = NavType.IntType; defaultValue = 0 },
@@ -626,7 +671,7 @@ fun MainScreen(
         }
 
         // 软件更新页 (OShin 同款: 下载并安装)
-        composable(
+        appScreen(
             route = Routes.UPDATE,
             arguments = listOf(
                 navArgument("version") { type = NavType.StringType; defaultValue = "" },
