@@ -3,6 +3,7 @@ package com.fengling.share.ui.components
 import android.util.Log
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -25,7 +26,7 @@ import kotlinx.coroutines.CancellationException
 private const val TAG = "FLS_BACK"
 
 /** 松手提交后, 页面顺势滑出屏幕用多久 (ms) */
-private const val COMMIT_SLIDE_MS = 150
+private const val COMMIT_SLIDE_MS = 300
 
 /** 提交后等转场收尾再复位本地进度 (ms); 页面若已被销毁, 协程取消, 不会执行 */
 private const val COMMIT_SETTLE_MS = 400L
@@ -74,7 +75,7 @@ fun rememberPredictiveBackProgress(
         // 不能直接 snapTo(1f) 就 onBack + 立刻复位 —— 上一版正是这样: 被弹出的页面会在
         // 同一帧被打回原位再滑出去, 看上去就是「返回之后卡一下」。
         Log.d(TAG, "可预测式返回: 提交")
-        progress.animateTo(1f, tween(durationMillis = COMMIT_SLIDE_MS))
+        progress.animateTo(1f, tween(durationMillis = COMMIT_SLIDE_MS, easing = FastOutSlowInEasing))
         BackReveal.progress = 1f
         onBack()
         // 正常返回时本页会被销毁、协程取消, 下面复位不执行;

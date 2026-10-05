@@ -3,8 +3,10 @@ package com.fengling.share.ui.main
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -193,6 +195,10 @@ private fun NavGraphBuilder.appScreen(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
+    // v1.1.11 返回跟手速度: 用 tween + LinearEasing。
+    // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
+    // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
+    val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
     composable(
         route = route,
         arguments = arguments,
@@ -202,8 +208,8 @@ private fun NavGraphBuilder.appScreen(
         // 返回: 系统手势进度会被 NavHost seek 进这段 pop 转场 —— 上一级从左侧轻微跟入,
         // 当前页整屏右移 (1:1 跟手, 从哪来回哪去)。
         // **不能 fadeIn / scaleIn**: 淡入会让跟手时被让出来的那半屏整片发白。
-        popEnterTransition = { slideInHorizontally(slideSpec) { -it / 4 } },
-        popExitTransition = { slideOutHorizontally(slideSpec) { it } },
+        popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 4 } },
+        popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
         content = content,
     )
 }
@@ -388,14 +394,18 @@ fun MainScreen(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
+    // v1.1.11 返回跟手速度: 用 tween + LinearEasing。
+    // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
+    // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
+    val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
         modifier = Modifier.fillMaxSize(),
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        popEnterTransition = { slideInHorizontally(slideSpec) { -it / 4 } },
-        popExitTransition = { slideOutHorizontally(slideSpec) { it } },
+        popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 4 } },
+        popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
     ) {
         appScreen(Routes.MAIN) {
             // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (kyant/backdrop, 不用 Scaffold bottomBar 槽位)
