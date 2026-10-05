@@ -211,6 +211,18 @@ fun PmChatScreen(
     // v1.1.12 契约第 6 条: 「+」面板 / 表情面板 (互斥, 都在输入栏下面弹出)
     var panelOpen by remember { mutableStateOf(false) }
     var emojiOpen by remember { mutableStateOf(false) }
+    /**
+     * v1.1.14: 私聊同款 —— 面板开着时返回键先收起面板, 面板收完了才退页。
+     * 这一条注册得比下面那条「全屏大图 / 全屏播放」早 → 优先级更低,
+     * 于是两者的先后天然是: 全屏预览 > 面板 > 退页。
+     */
+    BackHandler(enabled = panelOpen || emojiOpen) {
+        if (emojiOpen) {
+            emojiOpen = false
+        } else {
+            panelOpen = false
+        }
+    }
     // 抽奖界面 (「+」面板进入; 和群聊那边同一个 LotteryScreen)
     var showLottery by remember { mutableStateOf(false) }
     // 开面板时收键盘用 (原变量在第 4 条改造里删过, 这里补回来)
@@ -1009,6 +1021,8 @@ fun PmChatScreen(
                                                 videoH = item.videoH,
                                                 durationSec = item.videoDuration,
                                                 cancellable = item.state == SendState.Sending,
+                                                // 100% 之后还有「服务端落盘」一段, 文案切成「服务器处理中…」
+                                                serverProcessing = item.progress >= 100 && item.state == SendState.Sending,
                                                 onCancel = { cancelVideoSend(item.localId) },
                                                 onLongPress = {},
                                             )

@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -491,8 +492,12 @@ fun SocialScreen(
     // 这里又注册了一个后注册的自定义回调把它顶掉 → 手势先按本地的 progress 跟手缩放,
     // 松手完成时本体 snapTo(1f) 再瞬间弹回 0f, 之后才走 NavHost 的转场 → 「一卡二弹」。
     // 现在只在**内嵌模式**(群组列表 + 群聊同屏、不走 NavHost)注册, 路由模式整个交回框架, 一次到位。
+    // v1.1.14: 群聊「+」/ 表情面板是否展开 —— 展开期间把手势返回让给面板自己处理,
+    // 否则一次返回会直接离开群聊 (用户反馈的「开着加号按返回直接就出去了」)
+    var chatPanelOpen by remember { mutableStateOf(false) }
     val backProgress = rememberPredictiveBackProgress(
-        enabled = onBack == null && currentGroup != null,
+        // 面板展开时不参与预测返回: 让 ChatView 里后注册的 BackHandler 先收起面板
+        enabled = onBack == null && currentGroup != null && !chatPanelOpen,
     ) {
         // 契约 B1: 离开群聊回列表之前, 补一次已读上报 + 清掉本地红标
         if (currentGroup != null) leaveCurrentGroup()
@@ -637,6 +642,8 @@ fun SocialScreen(
                             }
                             loadGroups(true, silent = true)
                         },
+                        // v1.1.14: 面板展开期间让预测返回让位 (面板自己处理这次返回)
+                        onPanelVisibilityChanged = { chatPanelOpen = it },
             // 不透明底: 列表层现在常驻在下面, 群聊层若还是透的就会「隔着聊天看见列表」
             // (v1.1.8 的毛病)。铺一层与页面一致的渐变底, 跟手时移动的是一张实心页面。
             modifier = Modifier
@@ -1012,6 +1019,12 @@ private fun ChatView(
     onOpenUser: ((Int, Int) -> Unit)? = null,
     /** 点「加入群聊」成功后回调: 上层刷新群资料(成员数/isMember)与群列表 (契约 B3) */
     onJoined: () -> Unit = {},
+    /**
+     * 面板(「+」/ 表情)展开状态变化回调 (v1.1.14)。
+     * 页面级的预测返回注册得比 ChatView 早, 面板开着时它会抢走返回手势 → 一次返回直接退页。
+     * 所以把面板状态报给上层, 让上层把预测返回关掉, 这次返回交给 ChatView 自己的 BackHandler。
+     */
+    onPanelVisibilityChanged: (Boolean) -> Unit = {},
     /** 页面级捕获层: 输入栏 / 顶栏做毛玻璃用, null 时自动退化为半透明底 (契约 C) */
     glassBackdrop: Backdrop? = null,
     /** 群聊层自己的 modifier: 群组页拿它做可预测式返回的跟手变换 (v1.1.8) */
@@ -1039,6 +1052,20 @@ private fun ChatView(
     // v1.1.12 契约第 6 条: 「+」面板 / 表情面板 (互斥, 都在输入栏下面弹出)
     var panelOpen by remember { mutableStateOf(false) }
     var emojiOpen by remember { mutableStateOf(false) }
+    /**
+     * v1.1.14: 面板开着时返回键**先收起面板**, 面板收完了才轮到页面自身的返回。
+     * 原来两个面板都没接管返回键, 面板开着时一次返回就直接退出群聊 / 退回列表。
+     * 顺序上这里比 SocialScreen 的预测返回注册得晚 → 优先级更高, 这次返回由这里吃掉。
+     */
+    BackHandler(enabled = panelOpen || emojiOpen) {
+        if (emojiOpen) {
+            emojiOpen = false
+        } else {
+            panelOpen = false
+        }
+    }
+    // 面板状态报给上层: 面板展开期间上层不注册预测返回, 免得两边抢同一次返回手势
+    LaunchedEffect(panelOpen, emojiOpen) { onPanelVisibilityChanged(panelOpen || emojiOpen) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
     // Wave 2 (1.1.13) 视频消息: 全屏播放的视频地址 (空串 = 不显示)
@@ -2188,6 +2215,8 @@ private fun ChatView(
                                         videoH = item.videoH,
                                         durationSec = item.videoDuration,
                                         cancellable = item.state == SendState.Sending,
+                                        // 100% 之后还有「服务端落盘」一段, 文案切成「服务器处理中…」
+                                        serverProcessing = item.progress >= 100 && item.state == SendState.Sending,
                                         onCancel = { cancelVideoSend(item.localId) },
                                         onLongPress = {},
                                     )

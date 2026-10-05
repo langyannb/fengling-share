@@ -245,6 +245,12 @@ fun VideoSendingBubble(
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 10.dp,
+    /**
+     * 字节已经 100% 发完, 还在等服务端落存储 + 写库 (v1.1.14)。
+     * 用户反馈「发到 100% 后还要等很久才真正发出去」, 之前一直停在 100% 像卡死;
+     * 现在这一段明确写成「服务器处理中…」, 让这段等待有解释。
+     */
+    serverProcessing: Boolean = false,
 ) {
     val (w, h) = videoBubbleSize(videoW, videoH)
     val pct = progress.coerceIn(0, 100)
@@ -296,7 +302,12 @@ fun VideoSendingBubble(
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = if (cancellable) "点击取消" else "发送中",
+                // 100% 之后还剩「服务端落盘 + 写库」这一段, 单独给个文案, 别让它看起来是卡住
+                text = when {
+                    serverProcessing -> "服务器处理中…"
+                    cancellable -> "点击取消"
+                    else -> "发送中"
+                },
                 color = Color.White.copy(alpha = 0.9f),
                 fontSize = 10.sp,
             )
