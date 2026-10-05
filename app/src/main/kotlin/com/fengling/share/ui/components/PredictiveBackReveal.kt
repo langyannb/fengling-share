@@ -54,7 +54,6 @@ object BackReveal {
 
     private val shots = LinkedHashMap<String, ImageBitmap>()
     private var pending: ImageBitmap? = null
-    private var pendingRoute: String? = null
     private var capturing = false
 
     /**
@@ -87,7 +86,6 @@ object BackReveal {
                     val small = Bitmap.createScaledBitmap(full, sw, sh, true)
                     if (small !== full) full.recycle()
                     pending = small.asImageBitmap()
-                    pendingRoute = targetRoute
                     Log.d(TAG, "已记录上一级画面 -> " + targetRoute)
                 }
             } catch (t: Throwable) {
@@ -117,13 +115,18 @@ object BackReveal {
         }
     }
 
-    /** 目的地变化: pending 与路由配对成功就转正, 并把 behind 换成当前路由自己的上一级画面 */
+    /**
+     * 目的地变化: 刚截下的那一帧就是「上一级画面」, 直接记到新路由名下。
+     *
+     * v1.1.10 修: 不再拿路由字符串配对 —— 带参数的导航目的地 (例如
+     * user_profile/{userId}/{groupId}) 在 destination.route 里是**模板**,
+     * 而 captureBeforeNavigate 拿到的是填好参数的 user_profile/17/1, 两者永远配不上,
+     * behind 一直是 null, 表现就是用户看到的「返回过程中一片空白」。
+     */
     fun onDestinationChanged(route: String?) {
         val shot = pending
-        val shotRoute = pendingRoute
         pending = null
-        pendingRoute = null
-        if (shot != null && route != null && route == shotRoute) {
+        if (shot != null && route != null) {
             shots.remove(route)
             shots[route] = shot
             while (shots.size > MAX_SHOTS) {

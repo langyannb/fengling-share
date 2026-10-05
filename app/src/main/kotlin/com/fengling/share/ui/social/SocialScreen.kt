@@ -534,11 +534,7 @@ fun SocialScreen(
             val listBackdrop = rememberLayerBackdrop()
             val tabTopSpace = if (showTabs && currentGroup == null) SegmentBarHeight + 16.dp else 0.dp
             Box(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .layerBackdrop(listBackdrop),
-                ) {
+                Box(modifier = Modifier.fillMaxSize()) {
                 val group = currentGroup
                 // 群聊层与列表层**同时**组合: 跟手右滑时露出来的是真实的群列表, 不是一片背景色
                 // (用 when 二选一就做不到 ColorOS 16 的「从哪来回哪去」)。
@@ -547,7 +543,10 @@ fun SocialScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .then(if (group != null) Modifier.listBehindTransform(backProgress) else Modifier),
+                        .then(if (group != null) Modifier.listBehindTransform(backProgress) else Modifier)
+                        // v1.1.10: 背景捕获层只框住「列表」这一层 —— 群聊层滑走时它采样到的
+                        // 就是下面那份真实列表; 以前框住两层, 采到上一帧的群聊画面 = 重影/透明感
+                        .layerBackdrop(listBackdrop),
                 ) {
                     when {
                         // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)

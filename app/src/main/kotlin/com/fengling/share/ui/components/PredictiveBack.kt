@@ -12,8 +12,12 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
@@ -128,3 +132,34 @@ fun Modifier.listBehindTransform(progress: State<Float>): Modifier = this.graphi
     scaleX = 0.90f + 0.10f * p
     scaleY = 0.90f + 0.10f * p
 }
+
+
+/**
+ * 跟手返回期间把「背景折射」静音 (v1.1.10)
+ *
+ * 移动中的页面如果继续采样背景层, 采到的永远是**上一帧、还没移动**的那份画面 ——
+ * 表现为拖影/重影, 看着就像「透明了、糊在一起」(1.1.8/1.1.9 用户报的就是这个)。
+ * 跟手时干脆不折射 (玻璃退化成半透明面板), 松手立即恢复。
+ *
+ * 判断放在绘制阶段 (在 drawBackdrop 里读 BackReveal.progress): 只触发重绘、不触发重组,
+ * 所以不会在起手那一下引起掉帧。
+ */
+private class RevealMutedBackdrop(
+    private val inner: com.kyant.backdrop.Backdrop,
+) : com.kyant.backdrop.Backdrop {
+    override val isCoordinatesDependent: Boolean
+        get() = inner.isCoordinatesDependent
+
+    override fun DrawScope.drawBackdrop(
+        density: Density,
+        coordinates: LayoutCoordinates?,
+        layerBlock: (GraphicsLayerScope.() -> Unit)?,
+    ) {
+        if (BackReveal.progress > 0f) return
+        with(inner) { drawBackdrop(density, coordinates, layerBlock) }
+    }
+}
+
+/** 给 backdrop 套上「跟手期间不折射」的壳 (见 [RevealMutedBackdrop]) */
+fun com.kyant.backdrop.Backdrop.mutedDuringReveal(): com.kyant.backdrop.Backdrop =
+    RevealMutedBackdrop(this)
