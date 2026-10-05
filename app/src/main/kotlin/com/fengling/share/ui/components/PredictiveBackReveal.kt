@@ -13,12 +13,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
@@ -51,6 +53,15 @@ object BackReveal {
     /** 当前页面「下面」那一屏的画面 (手势进行中显示) */
     var behind by mutableStateOf<ImageBitmap?>(null)
         private set
+
+    /**
+     * 关掉「快照铺底」(v1.1.10)。
+     *
+     * 群组页那种「列表与群聊长在同一个 composable」的场景, 被露出的是**活着的列表**,
+     * 不能再盖一层快照 (盖上去就变成旧照片, 反而看不出是列表)。
+     */
+    var suppress by mutableStateOf(false)
+        internal set
 
     private val shots = LinkedHashMap<String, ImageBitmap>()
     private var pending: ImageBitmap? = null
@@ -147,32 +158,56 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-/** 挂在 NavHost 上: 手势进行中, 先在页面内容下方把「上一级画面」画出来 */
-fun Modifier.backRevealBackdrop(): Modifier = drawBehind { drawRevealBackdrop() }
+/**
+ * 挂在 NavHost 的 modifier 上: 内容画完之后, 只在「已经被让出来的那一条」里补上「上一级画面」。
+ *
+ * v1.1.10 修: 以前是 drawBehind 画在 NavHost 内容**下面** —— 只要上一级页面自己有不透明底色
+ * (群组页 / 成员列表 / 用户主页 / 抽奖页都铺了 appGradientBackground), 快照就被整片盖住,
+ * 表现就是用户看到的「返回过程一片空白」。改成内容之上 + 按进度裁剪, 就不会再被盖。
+ */
+fun Modifier.backRevealOverlay(): Modifier = drawWithContent {
+    drawContent()
+    drawRevealStripe()
+}
 
-internal fun DrawScope.drawRevealBackdrop() {
-    val p = BackReveal.progress
+internal fun DrawScope.drawRevealStripe() {
+    if (BackReveal.suppress) return
+    val p = BackReveal.progress.coerceIn(0f, 1f)
     if (p <= 0f) return
-    val shot = BackReveal.behind ?: return
-    val q = p.coerceIn(0f, 1f)
+    // 正在跟手的那一页左边缘 = p * 宽度 (与 predictiveBackTransform 的 slideFraction = 1f 对齐)
+    val stripe = size.width * p
+    if (stripe <= 1f) return
+    val shot = BackReveal.behind
 
-    // 上一级: 从 0.90 放大回 1.0, 并带一点点左向视差 (跟手越深越"到位")
-    val scale = 0.90f + 0.10f * q
-    val dstW = size.width * scale
-    val dstH = size.height * scale
-    val left = (size.width - dstW) / 2f - size.width * 0.05f * (1f - q)
-    val top = (size.height - dstH) / 2f
-    drawImage(
-        image = shot,
-        srcOffset = IntOffset.Zero,
-        srcSize = IntSize(shot.width, shot.height),
-        dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
-        dstSize = IntSize(dstW.roundToInt(), dstH.roundToInt()),
-    )
-
-    // 越接近全屏越亮 (和系统一致: 上一级是"正在被拉回来"的那一屏)
-    val scrim = 0.28f * (1f - q)
-    if (scrim > 0.001f) {
-        drawRect(color = Color.Black, topLeft = Offset.Zero, size = size, alpha = scrim)
+    clipRect(left = 0f, top = 0f, right = stripe, bottom = size.height) {
+        if (shot != null) {
+            // 略微放大并居中: 既有「被拉回来」的一点点视差, 又保证不露缝
+            val scale = 1f + 0.03f * (1f - p)
+            val dstW = size.width * scale
+            val dstH = size.height * scale
+            drawImage(
+                image = shot,
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(shot.width, shot.height),
+                dstOffset = IntOffset(
+                    ((size.width - dstW) / 2f).roundToInt(),
+                    ((size.height - dstH) / 2f).roundToInt(),
+                ),
+                dstSize = IntSize(dstW.roundToInt(), dstH.roundToInt()),
+            )
+        } else {
+            // 没有快照 (例如深链直接进来): 至少铺一层底色, 别把窗口底色露出来
+            drawRect(color = Color.Black, alpha = 0.18f * p)
+        }
+        // 越接近全屏越亮 (和系统一致: 上一级是"正在被拉回来"的那一屏)
+        val scrim = 0.22f * (1f - p)
+        if (scrim > 0.001f) {
+            drawRect(
+                color = Color.Black,
+                topLeft = Offset.Zero,
+                size = Size(stripe, size.height),
+                alpha = scrim,
+            )
+        }
     }
 }

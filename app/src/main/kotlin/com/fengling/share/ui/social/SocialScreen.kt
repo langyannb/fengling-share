@@ -117,6 +117,7 @@ import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.fengling.share.ui.components.AppGradientBackground
+import com.fengling.share.ui.components.BackReveal
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.GlassSpacing
@@ -536,6 +537,10 @@ fun SocialScreen(
             Box(modifier = Modifier.fillMaxSize()) {
                 Box(modifier = Modifier.fillMaxSize()) {
                 val group = currentGroup
+                // 群组页内页 (列表↔群聊同屏): 被露出的是**活着的列表**, 别让快照盖一层旧照片上去
+                val inChat = group != null
+                LaunchedEffect(inChat) { BackReveal.suppress = inChat }
+                DisposableEffect(Unit) { onDispose { BackReveal.suppress = false } }
                 // 群聊层与列表层**同时**组合: 跟手右滑时露出来的是真实的群列表, 不是一片背景色
                 // (用 when 二选一就做不到 ColorOS 16 的「从哪来回哪去」)。
                 Box(modifier = Modifier.fillMaxSize()) {

@@ -100,7 +100,7 @@ import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
 import com.fengling.share.ui.components.navigation.LiquidBottomBar
 import com.fengling.share.ui.components.BackReveal
-import com.fengling.share.ui.components.backRevealBackdrop
+import com.fengling.share.ui.components.backRevealOverlay
 import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
@@ -415,10 +415,10 @@ fun MainScreen(
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
-        // 手势进行中先在下面铺出「上一级画面」, 再画当前页面 -> 侧滑一半就能看见上一级
+        // 手势进行中, 在被让出来的那一条里补上「上一级画面」-> 侧滑一半就能看见上一级
         modifier = Modifier
             .fillMaxSize()
-            .backRevealBackdrop(),
+            .backRevealOverlay(),
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it } },
         // 返回: 预测返回风格 — 当前页缩小淡出, 上一级放大淡入
