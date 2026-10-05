@@ -68,9 +68,11 @@ import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.LinkText
 import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.normalizeUrl
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -109,6 +111,8 @@ fun GroupInfoScreen(
     onOpenMembers: (groupId: Int) -> Unit = {},
     onOpenUser: ((userId: Int, groupId: Int) -> Unit)? = null,
     onLeft: () -> Unit = {},
+    /** v1.1.12: 群公告里的链接点开走内置浏览器 */
+    onOpenWeb: ((url: String, title: String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -363,6 +367,7 @@ fun GroupInfoScreen(
                             notice = g.notice,
                             expanded = noticeExpanded,
                             canEdit = isAdmin || isOwner,
+                            onOpenWeb = onOpenWeb,
                             onToggle = { noticeExpanded = !noticeExpanded },
                             onEdit = {
                                 noticeDraft = g.notice
@@ -639,6 +644,7 @@ private fun NoticeCard(
     canEdit: Boolean,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
+    onOpenWeb: ((url: String, title: String) -> Unit)? = null,
 ) {
     Card(
         cornerRadius = GlassRadius.card,
@@ -683,13 +689,17 @@ private fun NoticeCard(
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             } else {
-                Text(
-                    text = notice,
-                    fontSize = 13.sp,
+                // v1.1.12: 公告里的链接可点 (内置浏览器); 点普通文字仍然是「展开 / 收起」
+                LinkText(
+                    content = notice,
                     color = MiuixTheme.colorScheme.onBackground,
+                    linkColor = MiuixTheme.colorScheme.primary,
+                    fontSize = 13.sp,
                     maxLines = if (expanded) Int.MAX_VALUE else 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().clickable { onToggle() },
+                    onTap = { url ->
+                        if (url == null) onToggle() else onOpenWeb?.invoke(normalizeUrl(url), "群公告")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(

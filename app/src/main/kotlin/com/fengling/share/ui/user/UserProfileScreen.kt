@@ -47,8 +47,10 @@ import com.fengling.share.data.UserProfile
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.LinkText
 import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.normalizeUrl
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
@@ -80,6 +82,8 @@ fun UserProfileScreen(
     onOpenPm: ((userId: Int, convId: Int) -> Unit)? = null,
     groupId: Int = 0,
     onMuteChanged: (() -> Unit)? = null,
+    /** v1.1.12: 简介里的链接点开走内置浏览器 */
+    onOpenWeb: ((url: String, title: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -425,10 +429,15 @@ fun UserProfileScreen(
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                         )
                         Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = p.bio.ifBlank { "这个人很懒，什么也没留下" },
-                            fontSize = 14.sp,
+                        // v1.1.12: 简介里的链接可点 (内置浏览器), 点普通文字无动作
+                        LinkText(
+                            content = p.bio.ifBlank { "这个人很懒，什么也没留下" },
                             color = MiuixTheme.colorScheme.onBackground,
+                            linkColor = MiuixTheme.colorScheme.primary,
+                            fontSize = 14.sp,
+                            onTap = { url ->
+                                if (url != null) onOpenWeb?.invoke(normalizeUrl(url), "用户简介")
+                            },
                         )
                     }
                 }

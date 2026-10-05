@@ -597,6 +597,8 @@ fun MainScreen(
                 onBack = { navController.popBackStack() },
                 onOpenMembers = { id -> go(Routes.groupMembers(id)) },
                 onOpenUser = { uid, id -> go(Routes.userProfile(uid, id)) },
+                // 群公告里的链接: 走内置浏览器
+                onOpenWeb = { url, title -> openLink(url, title) },
                 // 退出群聊成功: 直接回群列表 (群详情页 + 群聊页一起弹掉)
                 onLeft = { navController.popBackStack(Routes.MAIN, false) },
             )
@@ -657,6 +659,8 @@ fun MainScreen(
                 groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
                 onBack = { navController.popBackStack() },
                 onOpenPm = { uid, cid -> go(Routes.pmChat(convId = cid, userId = uid)) },
+                // 用户简介里的链接: 走内置浏览器
+                onOpenWeb = { url, title -> openLink(url, title) },
             )
         }
 

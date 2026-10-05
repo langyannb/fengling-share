@@ -45,13 +45,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CardGiftcard
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -76,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -131,7 +138,17 @@ import com.fengling.share.ui.components.appGradientBackground
 import com.fengling.share.ui.components.listBehindTransform
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
+import com.fengling.share.ui.components.LinkText
+import com.fengling.share.ui.components.ChatEmojiPanel
+import com.fengling.share.ui.components.ChatPanelItem
+import com.fengling.share.ui.components.ChatPlusPanel
 import com.fengling.share.ui.components.MuteOptionPicker
+import com.fengling.share.ui.components.bitmapToJpeg
+import com.fengling.share.ui.components.SendState
+import com.fengling.share.ui.components.SendStatusIndicator
+import com.fengling.share.ui.components.ZoomableImage
+import com.fengling.share.ui.components.linkify
+import com.fengling.share.ui.components.normalizeUrl
 import com.fengling.share.ui.components.TagChips
 import com.fengling.share.ui.lottery.LotteryScreen
 import com.fengling.share.ui.pm.PmScreen
@@ -164,9 +181,6 @@ private const val POLL_INTERVAL_MS = 2000L
 
 /** 群消息内容里的 @昵称 (中文/字母/数字/下划线, 不含空白与 @) */
 private val MENTION_REGEX = Regex("@[^\\s@]{1,20}")
-
-/** 消息里的链接: 点一下用内置浏览器打开 */
-private val URL_REGEX = Regex("https?://[^\\s@，。；、）)\"]+")
 
 /** 聊天页顶栏「三条横杠」菜单 / 公告弹框的共享状态 (顶栏在 SocialScreen, 聊天内容在 ChatView) */
 private class ChatMenuState {
@@ -1005,10 +1019,14 @@ private fun ChatView(
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
+    // v1.1.12 乐观发送: 本地临时消息 (发送中转圈 / 失败可点重发), 服务端返回后用真实消息替换
+    var outgoing by remember { mutableStateOf<List<OutgoingMsg>>(emptyList()) }
     // 图片上传中: 上传期间禁用发送/选图, 防止重复上传
     var uploading by remember { mutableStateOf(false) }
     // 输入框左侧「+」菜单是否展开 (图片 / @某人 / 群公告)
-    var plusMenuOpen by remember { mutableStateOf(false) }
+    // v1.1.12 契约第 6 条: 「+」面板 / 表情面板 (互斥, 都在输入栏下面弹出)
+    var panelOpen by remember { mutableStateOf(false) }
+    var emojiOpen by remember { mutableStateOf(false) }
     // 全屏查看的图片地址 (空串 = 不显示)
     var previewImage by remember { mutableStateOf("") }
     // 上滑加载更早的消息: 服务端还有没有更早的一页 + 是否正在拉更早的一页
@@ -1051,6 +1069,18 @@ private fun ChatView(
         snapshotFlow { isStuckToBottom() }.collect { bottom ->
             atBottom = bottom
             if (bottom) newWhileAway = 0
+        }
+    }
+
+    /**
+     * 契约第 6 条「全员禁言」: 管理员在群里直接开关本群全体禁言。
+     * 用的是群详情页同一个接口 (ApiClient.socialGroupAllMuteSet); 开关状态由上层轮询群列表刷新。
+     */
+    fun setAllMuted(m: Boolean) {
+        scope.launch {
+            ApiClient.socialGroupAllMuteSet(group.id, m)
+                .onSuccess { onToast(if (m) "已开启全员禁言" else "已关闭全员禁言") }
+                .onFailure { e -> onToast(e.message ?: "操作失败") }
         }
     }
 
@@ -1480,38 +1510,90 @@ private fun ChatView(
         }
     }
 
+    /**
+     * v1.1.12 乐观发送: 发送按钮不再被「发送中」门控 (只看内容非空, 连点两条也能各自发出去)。
+     * 点下去立刻清空输入框 + 把本地临时消息挂到列表尾部 (转圈「发送中」), 服务端返回后再换成真实消息。
+     * 失败 (含服务端 2 秒 1 条的限流错误) 只把这一条标成失败态, 不弹 toast 打断, 点红色感叹号重发。
+     * 焦点和键盘都不动 —— 只有用户自己点别处 / 返回才收键盘 (契约第 4 条)。
+     */
     fun doSend() {
         val text = input.text.trim()
-        if (text.isEmpty() || sending) return
+        if (text.isEmpty()) return
         // 全员禁言 (v1.1.1): 普通成员在本地就拦住; 服务端还会再拦一次并返回中文错误
         if (group.allMuted && !isAdmin) {
             onToast("全员禁言中, 仅群管理员可发言")
             return
         }
-        sending = true
-        scope.launch {
-            // 管理员 + (选过「所有人」或内容里写了 @所有人) -> 全体提醒
-            val wantAll = isAdmin && (atAllPicked || text.contains("@所有人"))
-            val quoteId = quoteTarget?.id ?: 0
-            ApiClient.socialSend(
-                group.id,
-                text,
-                (resolveMentionIds(text) + pickedAt).distinct(),
-                atAll = wantAll,
+        // 管理员 + (选过「所有人」或内容里写了 @所有人) -> 全体提醒
+        val wantAll = isAdmin && (atAllPicked || text.contains("@所有人"))
+        val quoted = quoteTarget
+        val quoteId = quoted?.id ?: 0
+        val mentionIds = (resolveMentionIds(text) + pickedAt).distinct()
+        val seq = LOCAL_MSG_SEQ.incrementAndGet()
+        val localId = "local-$seq"
+        // 立刻: 清输入框 (focusInput 重新抓住焦点, 键盘不收) + 本地临时消息追加到列表尾部
+        input = TextFieldValue("")
+        pickedAt = emptyList()
+        atAllPicked = false
+        quoteTarget = null
+        focusInput()
+        outgoing = outgoing + OutgoingMsg(
+            localId = localId,
+            text = text,
+            mentionIds = mentionIds,
+            atAll = wantAll,
+            quoteId = quoteId,
+            state = SendState.Sending,
+            message = SocialMessage(
+                // 本地临时消息用负 id: 永远不会和服务端 id 撞上, 也方便一眼看出是本地占位
+                id = -seq,
+                groupId = group.id,
+                userId = me?.id ?: 0,
+                nickname = me?.displayName.orEmpty(),
+                avatar = me?.avatar.orEmpty(),
+                role = me?.role ?: "user",
+                content = text,
                 quoteId = quoteId,
-            )
-                .onSuccess {
-                    input = TextFieldValue("")
-                    pickedAt = emptyList()
-                    atAllPicked = false
-                    quoteTarget = null
-                    val after = messages.maxOfOrNull { it.id } ?: 0
-                    ApiClient.socialMessages(group.id, afterId = after)
-                        .onSuccess { new -> mergeNew(new, forceScroll = true) }
+                quoteNickname = quoted?.nickname.orEmpty(),
+                quoteContent = quoted?.content.orEmpty(),
+                createdAt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date()),
+            ),
+        )
+        scope.launch { performSend(localId) }
+    }
+
+    /** 真正把一条本地临时消息发给服务端: 成功 = 移除本地占位 + 立刻拉真实消息, 失败 = 标成失败态 */
+    suspend fun performSend(localId: String) {
+        val item = outgoing.firstOrNull { it.localId == localId } ?: return
+        ApiClient.socialSend(
+            group.id,
+            item.text,
+            item.mentionIds,
+            atAll = item.atAll,
+            quoteId = item.quoteId,
+        )
+            .onSuccess {
+                outgoing = outgoing.filterNot { it.localId == localId }
+                val after = messages.maxOfOrNull { it.id } ?: 0
+                ApiClient.socialMessages(group.id, afterId = after)
+                    .onSuccess { new -> mergeNew(new, forceScroll = true) }
+            }
+            .onFailure {
+                // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
+                outgoing = outgoing.map {
+                    if (it.localId == localId) it.copy(state = SendState.Failed) else it
                 }
-                .onFailure { e -> onToast(e.message ?: "发送失败") }
-            sending = false
+            }
+    }
+
+    /** 点失败消息上的红色感叹号: 重发同一条 (第二条又失败就再次回到失败态) */
+    fun retrySend(localId: String) {
+        if (outgoing.none { it.localId == localId }) return
+        outgoing = outgoing.map {
+            if (it.localId == localId) it.copy(state = SendState.Sending) else it
         }
+        scope.launch { performSend(localId) }
     }
 
     /**
@@ -1610,6 +1692,45 @@ private fun ChatView(
         }
     }
 
+    /**
+     * 契约第 6 条「拍摄」: 调系统相机拍一张 → 缩略图压成 JPEG → 走和相册完全同一条上传 + 发送链路。
+     * TakePicturePreview 不落文件、不需要 FileProvider, 拿到的就是小图, 刚好够聊天里发。
+     */
+    val cameraShot = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bmp ->
+        if (bmp != null) {
+            uploading = true
+            scope.launch {
+                val bytes = withContext(Dispatchers.IO) { runCatching { bitmapToJpeg(bmp) }.getOrNull() }
+                if (bytes == null || bytes.isEmpty()) {
+                    uploading = false
+                    onToast("读取照片失败, 请重拍一张")
+                } else {
+                    ApiClient.uploadChatImage(bytes, "chat.jpg", "image/jpeg")
+                        .onSuccess { img ->
+                            ApiClient.socialSend(
+                                group.id,
+                                "",
+                                at = emptyList(),
+                                quoteId = quoteTarget?.id ?: 0,
+                                image = img.url,
+                                imageW = img.width,
+                                imageH = img.height,
+                            )
+                                .onSuccess {
+                                    quoteTarget = null
+                                    val after = messages.maxOfOrNull { it.id } ?: 0
+                                    ApiClient.socialMessages(group.id, afterId = after)
+                                        .onSuccess { new -> mergeNew(new) }
+                                }
+                                .onFailure { e -> onToast(e.message ?: "照片发送失败") }
+                        }
+                        .onFailure { e -> onToast(e.message ?: "照片上传失败") }
+                    uploading = false
+                }
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1674,7 +1795,7 @@ private fun ChatView(
                             onTap = { url ->
                                 if (url != null) {
                                     if (onOpenWeb != null) {
-                                        onOpenWeb(url, group.name)
+                                        onOpenWeb(normalizeUrl(url), group.name)
                                     } else {
                                         onToast("没有可用的内置浏览器")
                                     }
@@ -1738,7 +1859,7 @@ private fun ChatView(
                             // 消息里的链接: 用内置浏览器打开
                             onOpenLink = { url ->
                                 if (onOpenWeb != null) {
-                                    onOpenWeb(url, group.name)
+                                    onOpenWeb(normalizeUrl(url), group.name)
                                 } else {
                                     onToast("没有可用的内置浏览器")
                                 }
@@ -1769,6 +1890,39 @@ private fun ChatView(
                                 onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
                             },
                         )
+                        }
+                    }
+
+                    // v1.1.12 乐观发送: 本地临时消息挂在列表最尾部 —— 转圈 = 发送中, 红色感叹号 = 失败可重发
+                    items(outgoing, key = { it.localId }) { item ->
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            MessageRow(
+                                msg = item.message,
+                                // 本地临时消息一定是自己发的
+                                mine = true,
+                                canRecall = false,
+                                onLongPress = {},
+                                onOpenLink = { url ->
+                                    if (onOpenWeb != null) {
+                                        onOpenWeb(normalizeUrl(url), group.name)
+                                    } else {
+                                        onToast("没有可用的内置浏览器")
+                                    }
+                                },
+                                onImageTap = { url -> previewImage = url },
+                                modifier = messageItemEnter(),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(end = 14.dp),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                SendStatusIndicator(
+                                    state = item.state,
+                                    onRetry = { retrySend(item.localId) },
+                                )
+                            }
                         }
                     }
                 }
@@ -1915,77 +2069,30 @@ private fun ChatView(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 「+」: 图片 / @某人 / (管理员) 群公告 都收进这个菜单。
-            // 原来「公告」「图片」「@」三个按钮并排摆着, 把输入框挤得又窄又不齐 (用户反馈布局有问题)
-            Box {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
-                        .border(1.dp, glassStroke(), CircleShape)
-                        .clickable { if (canSpeak) plusMenuOpen = true },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = "图片 / @某人 / 群公告",
-                        tint = MiuixTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-                DropdownMenu(
-                    expanded = plusMenuOpen,
-                    onDismissRequest = { plusMenuOpen = false },
-                ) {
-                    // 图片: 系统相册选图 → 上传 → 发送 (上传/发送期间禁用, 避免重复上传)
-                    DropdownMenuItem(
-                        text = { Text(if (uploading) "图片 (上传中…)" else "图片") },
-                        enabled = !uploading && !sending,
-                        onClick = {
-                            plusMenuOpen = false
-                            pickChatImage.launch("image/*")
-                        },
-                    )
-                    // @某人: 只是入口从原来的「@」按钮挪进了这里, 功能不变
-                    DropdownMenuItem(
-                        text = { Text("@某人") },
-                        onClick = {
-                            plusMenuOpen = false
-                            openMentionPicker()
-                        },
-                    )
-                    // 抽奖: 打开抽奖界面 (全屏 Dialog 承载 LotteryScreen)
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Filled.CardGiftcard,
-                                    contentDescription = null,
-                                    tint = MiuixTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("抽奖")
-                            }
-                        },
-                        onClick = {
-                            plusMenuOpen = false
-                            showLottery = true
-                        },
-                    )
-                    // 管理员: 顺手把群公告的入口也收进来
-                    if (isAdmin) {
-                        DropdownMenuItem(
-                            text = { Text(if (noticeText.isBlank()) "发布群公告" else "编辑群公告") },
-                            onClick = {
-                                plusMenuOpen = false
-                                menu.draft = noticeText
-                                menu.showNoticeEditor = true
-                            },
-                        )
-                    }
-                }
+            // 「+」: QQ 那种圆钮 —— 点开在下面弹出「+」面板。
+            // 老下拉菜单 (图片/@某人/抽奖/群公告) 的能力全部平移进面板, 一个都没少, 另外补上拍摄与表情。
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
+                    .border(1.dp, glassStroke(), CircleShape)
+                    .clickable {
+                        if (canSpeak) {
+                            emojiOpen = false
+                            panelOpen = !panelOpen
+                            // 契约第 6 条: 开面板的同时收起键盘
+                            if (panelOpen) keyboard?.hide()
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (panelOpen) Icons.Filled.Close else Icons.Filled.Add,
+                    contentDescription = if (panelOpen) "收起更多功能" else "更多功能",
+                    tint = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
             }
             Spacer(Modifier.width(8.dp))
             Box(Modifier.weight(1f)) {
@@ -2018,33 +2125,151 @@ private fun ChatView(
                     maxLines = 4,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .focusRequester(inputFocus),
+                        .focusRequester(inputFocus)
+                        // 用户自己点回输入框: 面板让位给键盘 (和 QQ 一致)
+                        .onFocusChanged { st ->
+                            if (st.isFocused) {
+                                panelOpen = false
+                                emojiOpen = false
+                            }
+                        },
                 )
             }
             Spacer(Modifier.width(8.dp))
-            // 发送: 发送中/上传中都给文案反馈, 上传期间不允许重复发送
-            Card(
-                onClick = { if (!uploading && !sending) doSend() },
-                modifier = Modifier,
-                cornerRadius = 18.dp,
-            ) {
+            // 契约第 6 条: 有文字 = 发送胶囊 (只判断内容非空, 不再被「发送中」门控); 没文字 = 表情圆钮, 发送隐藏
+            if (input.text.isNotEmpty()) {
+                Card(
+                    onClick = { doSend() },
+                    modifier = Modifier,
+                    cornerRadius = 18.dp,
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "发送",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MiuixTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            } else {
                 Box(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
+                        .border(1.dp, glassStroke(), CircleShape)
+                        .clickable {
+                            panelOpen = false
+                            emojiOpen = !emojiOpen
+                            if (emojiOpen) keyboard?.hide()
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        text = when {
-                            uploading -> "上传中"
-                            sending -> "发送中"
-                            else -> "发送"
-                        },
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MiuixTheme.colorScheme.primary,
+                    Icon(
+                        imageVector = Icons.Filled.EmojiEmotions,
+                        contentDescription = "表情",
+                        tint = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
             }
         }
+        // ===== 「+」面板 (v1.1.12 契约第 6 条): 只放 App 真有的功能 =====
+        val panelItems = buildList {
+            // 相册: 老下拉菜单里的「图片」, 行为完全不变
+            add(
+                ChatPanelItem("album", "相册", Icons.Filled.PhotoLibrary) {
+                    panelOpen = false
+                    pickChatImage.launch("image/*")
+                },
+            )
+            // 拍摄: 新加的, 调系统相机拍一张发出去
+            add(
+                ChatPanelItem("camera", "拍摄", Icons.Filled.PhotoCamera) {
+                    panelOpen = false
+                    if (uploading) {
+                        onToast("上一张还在上传, 稍等一下")
+                    } else {
+                        runCatching { cameraShot.launch(null) }
+                            .onFailure { onToast("没有可用的相机") }
+                    }
+                },
+            )
+            // 抽奖
+            add(
+                ChatPanelItem("lottery", "抽奖", Icons.Filled.CardGiftcard) {
+                    panelOpen = false
+                    showLottery = true
+                },
+            )
+            // @提醒: 老入口, 功能不变
+            add(
+                ChatPanelItem("mention", "@提醒", Icons.Filled.AlternateEmail) {
+                    panelOpen = false
+                    openMentionPicker()
+                },
+            )
+            // 表情: 往输入框插表情
+            add(
+                ChatPanelItem("emoji", "表情", Icons.Filled.EmojiEmotions) {
+                    panelOpen = false
+                    emojiOpen = true
+                },
+            )
+            add(ChatPanelItem("close", "关闭", Icons.Filled.Close) { panelOpen = false })
+            // 管理员多三项 (普通成员根本看不到, 不留点了没反应的按钮)
+            if (isAdmin) {
+                add(
+                    ChatPanelItem(
+                        "notice",
+                        if (noticeText.isBlank()) "发布群公告" else "编辑群公告",
+                        Icons.Filled.Campaign,
+                    ) {
+                        panelOpen = false
+                        menu.draft = noticeText
+                        menu.showNoticeEditor = true
+                    },
+                )
+                add(
+                    ChatPanelItem(
+                        "allmute",
+                        if (group.allMuted) "关闭禁言" else "全员禁言",
+                        Icons.Filled.NotificationsOff,
+                    ) {
+                        panelOpen = false
+                        setAllMuted(!group.allMuted)
+                    },
+                )
+                add(
+                    ChatPanelItem("refresh", "刷新消息", Icons.Filled.Refresh) {
+                        panelOpen = false
+                        loadLatest(true)
+                        onToast("已刷新消息")
+                    },
+                )
+            }
+        }
+        ChatPlusPanel(
+            visible = panelOpen,
+            items = panelItems,
+            onClose = { panelOpen = false },
+        )
+        ChatEmojiPanel(
+            visible = emojiOpen,
+            onPick = { e ->
+                if (input.text.length + e.length <= 500) {
+                    input = TextFieldValue(
+                        text = input.text + e,
+                        selection = TextRange(input.text.length + e.length),
+                    )
+                }
+            },
+            onClose = { emojiOpen = false },
+        )
         }
     }
 
@@ -2085,7 +2310,7 @@ private fun ChatView(
                                 onTap = { url ->
                                     if (url != null && onOpenWeb != null) {
                                         menu.showNoticeViewer = false
-                                        onOpenWeb(url, group.name)
+                                        onOpenWeb(normalizeUrl(url), group.name)
                                     } else if (url != null) {
                                         onToast("没有可用的内置浏览器")
                                     }
@@ -2555,10 +2780,11 @@ private fun ChatView(
                     .background(Color.Black)
                     .clickable { previewImage = "" },
             ) {
-                AsyncImage(
-                    model = previewImage,
-                    contentDescription = "查看大图",
-                    contentScale = ContentScale.Fit,
+                // v1.1.12: 双指缩放 1x~5x / 双击放大还原 / 放大后单指拖动平移(边界回弹);
+                // 1x 时点一下仍然是关闭大图 (放大后不会误关)
+                ZoomableImage(
+                    url = previewImage,
+                    onTapWhenNormal = { previewImage = "" },
                     // fillMaxSize + Fit: 无论横竖图都完整显示在屏幕内, 不会被裁掉
                     modifier = Modifier
                         .fillMaxSize()
@@ -2845,7 +3071,7 @@ private fun MessageRow(
                     // 链接要能点(走内置浏览器), 又不能抢掉长按撤回 —— 所以手势自己做在文本上:
                     // onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 URL 注解
                     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-                    val shown = highlightMentions(
+                    val shown = linkify(
                         content = msg.content,
                         mentionColor = if (mine) {
                             Color(0xFFFFE082)
@@ -2899,46 +3125,6 @@ private fun MessageRow(
             }
         }
     }
-}
-
-/** 高亮 @昵称 与链接: @ 用 mentionColor, 链接用 linkColor 并打上 URL 注解 (点击可打开) */
-private fun highlightMentions(
-    content: String,
-    mentionColor: Color,
-    linkColor: Color,
-): AnnotatedString = buildAnnotatedString {
-    var last = 0
-    URL_REGEX.findAll(content).forEach { m ->
-        if (m.range.first > last) {
-            appendPlainWithMentions(content.substring(last, m.range.first), mentionColor)
-        }
-        pushStringAnnotation("URL", m.value)
-        withStyle(
-            SpanStyle(
-                color = linkColor,
-                fontWeight = FontWeight.Medium,
-                textDecoration = TextDecoration.Underline,
-            ),
-        ) {
-            append(m.value)
-        }
-        pop()
-        last = m.range.last + 1
-    }
-    if (last < content.length) appendPlainWithMentions(content.substring(last), mentionColor)
-}
-
-/** 纯文本片段: 只把 @昵称 高亮上去 */
-private fun AnnotatedString.Builder.appendPlainWithMentions(text: String, mentionColor: Color) {
-    var last = 0
-    MENTION_REGEX.findAll(text).forEach { m ->
-        if (m.range.first > last) append(text.substring(last, m.range.first))
-        withStyle(SpanStyle(color = mentionColor, fontWeight = FontWeight.Medium)) {
-            append(m.value)
-        }
-        last = m.range.last + 1
-    }
-    if (last < text.length) append(text.substring(last))
 }
 
 @Composable
@@ -3035,53 +3221,6 @@ private fun rememberIsForeground(): Boolean {
     }
     return foreground
 }
-
-/**
- * 可点击链接文本 (群公告 / 查看公告共用)
- *
- * Coil 之外这里不能用 ClickableText (会和长按手势打架), 所以自己处理手势:
- * onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 highlightMentions 打好的 URL 注解。
- * onTap 收到 null 表示点在普通文字上, 调用方可以拿来做「展开/收起」。
- */
-@Composable
-private fun LinkText(
-    content: String,
-    color: Color,
-    linkColor: Color,
-    fontSize: TextUnit,
-    onTap: ((String?) -> Unit)? = null,
-    maxLines: Int = Int.MAX_VALUE,
-    mentionColor: Color = linkColor,
-    modifier: Modifier = Modifier,
-) {
-    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val shown = remember(content, mentionColor, linkColor) {
-        highlightMentions(content = content, mentionColor = mentionColor, linkColor = linkColor)
-    }
-    Text(
-        text = shown,
-        fontSize = fontSize,
-        color = color,
-        maxLines = maxLines,
-        overflow = TextOverflow.Ellipsis,
-        onTextLayout = { textLayout = it },
-        modifier = modifier.pointerInput(shown.text, onTap) {
-            if (onTap != null) {
-                detectTapGestures(onTap = { pos ->
-                    val lr = textLayout
-                    val url = if (lr == null) {
-                        null
-                    } else {
-                        val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
-                        shown.getStringAnnotations("URL", off, off).firstOrNull()?.item
-                    }
-                    onTap(url)
-                })
-            }
-        },
-    )
-}
-
 
 /**
  * 契约 B3: 未加入这个群时的底部整条按钮 —— 「先加入才能发消息」。
@@ -3206,3 +3345,20 @@ private fun SystemMessageRow(
         }
     }
 }
+
+/**
+ * v1.1.12 乐观发送的本地临时消息 (还没拿到服务端真实 id 就先画出来的那条)。
+ * text/mentionIds/atAll/quoteId 都留着, 失败重发时要原样再发一次。
+ */
+private data class OutgoingMsg(
+    val localId: String,
+    val text: String,
+    val mentionIds: List<Int>,
+    val atAll: Boolean,
+    val quoteId: Int,
+    val message: SocialMessage,
+    val state: SendState,
+)
+
+/** 本地临时消息的序号 (负 id 用), 进程内自增就够 */
+private val LOCAL_MSG_SEQ = java.util.concurrent.atomic.AtomicInteger(0)
