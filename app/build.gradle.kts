@@ -24,8 +24,8 @@ android {
         applicationId = "com.fengling.share"
         minSdk = 33
         targetSdk = 34
-        versionCode = 151
-        versionName = "1.1.14"
+        versionCode = 152
+        versionName = "1.1.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -91,6 +91,8 @@ dependencies {
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    // v1.1.15: 视频封面抽帧 (coil-video 的 VideoFrameDecoder)
+    implementation(libs.coil.video)
     // 视频播放 (ExoPlayer) + 播放缓存 (SimpleCache 300MB LRU) + 上传前压缩
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.datasource)

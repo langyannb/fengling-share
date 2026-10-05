@@ -2,10 +2,14 @@ package com.fengling.share.data
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -77,7 +81,13 @@ object ApiClient {
             val text = response.body?.string() ?: "{}"
             val obj = JSONObject(text)
             if (obj.optInt("code", -1) != 0) {
-                throw ApiException(obj.optString("msg", "请求失败"))
+                // v1.1.15: 顺手带上业务码与 HTTP 状态 —— 以前只有 message, 调用方没法按码分流。
+                // 服务端 (srv_config.php): json_error 的默认 code=1, 非 0 业务码统一落成 HTTP 400。
+                throw ApiException(
+                    message = obj.optString("msg", "请求失败"),
+                    code = obj.optInt("code", -1),
+                    httpStatus = response.code,
+                )
             }
             return obj
         }
@@ -367,10 +377,76 @@ object ApiClient {
         Result.success(block())
     } catch (e: ApiException) {
         if (e.message?.contains("登录已失效") == true) UserStore.clear()
-        Result.failure(Exception(e.message?.takeIf { it.isNotBlank() } ?: "请求失败"))
+        // v1.1.15: 原样保留 ApiException(连同 code/httpStatus), 文案与旧行为一字不差
+        Result.failure(
+            ApiException(
+                message = e.message?.takeIf { it.isNotBlank() } ?: "请求失败",
+                code = e.code,
+                httpStatus = e.httpStatus,
+            ),
+        )
     } catch (e: Exception) {
         Result.failure(Exception(e.userFriendlyMessage()))
     }
+
+    // ===================== 发送串行闸 (v1.1.15) =====================
+
+    /**
+     * 服务端限速文案。PHP api.php 的 pm_send / social_send 对同一发送者 2 秒内只放 1 条,
+     * 触发时是 HTTP 400 + {"code":1,"msg":"发送太快了, 请稍后再试"}。
+     * code=1 是通用业务错码 (srv_config.php 里 json_error 的默认值), 所以只按文案识别。
+     */
+    private fun isSendTooFast(msg: String?): Boolean =
+        msg != null && (msg.contains("发送太快") || msg.contains("太快了"))
+
+    /** 同一个发送键两条消息之间的最小间隔: 服务端窗口是 2 秒, 留 0.4 秒余量提前排好队 */
+    private const val SEND_MIN_GAP_MS = 2400L
+
+    /** 命中限速后每次重试的等待 (再叠一点随机抖动, 免得正好又踩在窗口边界上) */
+    private const val SEND_RETRY_GAP_MS = 2500L
+
+    /** 命中限速最多自动重试几次 (5 次 ≈ 12.5 秒, 全程只显示「发送中」) */
+    private const val SEND_MAX_RETRY = 5
+
+    /**
+     * 私聊发送键: 服务端是 `WHERE from_user = ? ORDER BY id DESC LIMIT 1`,
+     * 也就是**跨所有会话**只允许 2 秒 1 条 —— 所以私聊必须是全局一条队列, 不能按会话各排各的。
+     */
+    const val PM_SEND_GATE = "pm"
+
+    /** 群聊发送键: 服务端是 `WHERE user_id = ? AND group_id = ?`, 按 (人, 群) 限速 */
+    fun groupSendGate(groupId: Int): String = "group:" + groupId
+
+    private val sendMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+    private val sendLastAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * 发送串行闸: 同一个 key 上的发送排队串行, 两条之间至少隔 [SEND_MIN_GAP_MS];
+     * 万一还是命中「发送太快了」这一类限速响应, 按剩余冷却自动重试, 用户永远看不到限速失败。
+     *
+     * 只有真网络错 / 服务器 5xx / 非限速业务错才会把失败交回调用方 (气泡标红, 用户可点重发)。
+     * 文本 / 图片 / 视频三路最终都要过这里 (它们最后都落到 pmSend / socialSend)。
+     */
+    suspend fun <T> sendWithGate(key: String, block: suspend () -> Result<T>): Result<T> =
+        withContext(Dispatchers.IO) {
+            val mutex = sendMutexes.getOrPut(key) { Mutex() }
+            mutex.withLock {
+                var attempt = 0
+                var last: Result<T> = Result.failure(Exception("发送失败"))
+                while (true) {
+                    // 本地提前排队: 距这个 key 上次发送至少 2.4 秒, 从源头避开服务端的 2 秒窗口
+                    val gap = SEND_MIN_GAP_MS - (SystemClock.elapsedRealtime() - (sendLastAt[key] ?: 0L))
+                    if (gap > 0) delay(gap)
+                    last = block()
+                    sendLastAt[key] = SystemClock.elapsedRealtime()
+                    val err = last.exceptionOrNull()
+                    if (err == null || !isSendTooFast(err.message) || attempt >= SEND_MAX_RETRY) break
+                    attempt++
+                    delay(SEND_RETRY_GAP_MS + (0L..400L).random())
+                }
+                last
+            }
+        }
 
     /** 解析 {"token":"...","user":{...}} */
     private fun parseTokenUser(obj: JSONObject): Pair<String, User> {
@@ -1016,7 +1092,7 @@ object ApiClient {
         videoDuration: Int = 0,
         /** 视频字节数 */
         videoSize: Long = 0L,
-    ): Result<Int> = withContext(Dispatchers.IO) {
+    ): Result<Int> = sendWithGate(groupSendGate(groupId)) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
             if (at.isNotEmpty()) {
@@ -1169,7 +1245,7 @@ object ApiClient {
         videoH: Int = 0,
         videoDuration: Int = 0,
         videoSize: Long = 0L,
-    ): Result<PmSendResult> = withContext(Dispatchers.IO) {
+    ): Result<PmSendResult> = sendWithGate(PM_SEND_GATE) {
         apiCall {
             val params = mutableMapOf<String, Any?>("content" to content)
             if (toUser > 0) params["to_user"] = toUser
@@ -1412,7 +1488,18 @@ fun isNewerVersion(latest: String, current: String): Boolean {
     return false
 }
 
-class ApiException(message: String) : Exception(message)
+/**
+ * 服务端业务错误 (v1.1.15 起带上码值)
+ *
+ * @param code 响应 JSON 里的业务码 (0 = 未提供)。注意 PHP 的限速错误用的是默认 code=1,
+ *   而 code=1 是所有业务错误的通用码, 所以**不能**靠它识别「发送太快了」, 只能看 msg 文案。
+ * @param httpStatus HTTP 状态码 (0 = 未提供)。服务端把非 0 业务码统一落成 400。
+ */
+class ApiException(
+    message: String,
+    val code: Int = 0,
+    val httpStatus: Int = 0,
+) : Exception(message)
 
 /**
  * 用户可见错误文案 — 绝不展示原始异常消息

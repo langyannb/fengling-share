@@ -20,6 +20,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -52,7 +53,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,8 +70,6 @@ import android.app.DownloadManager
 import android.os.Environment
 import android.widget.Toast
 import com.fengling.share.ui.components.AppTopBar
-import com.fengling.share.ui.components.predictiveBackTransform
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
@@ -399,6 +400,10 @@ fun WebViewScreen(
         webView.loadUrl(url)
     }
 
+    // v1.1.15: WebView 自己的底色也跟 App 主题背景一致 ——
+    // 网页换页 / 重渲染的空档露出来的是 App 底色, 不再是刺眼的白闪。
+    SideEffect { webView.setBackgroundColor(MiuixTheme.colorScheme.background.toArgb()) }
+
     // 页面离开时: 停加载 + 销毁 WebView 实例 (每次进入都是全新实例, 不残留历史/状态)
     DisposableEffect(Unit) {
         onDispose {
@@ -407,17 +412,20 @@ fun WebViewScreen(
         }
     }
 
-    // 契约 B: 预测性返回 —— 用 PredictiveBackHandler 取代旧式 BackHandler (抢返回、无任何动画)。
-    // enabled 由 canGoBack 这个 state 驱动 (不是直接读 webView.canGoBack() —— 那样不会触发重组,
-    // 就是上面注释里说的「enabled 陈旧」隐患):
-    //   有内部历史 -> 手势跟手把网页滑出去, 松手过半 commit 后 goBack() 回退网页, 未过半回弹;
-    //   没有历史   -> 本回调不接管, 返回交给 Navigation 播 pop 转场回上一页。
-    val backProgress = rememberPredictiveBackProgress(enabled = canGoBack) {
+    // v1.1.15: 这一页**不能**再注册自己的预测返回 (PredictiveBackHandler)。
+    // OnBackPressedDispatcher 是后注册者优先 —— 本页一注册, 就把 navigation-compose 的 NavHost
+    // 自己的预测返回回调顶掉了; NavHost 收不到手势进度, 上一级目的地从头到尾没被组合,
+    // 于是页面跟手右移让出来的左边那条缝没有任何东西可画, 正是用户看到的「返回过程背景一片空白」。
+    //
+    // 现在改成:
+    //   有网页历史 -> 非预测式 BackHandler 直接回退上一页 (页面不位移, 也就没有缝可露);
+    //   没有历史   -> 本页完全不注册, 返回交给 NavHost 框架自己 seek (上一级真实页面跟入)。
+    // 代价只是网页内部回退不再有跟手动画; 空白不可接受, 动画可以让。
+    BackHandler(enabled = canGoBack) {
         webView.goBack()
     }
 
     Scaffold(
-        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = pageTitle,
@@ -483,7 +491,9 @@ fun WebViewScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                // v1.1.15: 内容层铺一层 App 底色 —— 网页还没画出来 / 换页的空档不露窗口底色
+                .background(MiuixTheme.colorScheme.background),
         ) {
             AndroidView(
                 factory = { webView },

@@ -82,6 +82,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PendingNav
 import com.fengling.share.service.MessageService
+import com.fengling.share.ui.components.appGradientBackground
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
@@ -398,6 +399,11 @@ fun MainScreen(
     // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
     // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
     val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
+    // v1.1.15 保底: NavHost 外层铺一层不透明的 App 渐变底。
+    // 预测性返回跟手时, 当前页整体右移、在左边让出一条缝; 只要这一层是活着且静止的背景,
+    // 那条缝就永远是 App 底色, 不可能再露出窗口底色 (用户报的「返回过程一片空白」)。
+    // 这里只是一个静态绘制的背景层, 不截图、不写状态, 不影响任何页面已验证正常的预测返回。
+    Box(modifier = Modifier.fillMaxSize().appGradientBackground()) {
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
@@ -973,6 +979,7 @@ private fun PmNotifyWatcher() {
                 StreamEvent.Reconnected -> Unit
             }
         }
+    }
     }
 }
 

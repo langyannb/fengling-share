@@ -41,7 +41,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
+import com.fengling.share.data.VideoCoverLoader
+import com.fengling.share.data.VideoThumbCache
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -75,11 +81,59 @@ private fun DurationBadge(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * 视频气泡里的封面 (v1.1.15)
+ *
+ * 取封面顺序:
+ *   ① 自己刚发出去时存下的本地首帧 (VideoThumbCache) —— 立刻有画面, 也不用为了封面把整段视频再拉一遍;
+ *   ② coil-video 从视频里抽帧 —— 第 0 帧经常是黑帧 / 淡入, 所以先取第 1.5 秒,
+ *      解码失败在 onError 里换成第 0 帧重来一次;
+ *   ③ 两次都不行就什么都不画, 由 VideoBubble 那层深色渐变 + 播放图标兜底 (中性占位, 不是纯黑)。
+ *
+ * 抽帧跑在 Coil 自己的后台调度器上 (吃 Coil 的内存 + 磁盘缓存), 不阻塞主线程, 也不挡列表滚动。
+ */
+@Composable
+private fun VideoCover(url: String, modifier: Modifier = Modifier) {
+    if (url.isBlank()) return
+    // 读一下 version: 自己发的视频把首帧写进缓存之后, 已经组合好的气泡会自动重绘
+    val cacheVersion = VideoThumbCache.version
+    val local = remember(url, cacheVersion) { VideoThumbCache.get(url) }
+    if (local != null) {
+        Image(
+            bitmap = local.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
+        return
+    }
+    val context = LocalContext.current
+    val loader = remember(context) { VideoCoverLoader.get(context) }
+    // 1500ms 起步; 解码失败回退第 0 帧; 再失败就停在下面的深色占位
+    var frameMillis by remember(url) { mutableStateOf(1500L) }
+    val request = remember(url, frameMillis, context) {
+        ImageRequest.Builder(context)
+            .data(url)
+            .videoFrameMillis(frameMillis)
+            .build()
+    }
+    AsyncImage(
+        model = request,
+        imageLoader = loader,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier,
+        onError = {
+            if (frameMillis != 0L) frameMillis = 0L
+        },
+    )
+}
+
+/**
  * 视频消息气泡 (群聊 / 私聊共用)
  *
- * 阶段2 起不再用系统 Video View 抽首帧当封面 (每条视频都要把整段文件拉下来才能出首帧, 手机拍的
- * mp4 的 moov 还在文件尾部, 代价更大); 改成静态深色封面 + 播放按钮, 点开才由全屏 ExoPlayer
- * 走 300MB LRU 缓存加载。
+ * v1.1.15: 封面改成真抽帧 (coil-video) —— 之前那版只有静态深色渐变, 用户看到的就是「封面永远黑屏」。
+ * 1.1.14 起上传前已统一压成 720p/H.264/faststart, 抽帧走 Coil 的磁盘缓存, 同一条视频只拉一次;
+ * 抽不到画面时退化成深色渐变 + 播放按钮的中性占位 (绝不是纯黑)。点开仍由全屏 ExoPlayer 播。
  *
  * - 点一下 -> onOpenFullscreen() 打开全屏播放
  * - 长按 -> onLongPress() 走原有的撤回/删除菜单 (与图片消息同一套)
@@ -116,6 +170,9 @@ fun VideoBubble(
             },
         contentAlignment = Alignment.Center,
     ) {
+        // v1.1.15: 真封面。画不出来就不画, 留在下面这层深色渐变 + 播放图标兜底 ——
+        // 结果只有两种: 看得见画面, 或者看得见一个像播放器的中性占位, 不会是一块纯黑。
+        VideoCover(url = url, modifier = Modifier.fillMaxSize())
         Box(
             modifier = Modifier
                 .size(42.dp)

@@ -126,6 +126,7 @@ import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
 import com.fengling.share.data.VideoProbe
+import com.fengling.share.data.VideoThumbCache
 import com.fengling.share.data.compressVideoForUpload
 import com.fengling.share.data.shouldCompressVideo
 import com.fengling.share.data.User
@@ -1095,6 +1096,16 @@ private fun ChatView(
      * canScrollForward 立刻就是 true, 等到组合后再判断就永远不敢跟到底了。
      */
     var autoScrollPending by remember { mutableStateOf(false) }
+    /**
+     * v1.1.15: 用户自己刚发出一条 (文字 / 图片 / 视频)。
+     * 乐观气泡挂在 messages 之后的 items(outgoing) 段里, 上面那个 effect 只看 messages.size,
+     * 所以气泡会落在屏幕下方没人管 —— 用户说的「发完我还在原地, 消息就在底下」就是它。
+     * 发消息是用户主动行为, 这里不受「是否贴底 / 是否在上翻历史」限制, 总是滚到自己那条。
+     *
+     * 用自增 token 当 key, 而不是「置位再复位」的布尔量: 布尔量一复位就会改变 LaunchedEffect 的
+     * key, 协程立刻被取消, 滚动动画刚起步就被掐断 (上面那个老 effect 正是这个写法, 不要照抄)。
+     */
+    var ownSendToken by remember { mutableStateOf(0) }
     /** 首屏/刷新落地用无动画的 scrollToItem (从顶部动画滚到最新一条看起来像「抖一下」) */
     var settleWithoutAnimation by remember { mutableStateOf(true) }
 
@@ -1358,6 +1369,15 @@ private fun ChatView(
                 listState.animateScrollToItem(target)
             }
         }
+    }
+
+    // v1.1.15: 自己发消息后立刻定位到自己那条 (顶部加载行 + messages + outgoing 的最后一项)。
+    // token 只在「确实发出了一条」时 +1, 动画过程中不会再变 key, 所以能滚完整。
+    LaunchedEffect(ownSendToken) {
+        if (ownSendToken <= 0) return@LaunchedEffect
+        val total = (if (hasMoreBefore) 1 else 0) + messages.size + outgoing.size
+        if (total <= 0) return@LaunchedEffect
+        runCatching { listState.animateScrollToItem(total - 1) }
     }
 
     // 从通知点进来 / 未读定位: 滚到那条消息并高亮一下, 然后恢复正常
@@ -1681,6 +1701,9 @@ private fun ChatView(
                 return
             }
             url = uploaded.url
+            // v1.1.15: 把发送前抽好的本地首帧按远端直链存进封面缓存 ——
+            // 自己发的视频气泡立刻有画面, 不必为了封面再把整段视频从服务器拉一遍
+            VideoThumbCache.put(url, item.thumbnail)
             // 记住直链: 万一后面 socialSend 失败 (比如撞上 2 秒 1 条限流), 重发直接跳过上传
             outgoing = outgoing.map {
                 if (it.localId == localId) it.copy(uploadedUrl = url, progress = 100) else it
@@ -1805,6 +1828,8 @@ private fun ChatView(
                     .format(java.util.Date()),
             ),
         )
+        // v1.1.15: 本地气泡已挂到列表尾部, 立刻滚过去
+        ownSendToken++
         scope.launch { performSend(localId) }
     }
 
@@ -2011,6 +2036,8 @@ private fun ChatView(
             )
             panelOpen = false
             quoteTarget = null
+            // v1.1.15: 视频气泡也要立刻滚进视野
+            ownSendToken++
             // 上传要走 50~70 秒: 丢到自己的协程里, 回调方 (点选) 不在这儿干等
             scope.launch { performSendVideo(localId) }
         }
