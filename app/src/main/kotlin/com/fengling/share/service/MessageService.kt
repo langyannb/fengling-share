@@ -381,6 +381,7 @@ class MessageService : Service() {
             fromUser = event.fromUser,
             content = event.content,
             image = event.image,
+            video = event.video,
         )
         refreshKeepAlive()
     }
@@ -414,7 +415,8 @@ class MessageService : Service() {
         }
         val title = event.groupName.ifBlank { "群 ${event.groupId}" }
         val who = event.nickname.ifBlank { "有人" }
-        val one = prefix + who + "：" + MessageNotifier.summaryOf(event.content, event.image)
+        val one = prefix + who + "：" +
+            MessageNotifier.summaryOf(event.content, event.image, event.video)
         // 同一群 3 秒内的连续消息合并计数 (成员变量, 服务实例自己维护)
         val now = System.currentTimeMillis()
         val count = if (lastGroupId == event.groupId && now - lastGroupAt <= GROUP_MERGE_MS) {

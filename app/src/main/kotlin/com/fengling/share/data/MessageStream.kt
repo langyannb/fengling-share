@@ -20,6 +20,15 @@ sealed interface StreamEvent {
         val nickname: String,
         val content: String,
         val image: String,
+        /** Wave 2 视频消息: 直链 (老服务端不推 → 空串) */
+        val video: String = "",
+        val videoW: Int = 0,
+        val videoH: Int = 0,
+        /** 视频时长 (秒) */
+        val videoDuration: Int = 0,
+        val videoSize: Long = 0L,
+        /** 消息类型: "video" = 视频 (老服务端不推 → 空串) */
+        val msgType: String = "",
         val createdAt: String,
     ) : StreamEvent
 
@@ -32,6 +41,13 @@ sealed interface StreamEvent {
         val nickname: String,
         val content: String,
         val image: String,
+        /** Wave 2 视频消息: 直链 (老服务端不推 → 空串) */
+        val video: String = "",
+        val videoW: Int = 0,
+        val videoH: Int = 0,
+        /** 视频时长 (秒) */
+        val videoDuration: Int = 0,
+        val videoSize: Long = 0L,
         /** 1 = 这条消息 @ 了我 */
         val atMe: Int,
         /** 1 = 这条消息 @ 了所有人 */

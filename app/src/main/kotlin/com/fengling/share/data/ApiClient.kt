@@ -1,5 +1,7 @@
 package com.fengling.share.data
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -9,7 +11,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -197,6 +201,13 @@ object ApiClient {
             nickname = j.optString("nickname", ""),
             content = j.optString("content", ""),
             image = j.optString("image", ""),
+            // Wave 2: 视频消息 (老服务端不推这几个键 -> 空/0, 行为不变)
+            video = j.optString("video", ""),
+            videoW = j.optInt("video_w", 0),
+            videoH = j.optInt("video_h", 0),
+            videoDuration = j.optInt("video_duration", 0),
+            videoSize = j.optLong("video_size", 0L),
+            msgType = j.optString("msg_type", ""),
             createdAt = j.optString("created_at", ""),
         )
     }.getOrNull()
@@ -212,6 +223,12 @@ object ApiClient {
             nickname = j.optString("nickname", ""),
             content = j.optString("content", ""),
             image = j.optString("image", ""),
+            // Wave 2: 视频消息五件套 (老服务端不推 -> 空/0)
+            video = j.optString("video", ""),
+            videoW = j.optInt("video_w", 0),
+            videoH = j.optInt("video_h", 0),
+            videoDuration = j.optInt("video_duration", 0),
+            videoSize = j.optLong("video_size", 0L),
             atMe = j.optInt("at_me", 0),
             atAll = j.optInt("at_all", 0),
             // 服务端在 group 事件里带上「我是否对该群开了免打扰」(契约 A6), 老服务端没有这个键 -> false
@@ -533,6 +550,125 @@ object ApiClient {
                     throw ApiException("图片下载失败 (HTTP " + response.code + ")")
                 }
                 response.body?.bytes()?.takeIf { it.isNotEmpty() } ?: throw ApiException("图片内容为空")
+            }
+        }
+    }
+
+    // ===================== Wave 2: 视频消息 (服务端已上线, 契约既成事实) =====================
+
+    /**
+     * 视频消息配置 (公开接口, 无需鉴权)
+     * 200 {"code":0,"msg":"ok","data":{"enabled":1,"max_mb":100}}
+     * - enabled=0 → 客户端隐藏/禁用视频入口
+     * - maxMb       → 客户端发送前校验用的**服务端真实上限** (不写死 100)
+     */
+    suspend fun videoConfig(): Result<VideoConfig> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("video_config").optJSONObject("data") ?: JSONObject()
+            VideoConfig(
+                enabled = d.optInt("enabled", 0) == 1,
+                maxMb = d.optInt("max_mb", 0),
+            )
+        }
+    }
+
+    /**
+     * 上传聊天视频 (multipart, 字段名固定 file, action=social_video_upload)
+     *
+     * 与图片上传的三点不同:
+     * 1. **流式**: 不把 100MB 读进内存, 边读边写边回报字节进度 (内存里只有 64KB 缓冲);
+     * 2. **长超时专用 client**: 100MB 实测要 50~70 秒, 全局 client 的 15s readTimeout 必然超时,
+     *    这里 `client.newBuilder()` 派生一个只用于本请求的 client, 不动全局默认值;
+     * 3. **必须带上 video_w/video_h/video_duration/video_size**: 服务端 video_meta_params()
+     *    直接读这 4 个字段落库 (不做探测), 不传就是 0。
+     *
+     * @param videoSize 文件字节数 (OpenableColumns.SIZE); 同时用作 multipart 的 Content-Length
+     * @param isCancelled 返回 true 时中止上传 (抛 ApiException("已取消上传"))
+     * @param onProgress 0~100 百分比回调 (**在 IO 线程**, 调用方自己切主线程)
+     */
+    suspend fun uploadChatVideo(
+        context: Context,
+        uri: Uri,
+        videoW: Int = 0,
+        videoH: Int = 0,
+        videoDuration: Int = 0,
+        videoSize: Long = 0L,
+        filename: String = "chat.mp4",
+        mime: String = "video/mp4",
+        isCancelled: () -> Boolean = { false },
+        onProgress: (Int) -> Unit = {},
+    ): Result<ChatVideo> = withContext(Dispatchers.IO) {
+        apiCall {
+            val resolver = context.contentResolver
+            val total = videoSize.coerceAtLeast(0L)
+            val part = object : RequestBody() {
+                override fun contentType() =
+                    (if (mime.contains("/")) mime else "video/mp4").toMediaType()
+
+                override fun contentLength(): Long = total
+
+                override fun writeTo(sink: BufferedSink) {
+                    val input = resolver.openInputStream(uri)
+                        ?: throw ApiException("无法读取所选视频")
+                    input.use { ins ->
+                        val buf = ByteArray(64 * 1024)
+                        var sent = 0L
+                        var last = -1
+                        while (true) {
+                            if (isCancelled()) throw ApiException("已取消上传")
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            sink.write(buf, 0, n)
+                            sent += n
+                            val pct = if (total > 0L) {
+                                ((sent * 100L) / total).toInt().coerceIn(0, 100)
+                            } else {
+                                // 拿不到字节数时按「读到的块数」给个粗略进度, 别让用户以为卡死
+                                (-1)
+                            }
+                            if (pct >= 0 && pct != last) {
+                                last = pct
+                                onProgress(pct)
+                            }
+                        }
+                        if (last < 100) onProgress(100)
+                    }
+                }
+            }
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", filename, part)
+                .addFormDataPart("video_w", videoW.toString())
+                .addFormDataPart("video_h", videoH.toString())
+                .addFormDataPart("video_duration", videoDuration.toString())
+                .addFormDataPart("video_size", videoSize.toString())
+                .build()
+            val req = Request.Builder()
+                .url(StringBuilder(BASE_URL).append("?action=social_video_upload").toString())
+                .header("Authorization", "Bearer ${UserStore.token}")
+                .post(body)
+                .build()
+            val longClient = client.newBuilder()
+                .writeTimeout(10, TimeUnit.MINUTES)
+                .readTimeout(10, TimeUnit.MINUTES)
+                .callTimeout(15, TimeUnit.MINUTES)
+                .build()
+            longClient.newCall(req).execute().use { response ->
+                val text = response.body?.string() ?: "{}"
+                val obj = JSONObject(text)
+                if (obj.optInt("code", -1) != 0) {
+                    throw ApiException(obj.optString("msg", "视频上传失败"))
+                }
+                val d = obj.optJSONObject("data") ?: JSONObject()
+                ChatVideo(
+                    url = jsonStr(d, "url"),
+                    // size 以服务端实际收到为准 (前端只用来做展示/兜底)
+                    size = if (d.isNull("size")) 0L else d.optLong("size", 0L),
+                    width = jsonInt(d, "width"),
+                    height = jsonInt(d, "height"),
+                    duration = jsonInt(d, "duration"),
+                    cleaned = jsonInt(d, "cleaned"),
+                )
             }
         }
     }
@@ -870,6 +1006,16 @@ object ApiClient {
         imageW: Int = 0,
         /** 原图高 (0 = 未知) */
         imageH: Int = 0,
+        /** 视频消息: 上传接口拿到的直链 (必须以 .../chat/ 开头, 否则「视频地址不合法」) */
+        video: String = "",
+        /** 视频宽 (客户端探测后回传, 服务端只做范围兜底) */
+        videoW: Int = 0,
+        /** 视频高 */
+        videoH: Int = 0,
+        /** 视频时长 (秒) */
+        videoDuration: Int = 0,
+        /** 视频字节数 */
+        videoSize: Long = 0L,
     ): Result<Int> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
@@ -883,6 +1029,14 @@ object ApiClient {
                 params["image"] = image
                 params["image_w"] = imageW
                 params["image_h"] = imageH
+            }
+            // 纯视频消息: content 传空串 + 带上 video 五件套; 服务端据此把 msg_type 落成 "video"
+            if (video.isNotBlank()) {
+                params["video"] = video
+                params["video_w"] = videoW
+                params["video_h"] = videoH
+                params["video_duration"] = videoDuration
+                params["video_size"] = videoSize
             }
             request("social_send", params, UserStore.token)
                 .optJSONObject("data")?.optInt("id", 0) ?: 0
@@ -1009,6 +1163,12 @@ object ApiClient {
         image: String = "",
         imageW: Int = 0,
         imageH: Int = 0,
+        /** 视频直链 (必须先走 uploadChatVideo), 前缀必须 .../chat/ */
+        video: String = "",
+        videoW: Int = 0,
+        videoH: Int = 0,
+        videoDuration: Int = 0,
+        videoSize: Long = 0L,
     ): Result<PmSendResult> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("content" to content)
@@ -1019,6 +1179,14 @@ object ApiClient {
                 params["image"] = image
                 params["image_w"] = imageW
                 params["image_h"] = imageH
+            }
+            // 纯视频消息: content 传空串 + 带 video 五件套
+            if (video.isNotBlank()) {
+                params["video"] = video
+                params["video_w"] = videoW
+                params["video_h"] = videoH
+                params["video_duration"] = videoDuration
+                params["video_size"] = videoSize
             }
             val d = request("pm_send", params, UserStore.token).optJSONObject("data") ?: JSONObject()
             PmSendResult.fromJson(d)
@@ -1325,6 +1493,29 @@ fun isSystemMessage(msgType: String, content: String): Boolean {
     return c.endsWith("加入了群聊") || c.endsWith("退出了群聊")
 }
 
+/** 视频消息配置 (video_config 接口, 公开): enabled=0 时入口隐藏, maxMb = 服务端真实上限 */
+data class VideoConfig(
+    val enabled: Boolean = false,
+    /** 单条视频上限 (MB), 服务端 video_config.max_mb */
+    val maxMb: Int = 0,
+)
+
+/**
+ * 视频上传结果 (social_video_upload 接口)
+ * width/height/duration 由**客户端探测后回传**, 服务端原样落库后随消息返回。
+ */
+data class ChatVideo(
+    val url: String = "",
+    /** 服务端实际收到的字节数 */
+    val size: Long = 0L,
+    val width: Int = 0,
+    val height: Int = 0,
+    /** 秒 */
+    val duration: Int = 0,
+    /** 本次上传触发的自动清理条数 (0 = 没清理) */
+    val cleaned: Int = 0,
+)
+
 /** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
 data class ChatImage(
     val url: String = "",
@@ -1403,7 +1594,9 @@ data class LastMessage(
     val content: String = "",
     /** 纯图片消息: content 为空, image 非空 → 前端显示 [图片] */
     val image: String = "",
-    /** 消息类型: "system" = 系统消息(加入了群聊等); 老服务端没有这个键 → 空串 (契约 A3) */
+    /** 纯视频消息: content 为空, video 非空 → 前端显示 [视频] */
+    val video: String = "",
+    /** 消息类型: "system" = 系统消息(加入了群聊等), "video" = 视频; 老服务端没有这个键 → 空串 (契约 A3) */
     val msgType: String = "",
     val createdAt: String = "",
 ) {
@@ -1414,6 +1607,7 @@ data class LastMessage(
             nickname = jsonStr(j, "nickname"),
             content = jsonStr(j, "content"),
             image = jsonStr(j, "image"),
+            video = jsonStr(j, "video"),
             msgType = jsonStr(j, "msg_type"),
             createdAt = jsonStr(j, "created_at"),
         )
@@ -1488,6 +1682,14 @@ data class SocialMessage(
     val imageW: Int = 0,
     /** 原图高 */
     val imageH: Int = 0,
+    /** 视频消息: 视频直链 (空串 = 没视频; 被自动清理后也是空串且 content 追加 [视频已清理]) */
+    val video: String = "",
+    val videoW: Int = 0,
+    val videoH: Int = 0,
+    /** 视频时长 (秒) */
+    val videoDuration: Int = 0,
+    /** 视频字节数 */
+    val videoSize: Long = 0L,
     val at: List<Int> = emptyList(),
     /** 引用的原消息 (0 = 不是引用) */
     val quoteId: Int = 0,
@@ -1513,6 +1715,11 @@ data class SocialMessage(
                 image = jsonStr(j, "image"),
                 imageW = jsonInt(j, "image_w"),
                 imageH = jsonInt(j, "image_h"),
+                video = jsonStr(j, "video"),
+                videoW = jsonInt(j, "video_w"),
+                videoH = jsonInt(j, "video_h"),
+                videoDuration = jsonInt(j, "video_duration"),
+                videoSize = if (j.isNull("video_size")) 0L else j.optLong("video_size", 0L),
                 at = if (atArr == null) {
                     emptyList()
                 } else {
@@ -1893,6 +2100,14 @@ data class PmMessage(
     val image: String = "",
     val imageW: Int = 0,
     val imageH: Int = 0,
+    /** 视频直链 (空串 = 没视频; 被自动清理后为空串且 content 追加 [视频已清理]) */
+    val video: String = "",
+    val videoW: Int = 0,
+    val videoH: Int = 0,
+    val videoDuration: Int = 0,
+    val videoSize: Long = 0L,
+    /** 消息类型: "" = 普通 / "video" = 视频 (老图片消息 msg_type 仍是空串) */
+    val msgType: String = "",
     val isRecalled: Boolean = false,
     /** 服务端直接告诉我们这条是不是自己发的 */
     val mine: Boolean = false,
@@ -1908,6 +2123,15 @@ data class PmMessage(
             image = jsonStr(j, "image"),
             imageW = jsonInt(j, "image_w"),
             imageH = jsonInt(j, "image_h"),
+            video = jsonStr(j, "video"),
+            videoW = jsonInt(j, "video_w"),
+            videoH = jsonInt(j, "video_h"),
+            videoDuration = jsonInt(j, "video_duration"),
+            videoSize = if (j.isNull("video_size")) 0L else j.optLong("video_size", 0L),
+            // 老服务端 pm_msg_public 里 video 非空时 msg_type 才是 "video"; 这里再兜一层
+            msgType = jsonStr(j, "msg_type").ifBlank {
+                if (jsonStr(j, "video").isNotBlank()) "video" else ""
+            },
             isRecalled = jsonBool(j, "is_recalled"),
             mine = jsonBool(j, "mine"),
             createdAt = jsonStr(j, "created_at"),

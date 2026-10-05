@@ -1,13 +1,18 @@
 package com.fengling.share.ui.pm
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -47,6 +52,8 @@ import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -95,6 +102,7 @@ import com.fengling.share.data.PmMessage
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
+import com.fengling.share.data.VideoProbe
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
@@ -102,6 +110,10 @@ import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.SendState
 import com.fengling.share.ui.components.SendStatusIndicator
 import com.fengling.share.ui.components.ZoomableImage
+import com.fengling.share.ui.components.CleanedVideoPlaceholder
+import com.fengling.share.ui.components.VideoBubble
+import com.fengling.share.ui.components.VideoFullscreenDialog
+import com.fengling.share.ui.components.VideoSendingBubble
 import com.fengling.share.ui.components.glassStroke
 import com.fengling.share.ui.components.ChatEmojiPanel
 import com.fengling.share.ui.components.ChatPanelItem
@@ -189,6 +201,11 @@ fun PmChatScreen(
     var unreadAnchorId by remember { mutableStateOf(0) }
 
     var previewImage by remember { mutableStateOf("") }
+    // Wave 2 (1.1.13) 视频消息: 全屏播放的视频地址 (空串 = 不显示)
+    var fullscreenVideo by remember { mutableStateOf("") }
+    // 服务端 video_config 开关 / 上限 (默认按「开」乐观处理, 拉配置失败也不让入口凭空消失)
+    var videoEnabled by remember { mutableStateOf(true) }
+    var videoMaxMb by remember { mutableStateOf(0) }
     var actionTarget by remember { mutableStateOf<PmMessage?>(null) }
     var recallTarget by remember { mutableStateOf<PmMessage?>(null) }
     // v1.1.12 契约第 6 条: 「+」面板 / 表情面板 (互斥, 都在输入栏下面弹出)
@@ -411,9 +428,91 @@ fun PmChatScreen(
         ApiClient.pmRead(convId, last)
     }
 
+    /**
+     * Wave 2 (1.1.13) 视频消息: 两段式发送 —— 先上传拿直链 (带百分比进度 + 可取消), 再当消息发出去。
+     * 与群聊同一套逻辑: 上传用专用长超时 client (100MB 要 50~70 秒), 失败/取消只标失败态可重发,
+     * 重发时已经拿到直链 (uploadedUrl 非空) 就不再重传一遍。
+     */
+    suspend fun performSendVideo(localId: String) {
+        val item = outgoing.firstOrNull { it.localId == localId } ?: return
+        val uri = item.videoUri ?: return
+        var url = item.uploadedUrl
+        if (url.isBlank()) {
+            val res = ApiClient.uploadChatVideo(
+                context = context,
+                uri = uri,
+                videoW = item.videoW,
+                videoH = item.videoH,
+                videoDuration = item.videoDuration,
+                videoSize = item.videoSize,
+                filename = item.fileName,
+                mime = item.mime,
+                isCancelled = {
+                    outgoing.firstOrNull { it.localId == localId }?.cancelRequested == true
+                },
+                // 回调在 OkHttp 写线程上: 转回主线程再改 Compose 状态
+                onProgress = { pct ->
+                    scope.launch {
+                        outgoing = outgoing.map {
+                            if (it.localId == localId) it.copy(progress = pct) else it
+                        }
+                    }
+                },
+            )
+            val cancelled = outgoing.firstOrNull { it.localId == localId }?.cancelRequested == true
+            val uploaded = res.getOrNull()
+            if (uploaded == null || uploaded.url.isBlank()) {
+                outgoing = outgoing.map {
+                    if (it.localId == localId) {
+                        it.copy(state = SendState.Failed, cancelRequested = false, progress = 0)
+                    } else {
+                        it
+                    }
+                }
+                if (cancelled) onToast("已取消发送")
+                return
+            }
+            url = uploaded.url
+            outgoing = outgoing.map {
+                if (it.localId == localId) it.copy(uploadedUrl = url, progress = 100) else it
+            }
+        }
+        ApiClient.pmSend(
+            toUser = if (convId <= 0) peerUserId else 0,
+            convId = convId,
+            content = item.text,
+            video = url,
+            videoW = item.videoW,
+            videoH = item.videoH,
+            videoDuration = item.videoDuration,
+            videoSize = item.videoSize,
+        )
+            .onSuccess { res ->
+                if (res.convId > 0) convId = res.convId
+                outgoing = outgoing.filterNot { it.localId == localId }
+                val after = messages.maxOfOrNull { it.id } ?: 0
+                ApiClient.pmMessages(convId = convId, afterId = after)
+                    .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+            }
+            .onFailure {
+                outgoing = outgoing.map {
+                    if (it.localId == localId) {
+                        it.copy(state = SendState.Failed, cancelRequested = false)
+                    } else {
+                        it
+                    }
+                }
+            }
+    }
+
     /** 真正把一条本地临时消息发给服务端: 成功 = 移除本地占位 + 立刻拉真实消息, 失败 = 标成失败态 */
     suspend fun performSend(localId: String) {
         val item = outgoing.firstOrNull { it.localId == localId } ?: return
+        // 视频走两段式 (先上传再发送); 文字 / 图片保持原来那条链路, 一个字节都不动
+        if (item.videoUri != null) {
+            performSendVideo(localId)
+            return
+        }
         ApiClient.pmSend(
             toUser = if (convId <= 0) peerUserId else 0,
             convId = convId,
@@ -564,6 +663,162 @@ fun PmChatScreen(
         }
     }
 
+    // ===================== Wave 2 (1.1.13) 视频消息: 选 / 拍 / 发送前校验 =====================
+
+    /** 选到或拍完视频后的唯一入口: 发送前校验 (中文 Toast) + 立刻挂本地乐观气泡 */
+    fun startVideoSend(uri: Uri) {
+        if (!videoEnabled) {
+            onToast("视频消息功能暂未开启")
+            return
+        }
+        if (outgoing.any { it.videoUri != null && it.state == SendState.Sending }) {
+            onToast("上一个视频还在上传, 稍等一下")
+            return
+        }
+        scope.launch {
+            val info = withContext(Dispatchers.IO) { VideoProbe.probe(context, uri) }
+            val thumb = withContext(Dispatchers.IO) { VideoProbe.firstFrame(context, uri) }
+            val limitMb = if (videoMaxMb > 0) videoMaxMb else 100
+            // 1) 字节数 (服务端真实 max_mb, 不写死 100); 拿不到大小就交给服务端兜底
+            if (info.sizeBytes > 0L && info.sizeBytes > limitMb.toLong() * 1024L * 1024L) {
+                onToast("视频不能超过 " + limitMb + "MB")
+                return@launch
+            }
+            // 2) 时长上限 5 分钟
+            if (info.durationSec > VideoProbe.MAX_DURATION_SEC) {
+                onToast("视频不能超过 5 分钟")
+                return@launch
+            }
+            val seq = PM_LOCAL_SEQ.incrementAndGet()
+            val localId = "local-$seq"
+            outgoing = outgoing + OutgoingPmMsg(
+                localId = localId,
+                text = "",
+                state = SendState.Sending,
+                message = PmMessage(
+                    // 本地占位: 负 id + msgType=video, 真正的 video 直链要等上传完才有
+                    id = -seq,
+                    convId = convId,
+                    userId = myId,
+                    toUser = if (convId <= 0) peerUserId else 0,
+                    content = "",
+                    msgType = "video",
+                    video = "",
+                    videoW = info.width,
+                    videoH = info.height,
+                    videoDuration = info.durationSec,
+                    videoSize = info.sizeBytes,
+                    mine = true,
+                    createdAt = java.text.SimpleDateFormat(
+                        "yyyy-MM-dd HH:mm:ss",
+                        java.util.Locale.getDefault(),
+                    ).format(java.util.Date()),
+                ),
+                videoUri = uri,
+                videoW = info.width,
+                videoH = info.height,
+                videoDuration = info.durationSec,
+                videoSize = info.sizeBytes,
+                thumbnail = thumb,
+                fileName = info.displayName.ifBlank { "chat.mp4" },
+                mime = context.contentResolver.getType(uri) ?: "video/mp4",
+            )
+            panelOpen = false
+            // 上传要走 50~70 秒: 丢到自己的协程里
+            scope.launch { performSendVideo(localId) }
+        }
+    }
+
+    /** 「相册选视频」: 优先系统照片选择器 (PickVisualMedia + VideoOnly), 不可用回退 GetContent("video/*") */
+    val pickChatVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) startVideoSend(uri) }
+
+    val pickChatVideoLegacy = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) startVideoSend(uri) }
+
+    /** ACTION_VIDEO_CAPTURE 要求自己给输出 uri, 这里用 FileProvider 指到 cacheDir/video/ */
+    var cameraVideoUri by remember { mutableStateOf<Uri?>(null) }
+
+    /** 「拍视频」回调: ROM 没相机 / 用户按返回 时 resultCode != RESULT_OK, 安静退出不崩 */
+    val recordVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val uri = cameraVideoUri
+        cameraVideoUri = null
+        if (result.resultCode == Activity.RESULT_OK && uri != null) {
+            startVideoSend(uri)
+        }
+    }
+
+    /** 点本地视频气泡上的「取消」: 只打个标记, 上传线程下次写块时自己中止 */
+    fun cancelVideoSend(localId: String) {
+        outgoing = outgoing.map {
+            if (it.localId == localId) it.copy(cancelRequested = true) else it
+        }
+        onToast("正在取消…")
+    }
+
+    /** 「拍视频」入口: 建临时文件 → FileProvider uri → 交给系统录像机 */
+    fun launchVideoCapture() {
+        if (!videoEnabled) {
+            onToast("视频消息功能暂未开启")
+            return
+        }
+        val target = runCatching {
+            val dir = java.io.File(context.cacheDir, "video").apply { mkdirs() }
+            val file = java.io.File(dir, "rec_" + System.currentTimeMillis() + ".mp4")
+            // authority 与 AndroidManifest 里的 ${applicationId}.fileprovider 一致
+            FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
+        }.getOrNull()
+        if (target == null) {
+            onToast("没有可用的相机")
+            return
+        }
+        cameraVideoUri = target
+        val intent = android.content.Intent(MediaStore.ACTION_VIDEO_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, target)
+            addFlags(android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra("android.intent.extra.durationLimit", VideoProbe.MAX_DURATION_SEC)
+        }
+        val ok = runCatching { recordVideo.launch(intent) }.isSuccess
+        if (!ok) {
+            cameraVideoUri = null
+            onToast("没有可用的相机")
+        }
+    }
+
+    /** 「相册选视频」入口 */
+    fun pickVideoFromGallery() {
+        if (!videoEnabled) {
+            onToast("视频消息功能暂未开启")
+            return
+        }
+        val started = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                pickChatVideo.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                )
+            } else {
+                pickChatVideoLegacy.launch("video/*")
+            }
+        }.isSuccess
+        if (!started) {
+            val fallback = runCatching { pickChatVideoLegacy.launch("video/*") }.isSuccess
+            if (!fallback) onToast("没有可用的相册")
+        }
+    }
+
+    // 服务端视频开关 (无需鉴权): enabled=0 时面板里「视频 / 拍视频」两个入口直接不出现
+    LaunchedEffect(Unit) {
+        ApiClient.videoConfig().onSuccess {
+            videoEnabled = it.enabled
+            videoMaxMb = it.maxMb
+        }
+    }
+
     /** 复制一条消息的文字到剪贴板 */
     fun copyMessage(text: String) {
         if (text.isBlank()) {
@@ -629,7 +884,10 @@ fun PmChatScreen(
 
     // v1.1.10: 跟手动画交回框架 (NavHost 的 SeekableTransitionState 会按手势进度 seek pop 转场)。
     // 页内有全屏大图预览时: 返回键先把大图关掉, 再退页 (和系统返回语义一致)
-    BackHandler(enabled = previewImage.isNotBlank()) { previewImage = "" }
+    // Wave 2: 全屏播放 / 全屏大图都先吃掉返回键, 再退页 (和系统返回语义一致)
+    BackHandler(enabled = previewImage.isNotBlank() || fullscreenVideo.isNotBlank()) {
+        if (fullscreenVideo.isNotBlank()) fullscreenVideo = "" else previewImage = ""
+    }
 
     Scaffold(
         modifier = modifier,
@@ -715,6 +973,8 @@ fun PmChatScreen(
                                     if (onOpenUser != null && uid > 0) onOpenUser(uid)
                                 },
                                 onImageTap = { url -> previewImage = url },
+                                // Wave 2: 点视频气泡 = 全屏播放
+                                onVideoTap = { url -> fullscreenVideo = url },
                                 // 消息里的链接: 用内置浏览器打开 (无协议的在打开前补 https://)
                                 onOpenLink = { url ->
                                     if (onOpenWeb != null) {
@@ -733,6 +993,27 @@ fun PmChatScreen(
                             // v1.1.12 乐观发送: 本地临时消息挂在列表最尾部 —— 转圈 = 发送中, 红色感叹号 = 失败可重发
                             items(outgoing, key = { it.localId }) { item ->
                                 Column(modifier = Modifier.fillMaxWidth()) {
+                                    // Wave 2: 视频本地占位自己画 (缩略图 + 圆形进度 + 可取消),
+                                    // 这一刻还没有服务端直链, 走不了 PmMessageRow 的 VideoBubble 分支
+                                    if (item.videoUri != null) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                                            horizontalArrangement = Arrangement.End,
+                                        ) {
+                                            VideoSendingBubble(
+                                                thumbnail = item.thumbnail,
+                                                progress = item.progress,
+                                                videoW = item.videoW,
+                                                videoH = item.videoH,
+                                                durationSec = item.videoDuration,
+                                                cancellable = item.state == SendState.Sending,
+                                                onCancel = { cancelVideoSend(item.localId) },
+                                                onLongPress = {},
+                                            )
+                                        }
+                                    } else {
                                     PmMessageRow(
                                         msg = item.message,
                                         // 本地临时消息一定是自己发的
@@ -744,9 +1025,11 @@ fun PmChatScreen(
                                         onLongPress = {},
                                         onAvatarTap = {},
                                         onImageTap = { url -> previewImage = url },
+                                        onVideoTap = { url -> fullscreenVideo = url },
                                         highlight = false,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
+                                    }
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -938,6 +1221,26 @@ fun PmChatScreen(
                         }
                     },
                 )
+                // Wave 2 视频: 相册选视频 / 拍视频。原来的「相册 / 拍摄」是图片链路,
+                // 契约要求「现有功能入口要保留可点」→ 视频另起两个入口, 不动图片那两个
+                if (videoEnabled) {
+                    add(
+                        ChatPanelItem("video", "视频", Icons.Filled.VideoLibrary) {
+                            panelOpen = false
+                            pickVideoFromGallery()
+                        },
+                    )
+                    add(
+                        ChatPanelItem("videocam", "拍视频", Icons.Filled.Videocam) {
+                            panelOpen = false
+                            if (outgoing.any { it.videoUri != null && it.state == SendState.Sending }) {
+                                onToast("上一个视频还在上传, 稍等一下")
+                            } else {
+                                launchVideoCapture()
+                            }
+                        },
+                    )
+                }
                 add(
                     ChatPanelItem("lottery", "抽奖", Icons.Filled.CardGiftcard) {
                         panelOpen = false
@@ -1006,6 +1309,7 @@ fun PmChatScreen(
                     // 菜单顶部先展示这条消息的摘要, 免得点错
                     Text(
                         text = if (acting.image.isNotBlank()) "[图片]"
+                        else if (VideoProbe.isVideoMessage(acting.msgType, acting.video)) "[视频]"
                         else acting.content.replace('\n', ' ').take(60),
                         fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
@@ -1013,6 +1317,16 @@ fun PmChatScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(6.dp))
+                    // Wave 2: 视频消息才有 —— 全屏播放 (撤回等操作对视频一样可用, 不受影响)
+                    if (VideoProbe.isVideoMessage(acting.msgType, acting.video) &&
+                        !VideoProbe.isVideoCleaned(acting.video, acting.content)
+                    ) {
+                        PmActionRow(text = "全屏播放", danger = false, onClick = {
+                            val url = acting.video
+                            actionTarget = null
+                            fullscreenVideo = url
+                        })
+                    }
                     // 图片消息才有: 全屏看大图 / 存进系统相册
                     if (acting.image.isNotBlank()) {
                         PmActionRow(text = "放大查看", danger = false, onClick = {
@@ -1099,6 +1413,11 @@ fun PmChatScreen(
         )
     }
 
+    // ===== Wave 2: 全屏播放视频 (VideoView + MediaController, 左上角关闭) =====
+    if (fullscreenVideo.isNotBlank()) {
+        VideoFullscreenDialog(url = fullscreenVideo, onDismiss = { fullscreenVideo = "" })
+    }
+
     // ===== 点图片: 全屏查看 (点任意处 / 右上角关闭) =====
     if (previewImage.isNotBlank()) {
         Dialog(
@@ -1168,10 +1487,19 @@ private fun PmMessageRow(
     onLongPress: () -> Unit,
     onAvatarTap: () -> Unit,
     onImageTap: (String) -> Unit,
+    /** Wave 2: 点气泡里的视频 = 上层打开全屏播放 */
+    onVideoTap: (String) -> Unit = {},
     /** 点气泡里的链接: 走内置浏览器 (无协议链接调用方会补 https://) */
     onOpenLink: (String) -> Unit = {},
     highlight: Boolean = false,
 ) {
+    // Wave 2 视频消息判定: video 非空 或 msg_type == "video" 都算 (老图片消息 msg_type 是空串, 不受影响)。
+    // 被服务端清理后 video 置空、content 追加「[视频已清理]」→ 灰底占位不可播。
+    val isVideo = VideoProbe.isVideoMessage(msg.msgType, msg.video)
+    val videoCleaned = isVideo && VideoProbe.isVideoCleaned(msg.video, msg.content)
+    // 已清理时正文里那句「[视频已清理]」不再重复渲染一遍 (占位块已经说明过了)
+    val bodyText = if (videoCleaned) msg.content.replace("[视频已清理]", "").trim() else msg.content
+
     if (msg.isRecalled) {
         Box(
             modifier = modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 6.dp),
@@ -1234,6 +1562,23 @@ private fun PmMessageRow(
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
+            // ===== Wave 2: 视频消息 (放在图片分支之前, 图片分支一个字节都不动) =====
+            if (isVideo) {
+                if (videoCleaned) {
+                    CleanedVideoPlaceholder(onLongPress = onLongPress)
+                } else {
+                    VideoBubble(
+                        url = msg.video,
+                        videoW = msg.videoW,
+                        videoH = msg.videoH,
+                        durationSec = msg.videoDuration,
+                        mine = mine,
+                        onOpenFullscreen = { onVideoTap(msg.video) },
+                        onLongPress = onLongPress,
+                    )
+                }
+                if (bodyText.isNotBlank()) Spacer(Modifier.height(6.dp))
+            }
             if (msg.image.isNotBlank()) {
                 val ratio = if (msg.imageW > 0 && msg.imageH > 0) {
                     msg.imageW.toFloat() / msg.imageH.toFloat()
@@ -1257,14 +1602,14 @@ private fun PmMessageRow(
                 )
                 if (msg.content.isNotBlank()) Spacer(Modifier.height(6.dp))
             }
-            if (msg.content.isNotBlank()) {
+            if (bodyText.isNotBlank()) {
                 // v1.1.12: 气泡里的链接要能点开 (内置浏览器), 又不能抢掉长按菜单 —— 手势自己做:
                 // onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 linkify 打好的 URL 注解
                 var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                 // MiuixTheme.colorScheme 是 @Composable 属性, 不能放进 remember 的 lambda, 先取出来
                 val linkColor = if (mine) Color(0xFFFFF3C4) else MiuixTheme.colorScheme.primary
-                val shown = remember(msg.id, msg.content, linkColor) {
-                    linkify(content = msg.content, linkColor = linkColor)
+                val shown = remember(msg.id, bodyText, linkColor) {
+                    linkify(content = bodyText, linkColor = linkColor)
                 }
                 Text(
                     text = shown,
@@ -1430,6 +1775,23 @@ private data class OutgoingPmMsg(
     val text: String,
     val message: PmMessage,
     val state: SendState,
+    // ===== Wave 2 (1.1.13) 视频消息: 纯文字 / 纯图片消息全走默认值, 既有行为完全不变 =====
+    /** 本地选中的视频 (content:// 或 file://); null = 这条不是视频消息 */
+    val videoUri: Uri? = null,
+    /** 上传进度 0~100 (圆形进度环) */
+    val progress: Int = 0,
+    /** 用户点了「取消」: 上传线程下一次写块时自行中止 */
+    val cancelRequested: Boolean = false,
+    /** 已经拿到的服务端直链: 非空时重发跳过上传 */
+    val uploadedUrl: String = "",
+    val videoW: Int = 0,
+    val videoH: Int = 0,
+    val videoDuration: Int = 0,
+    val videoSize: Long = 0L,
+    /** 本地首帧缩略图 (视频气泡占位用) */
+    val thumbnail: Bitmap? = null,
+    val fileName: String = "chat.mp4",
+    val mime: String = "video/mp4",
 )
 
 /** 本地临时消息的序号 (负 id 用), 进程内自增就够 */

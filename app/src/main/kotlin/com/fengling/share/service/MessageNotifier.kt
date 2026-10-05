@@ -93,10 +93,19 @@ object MessageNotifier {
         runCatching { NotificationManagerCompat.from(context).areNotificationsEnabled() }
             .getOrDefault(false)
 
-    /** 正文摘要: 文字取前 60 字 (截断了补省略号), 没有文字就是「[图片]」(v1.1.2 起图片消息正文固定这个格式) */
-    fun summaryOf(content: String, image: String): String {
+    /**
+     * 正文摘要: 文字取前 60 字 (截断了补省略号), 没有文字就是「[图片]」
+     * (v1.1.2 起图片消息正文固定这个格式); Wave 2 起视频消息是「[视频]」。
+     */
+    fun summaryOf(content: String, image: String, video: String = ""): String {
         val text = content.trim()
-        if (text.isEmpty()) return if (image.isNotBlank()) "[图片]" else "新消息"
+        if (text.isEmpty()) {
+            return when {
+                video.isNotBlank() -> "[视频]"
+                image.isNotBlank() -> "[图片]"
+                else -> "新消息"
+            }
+        }
         return if (text.length > SUMMARY_MAX) text.take(SUMMARY_MAX) + "…" else text
     }
 
@@ -113,12 +122,13 @@ object MessageNotifier {
         fromUser: Int,
         content: String,
         image: String,
+        video: String = "",
     ) {
         post(
             context = context,
             id = NOTIF_ID_PM_BASE + convId,
             title = nickname.ifBlank { "用户 $fromUser" },
-            body = summaryOf(content, image),
+            body = summaryOf(content, image, video),
             pmConvId = convId,
             groupId = 0,
         )
@@ -132,6 +142,7 @@ object MessageNotifier {
         nickname: String,
         content: String,
         image: String,
+        video: String = "",
         atMe: Boolean,
         atAll: Boolean,
     ) {
@@ -145,7 +156,7 @@ object MessageNotifier {
             context = context,
             id = NOTIF_ID_GROUP_BASE + groupId,
             title = groupName.ifBlank { "群 $groupId" },
-            body = prefix + who + "：" + summaryOf(content, image),
+            body = prefix + who + "：" + summaryOf(content, image, video),
             pmConvId = 0,
             groupId = groupId,
         )
