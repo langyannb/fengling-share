@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +32,8 @@ import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.utils.PermissionHelper
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
@@ -57,6 +60,8 @@ fun NotifySettingsScreen(
     val context = LocalContext.current
 
     var serviceOn by remember { mutableStateOf(Settings.msgServiceOn) }
+    // v1.1.1: 群消息提醒范围 (默认全提醒)
+    var notifyGroupAll by remember { mutableStateOf(Settings.notifyGroupAll) }
     var running by remember { mutableStateOf(MessageService.isRunning) }
     var notifGranted by remember { mutableStateOf(PermissionHelper.notificationsEnabled(context)) }
     var batteryFree by remember { mutableStateOf(PermissionHelper.ignoringBattery(context)) }
@@ -81,7 +86,10 @@ fun NotifySettingsScreen(
         }
     }
 
+    // 契约 B: 预测性返回(跟手) —— 跟手右移+缩小淡出, 松手过半分提交返回, 否则回弹;
+    // 未开「预测性返回手势动画」的系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(), 功能不变。
     Scaffold(
+        modifier = Modifier,
         topBar = {
             AppTopBar(
                 title = "消息通知",
@@ -95,6 +103,65 @@ fun NotifySettingsScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 12.dp),
         ) {
+            // ==================== 保证后台收消息 3 步 (v1.1.2) ====================
+            item {
+                Spacer(Modifier.height(6.dp))
+                SmallTitle(text = "保证后台收消息（3 步）")
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                        Text(
+                            text = "把应用从最近任务里划掉之后还想收到消息，下面 3 步缺一不可：",
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        KeepAliveStepRow(
+                            mark = "①",
+                            title = "在最近任务里把「风铃分享库」锁定",
+                            body = "按底部多任务键（或从屏幕底部上滑并停顿）→ 下拉这张卡片（或点卡片右上角菜单）" +
+                                "→ 卡片角上出现小锁图标就锁好了。" +
+                                "没锁定时 ColorOS 会直接拒绝重启后台服务，消息就收不到；" +
+                                "这一步系统没给任何接口，只能手动点一下。",
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        KeepAliveStepRow(
+                            mark = "②",
+                            title = "允许自启动 / 后台运行",
+                            body = "点下面的按钮跳到系统设置页，把「风铃分享库」的开关打开。",
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        KeepAliveStepRow(
+                            mark = "③",
+                            title = "忽略电池优化",
+                            body = "点下面的按钮，在弹出的系统框里选「允许」，防止息屏/省电时连接被冻结。",
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { PermissionHelper.openAutoStartSettings(context) }) {
+                                Text(
+                                    text = "② 允许自启动",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MiuixTheme.colorScheme.primary,
+                                )
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            TextButton(onClick = { PermissionHelper.openIgnoreBatterySettings(context) }) {
+                                Text(
+                                    text = "③ 忽略电池优化",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MiuixTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // ==================== 总开关 ====================
             item {
                 Spacer(Modifier.height(6.dp))
@@ -143,6 +210,48 @@ fun NotifySettingsScreen(
                         Spacer(Modifier.width(12.dp))
                         Switch(
                             checked = serviceOn,
+                            onCheckedChange = null,
+                        )
+                    }
+                }
+            }
+            // v1.1.1: 群消息提醒范围 (所有人发的都提醒 / 只提醒 @ 我的)
+            item {
+                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val next = !notifyGroupAll
+                                notifyGroupAll = next
+                                Settings.notifyGroupAll = next
+                                Toast.makeText(
+                                    context,
+                                    if (next) "群消息将全部提醒" else "只提醒 @ 我 / @所有人的群消息",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "群消息提醒",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onBackground,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "打开后群里任何人发言都提醒; 关闭后只提醒 @ 我 / @所有人的消息",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                maxLines = 2,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Switch(
+                            checked = notifyGroupAll,
                             onCheckedChange = null,
                         )
                     }
@@ -262,6 +371,35 @@ fun NotifySettingsScreen(
             }
 
             item { Spacer(Modifier.height(28.dp)) }
+        }
+    }
+}
+
+/** 「保证后台收消息」卡片里的一行要点: 序号 + 标题 + 说明 (v1.1.2) */
+@Composable
+private fun KeepAliveStepRow(mark: String, title: String, body: String) {
+    Row {
+        Text(
+            text = mark,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MiuixTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(6.dp))
+        Column {
+            Text(
+                text = title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MiuixTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = body,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
         }
     }
 }

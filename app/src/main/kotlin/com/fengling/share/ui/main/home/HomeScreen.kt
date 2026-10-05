@@ -63,12 +63,17 @@ import com.fengling.share.data.Category
 import com.fengling.share.data.childrenOf
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.EmptyMessage
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.LoadingBox
+import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.glassCard
+import com.fengling.share.ui.components.pressScaleEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.InputField
-import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -205,168 +210,162 @@ fun HomeScreen(
             )
         },
     ) { innerPadding ->
-        PullToRefresh(
-            isRefreshing = refreshing,
-            onRefresh = { refresh() },
-            modifier = Modifier
+        Column(
+            Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .appGradientBackground()
+                // 搜索展开时, 点空白处取消搜索 (子层 clickable 消费点击, 不触发这里)
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        if (searchExpanded) {
+                            searchExpanded = false
+                            query = ""
+                            loadApps(effectiveCategoryId, "")
+                        }
+                    }
+                },
         ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    // 搜索展开时, 点空白处取消搜索 (子层 clickable 消费点击, 不触发这里)
-                    .pointerInput(Unit) {
-                        detectTapGestures {
-                            if (searchExpanded) {
-                                searchExpanded = false
-                                query = ""
-                                loadApps(effectiveCategoryId, "")
-                            }
-                        }
-                    },
-            ) {
-                // Miuix 搜索栏
-                SearchBar(
-                    inputField = {
-                        InputField(
-                            query = query,
-                            onQueryChange = {
-                                query = it
-                                loadApps(effectiveCategoryId, it)
-                            },
-                            onSearch = { loadApps(effectiveCategoryId, it) },
-                            expanded = searchExpanded,
-                            onExpandedChange = { searchExpanded = it },
-                            label = "搜索软件",
-                        )
-                    },
-                    onExpandedChange = { searchExpanded = it },
-                    expanded = searchExpanded,
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                ) {
-                    if (apps.isEmpty()) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("未找到相关软件", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                        }
-                    } else {
-                        apps.forEach { app ->
-                            AppListItem(app = app, onClick = { onAppClick(app.id) })
-                        }
-                    }
-                }
-
-                // 顶部轮播图
-                if (banners.isNotEmpty()) {
-                    BannerCarousel(
-                        banners = banners,
-                        onBannerClick = { banner ->
-                            if (banner.url.isNotEmpty()) {
-                                onOpenUrl(banner.url, banner.title.ifEmpty { "轮播" })
-                            } else {
-                                banner.appId?.let { onAppClick(it) }
-                            }
+            // Miuix 搜索栏
+            SearchBar(
+                inputField = {
+                    InputField(
+                        query = query,
+                        onQueryChange = {
+                            query = it
+                            loadApps(effectiveCategoryId, it)
                         },
+                        onSearch = { loadApps(effectiveCategoryId, it) },
+                        expanded = searchExpanded,
+                        onExpandedChange = { searchExpanded = it },
+                        label = "搜索软件",
                     )
-                }
-
-                // 顶级分类 (胶囊)
-                if (topCategories.isNotEmpty()) {
-                    LazyRow(
-                        modifier = Modifier
+                },
+                onExpandedChange = { searchExpanded = it },
+                expanded = searchExpanded,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            ) {
+                if (apps.isEmpty()) {
+                    Box(
+                        Modifier
                             .fillMaxWidth()
-                            .padding(top = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
+                            .padding(20.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        item {
-                            CategoryChip(
-                                name = "全部",
-                                icon = "",
-                                selected = selectedCategory == 0,
-                                onClick = { selectCategory(0) },
-                            )
-                        }
-                        items(topCategories, key = { it.id }) { cat ->
-                            CategoryChip(
-                                name = cat.name,
-                                icon = cat.icon,
-                                selected = selectedCategory == cat.id,
-                                onClick = { selectCategory(cat.id) },
-                            )
-                        }
+                        Text("未找到相关软件", color = MiuixTheme.colorScheme.onBackgroundVariant)
+                    }
+                } else {
+                    apps.forEach { app ->
+                        AppListItem(app = app, onClick = { onAppClick(app.id) })
                     }
                 }
+            }
 
-                // 子分类 chips: 选中顶级分类且有子分类时显示 (更具体地寻找应用)
-                if (subCategories.isNotEmpty() && query.isEmpty()) {
-                    LazyRow(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                    ) {
-                        item {
-                            CategoryChip(
-                                name = "全部",
-                                icon = "",
-                                selected = selectedSubCategory == 0,
-                                onClick = { selectCategory(selectedCategory) },
-                            )
+            // 顶部轮播图
+            if (banners.isNotEmpty()) {
+                BannerCarousel(
+                    banners = banners,
+                    onBannerClick = { banner ->
+                        if (banner.url.isNotEmpty()) {
+                            onOpenUrl(banner.url, banner.title.ifEmpty { "轮播" })
+                        } else {
+                            banner.appId?.let { onAppClick(it) }
                         }
-                        items(subCategories, key = { it.id }) { sub ->
-                            CategoryChip(
-                                name = sub.name,
-                                icon = sub.icon,
-                                selected = selectedSubCategory == sub.id,
-                                onClick = { selectSubCategory(sub.id) },
-                            )
-                        }
-                    }
-                }
-
-                // 列表区 (只做短淡入淡出, 不做左右滑动)
-                AnimatedContent(
-                    targetState = HomeListState(effectiveCategoryId, apps, loading, error),
-                    transitionSpec = {
-                        fadeIn(tween(160)) togetherWith fadeOut(tween(120))
                     },
-                    label = "homeList",
-                ) { state ->
-                    when {
-                        state.loading && state.apps.isEmpty() -> {
-                            LoadingBox(Modifier.fillMaxSize())
-                        }
-                        state.error.isNotEmpty() && state.apps.isEmpty() -> {
-                            EmptyMessage(text = state.error)
-                        }
-                        state.apps.isEmpty() -> {
-                            EmptyMessage(text = "暂无软件")
-                        }
-                        else -> {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(
-                                    start = 12.dp, end = 12.dp, top = 4.dp,
-                                    bottom = 100.dp, // 留出悬浮胶囊空间, 内容可滚到胶囊下方被模糊
-                                ),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                item {
-                                    SmallTitle(
-                                        text = if (state.categoryId == 0) "全部软件" else "共 ${state.apps.size} 款软件",
-                                        modifier = Modifier.padding(top = 8.dp),
-                                    )
-                                }
-                                items(state.apps, key = { it.id }) { app ->
-                                    AppListItem(app = app, onClick = { onAppClick(app.id) })
-                                }
+                )
+            }
+
+            // 顶级分类 (胶囊)
+            if (topCategories.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                ) {
+                    item {
+                        CategoryChip(
+                            name = "全部",
+                            icon = "",
+                            selected = selectedCategory == 0,
+                            onClick = { selectCategory(0) },
+                        )
+                    }
+                    items(topCategories, key = { it.id }) { cat ->
+                        CategoryChip(
+                            name = cat.name,
+                            icon = cat.icon,
+                            selected = selectedCategory == cat.id,
+                            onClick = { selectCategory(cat.id) },
+                        )
+                    }
+                }
+            }
+
+            // 子分类 chips: 选中顶级分类且有子分类时显示 (更具体地寻找应用)
+            if (subCategories.isNotEmpty() && query.isEmpty()) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                ) {
+                    item {
+                        CategoryChip(
+                            name = "全部",
+                            icon = "",
+                            selected = selectedSubCategory == 0,
+                            onClick = { selectCategory(selectedCategory) },
+                        )
+                    }
+                    items(subCategories, key = { it.id }) { sub ->
+                        CategoryChip(
+                            name = sub.name,
+                            icon = sub.icon,
+                            selected = selectedSubCategory == sub.id,
+                            onClick = { selectSubCategory(sub.id) },
+                        )
+                    }
+                }
+            }
+
+            // 列表区 (只做短淡入淡出, 不做左右滑动)
+            AnimatedContent(
+                targetState = HomeListState(effectiveCategoryId, apps, loading, error),
+                transitionSpec = {
+                    fadeIn(tween(160)) togetherWith fadeOut(tween(120))
+                },
+                label = "homeList",
+            ) { state ->
+                when {
+                    state.loading && state.apps.isEmpty() -> {
+                        LoadingBox(Modifier.fillMaxSize())
+                    }
+                    state.error.isNotEmpty() && state.apps.isEmpty() -> {
+                        EmptyMessage(text = state.error)
+                    }
+                    state.apps.isEmpty() -> {
+                        EmptyMessage(text = "暂无软件")
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                start = GlassSpacing.page, end = GlassSpacing.page, top = 4.dp,
+                                bottom = 100.dp, // 留出悬浮胶囊空间, 内容可滚到胶囊下方被模糊
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            item {
+                                SmallTitle(
+                                    text = if (state.categoryId == 0) "全部软件" else "共 ${state.apps.size} 款软件",
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
+                            }
+                            items(state.apps, key = { it.id }) { app ->
+                                AppListItem(app = app, onClick = { onAppClick(app.id) })
                             }
                         }
                     }
@@ -439,10 +438,16 @@ private fun AppTag(text: String, highlight: Boolean = false) {
 private fun AppListItem(app: AppItem, onClick: () -> Unit) {
     Card(
         onClick = onClick,
+        colors = CardDefaults.defaultColors(
+            color = Color.Transparent,
+            contentColor = MiuixTheme.colorScheme.onBackground,
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        cornerRadius = 16.dp,
+            .padding(vertical = 3.dp)
+            .pressScaleEffect(label = "homeAppPress")
+            .glassCard(radius = GlassRadius.card),
+        cornerRadius = GlassRadius.card,
     ) {
         Row(
             modifier = Modifier

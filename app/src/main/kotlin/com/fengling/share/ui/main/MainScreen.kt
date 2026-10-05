@@ -2,8 +2,11 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -66,6 +69,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.navigation.NavController
+import androidx.navigation.NamedNavArgument
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -104,6 +111,8 @@ import com.fengling.share.ui.main.my.NotifySettingsScreen
 import com.fengling.share.ui.pm.PmChatScreen
 import com.fengling.share.ui.user.UserProfileScreen
 import com.fengling.share.ui.main.my.MyScreen
+import com.fengling.share.ui.social.GroupInfoScreen
+import com.fengling.share.ui.social.GroupMemberListScreen
 import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
 import kotlinx.coroutines.launch
@@ -139,6 +148,10 @@ object Routes {
     // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
     // groupId: 从群聊进来带群 id (主页上的禁言只对本群生效), 其它入口 = 0 全站视角
     const val USER_PROFILE = "user/profile/{userId}?groupId={groupId}"
+    // 群详情页 (群聊页右上角「☰」进入: 群公告 / 群相册 / 群成员 / 消息免打扰 / 退出群聊)
+    const val GROUP_INFO = "social/group/{groupId}/info"
+    // 群成员列表页 (群详情页「查看全部 N 人」进入: 搜索 + 分页)
+    const val GROUP_MEMBERS = "social/group/{groupId}/members?name={name}"
 
     fun detail(appId: Int) = "detail/$appId"
     fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
@@ -146,6 +159,9 @@ object Routes {
     fun pmChat(convId: Int = 0, userId: Int = 0, messageId: Int = 0) =
         "pm/chat?convId=$convId&userId=$userId&messageId=$messageId"
     fun userProfile(userId: Int, groupId: Int = 0) = "user/profile/$userId?groupId=$groupId"
+    fun groupInfo(groupId: Int) = "social/group/$groupId/info"
+    fun groupMembers(groupId: Int, name: String = "") =
+        "social/group/$groupId/members?name=${android.net.Uri.encode(name)}"
     fun webview(url: String, title: String, password: String = "") =
         "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
     fun update(info: com.fengling.share.data.VersionInfo) =
@@ -162,6 +178,42 @@ object Routes {
  * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
  */
 
+/**
+ * 契约 B: NavHost 每个目的地统一补齐四段转场 (进入 / 退出 / 返回进入 / 返回退出)。
+ *
+ * 进入 = 右侧滑入 (与页面切换方向一致);
+ * 返回 = 上一级左视差跟入 + 当前页整屏右移 —— 手势进行中系统会把进度 seek 进这段转场
+ * (navigation-compose 的 SeekableTransitionState), 所以不能有 fadeIn/scaleIn。
+ * 规格统一写在这里, 新增目的地直接 appScreen(route) 即可, 不会再出现「有的页面有动画有的没有」。
+ */
+private fun NavGraphBuilder.appScreen(
+    route: String,
+    arguments: List<NamedNavArgument> = emptyList(),
+    content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit,
+) {
+    val slideSpec = spring<IntOffset>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    // v1.1.11 返回跟手速度: 用 tween + LinearEasing。
+    // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
+    // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
+    val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
+    composable(
+        route = route,
+        arguments = arguments,
+        // 进入: 新页从右滑入, 旧页向左让 1/4
+        enterTransition = { slideInHorizontally(slideSpec) { it } },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
+        // 返回: 系统手势进度会被 NavHost seek 进这段 pop 转场 —— 上一级从左侧轻微跟入,
+        // 当前页整屏右移 (1:1 跟手, 从哪来回哪去)。
+        // **不能 fadeIn / scaleIn**: 淡入会让跟手时被让出来的那半屏整片发白。
+        popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 4 } },
+        popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
+        content = content,
+    )
+}
+
 @Composable
 fun MainScreen(
     onThemeChanged: (ThemeMode) -> Unit = {},
@@ -169,6 +221,14 @@ fun MainScreen(
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // 所有内部导航统一走这里。
+    // v1.1.10: 自研快照层整个撤掉 —— navigation-compose 的 NavHost 自带预测性返回:
+    // 手势进度会 seek 它内部的 SeekableTransitionState (pop 时上一级被放在下层 zIndex),
+    // 上一级是**活的**页面, 不需要截图, 也就没有空白/卡顿。
+    fun go(route: String) {
+        navController.navigate(route)
+    }
 
     // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊) — OShin 同款方案
     val (backdrop, captureModifier) = rememberGlassBackdrop2()
@@ -183,6 +243,12 @@ fun MainScreen(
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // 契约 A(强化): 「群组 / 私聊」分段的选中值提升到这里 (MainScreen 常驻组合) 持有。
+    // 原来放在 SocialScreen 内部 —— 导航返回能靠 rememberSaveable 保住, 但切底部 Tab 时
+    // pager 页面会被回收重建, 页面内状态照样丢。放这里就不随任何页面销毁:
+    // 1 私聊进会话返回仍停「私聊」 2 群聊返回仍停「群组」 3 切底部 Tab 来回切仍保持 4 冷启动默认「群组」
+    var socialTab by rememberSaveable { mutableIntStateOf(0) }
 
     // 私聊新消息提示音 (不管停在哪个 tab 都能听到; 见文件末尾 PmNotifyWatcher)
     PmNotifyWatcher()
@@ -200,12 +266,12 @@ fun MainScreen(
                 t.groupId > 0 -> {
                     // 群聊在「群组」tab 里
                     pagerState.scrollToPage(SOCIAL_TAB_PAGE)
-                    navController.navigate(Routes.socialGroup(t.groupId))
+                    go(Routes.socialGroup(t.groupId))
                 }
                 t.pmConvId > 0 -> {
                     // 私聊会话列表也在「群组」tab 里, 先切过去再压栈, 返回时落点才自然
                     pagerState.scrollToPage(SOCIAL_TAB_PAGE)
-                    navController.navigate(Routes.pmChat(convId = t.pmConvId))
+                    go(Routes.pmChat(convId = t.pmConvId))
                 }
             }
         }
@@ -216,7 +282,7 @@ fun MainScreen(
     LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
         if (!pagerState.isScrollInProgress) {
             if (pagerState.currentPage == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
-                navController.navigate(Routes.ACCOUNT)
+                go(Routes.ACCOUNT)
                 pagerState.animateScrollToPage(lastAllowedPage)
             } else {
                 lastAllowedPage = pagerState.currentPage
@@ -241,7 +307,7 @@ fun MainScreen(
         // 腾讯频道 / QQ群 一律保持在内置浏览器打开 (2026-10-03 用户明确要求)。
         // 之前「交 QQ 客户端打开」的方案已撤销; 页面完整渲染改由 WebView 侧保障
         // (CookieManager 放开第三方 cookie + 反爬挑战页等待 + 渲染能力补齐), 见 WebViewScreen.kt。
-        navController.navigate(Routes.webview(url, title, password))
+        go(Routes.webview(url, title, password))
     }
 
     // ===== 公告 (首页弹窗: 每日一次 / 每次打开 + 今日不再提示) =====
@@ -307,7 +373,7 @@ fun MainScreen(
                 if (!opened) {
                     // 没有应用能接管 → http(s) 回退内置浏览器, 不让用户卡住 (2026-10-03)
                     if (target.url.startsWith("http")) {
-                        navController.navigate(Routes.webview(target.url, target.appLabel))
+                        go(Routes.webview(target.url, target.appLabel))
                     } else {
                         Toast.makeText(
                             context,
@@ -322,33 +388,26 @@ fun MainScreen(
         )
     }
 
-    // 进入 = 滑动切换动画 (用户定案: 点击应用右滑进入, 旧页左滑出)
-    // 返回 = 系统预测返回动画 (跟手缩放回上一级, 不要滑出):
-    // manifest enableOnBackInvokedCallback=true 时系统手势跟手,
-    // 提交后 pop 转场用缩放+淡出延续预测返回观感 (官方 predictive-back)
+    // 进入 = 滑动切换 (点击应用右滑进入, 旧页左移 1/4 视差)
+    // 返回 = 预测性返回跟手 (同 appScreen, 见上面的说明)
     val slideSpec = spring<IntOffset>(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
-    val popSpec = spring<Float>(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
+    // v1.1.11 返回跟手速度: 用 tween + LinearEasing。
+    // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
+    // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
+    val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
         modifier = Modifier.fillMaxSize(),
         enterTransition = { slideInHorizontally(slideSpec) { it } },
-        exitTransition = { slideOutHorizontally(slideSpec) { -it } },
-        // 返回: 预测返回风格 — 当前页缩小淡出, 上一级放大淡入
-        popEnterTransition = {
-            scaleIn(initialScale = 0.95f, animationSpec = popSpec) + fadeIn(animationSpec = popSpec)
-        },
-        popExitTransition = {
-            scaleOut(targetScale = 0.9f, animationSpec = popSpec) + fadeOut(animationSpec = popSpec)
-        },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
+        popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 4 } },
+        popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
     ) {
-        composable(Routes.MAIN) {
+        appScreen(Routes.MAIN) {
             // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (kyant/backdrop, 不用 Scaffold bottomBar 槽位)
             Box(
                 Modifier
@@ -371,27 +430,32 @@ fun MainScreen(
                     ) { page ->
                         when (page) {
                             0 -> HomeScreen(
-                                onAppClick = { navController.navigate(Routes.detail(it)) },
+                                onAppClick = { go(Routes.detail(it)) },
                                 onOpenUrl = { url, title ->
                                     // 内置浏览器打开
-                                    navController.navigate(Routes.webview(url, title))
+                                    go(Routes.webview(url, title))
                                 },
                             )
-                            1 -> ExploreScreen(onAppClick = { navController.navigate(Routes.detail(it)) })
+                            1 -> ExploreScreen(onAppClick = { go(Routes.detail(it)) })
                             2 -> SocialScreen(
                                 // 「群组」tab: 常驻列表页, 无返回栏; 点群组进全屏聊天
                                 onBack = null,
-                                onOpenGroup = { g -> navController.navigate(Routes.socialGroup(g.id)) },
+                                // 契约 A: 分段选中值由本层持有并回传 (受控), 页面重建也不丢
+                                initialTab = socialTab,
+                                onTabChange = { socialTab = it },
+                                onOpenGroup = { g -> go(Routes.socialGroup(g.id)) },
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
-                                onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
+                                onNeedLogin = { go(Routes.ACCOUNT) },
                                 // 点群聊里任何人的头像: 打开用户主页 (带上群 id, 主页里可直接禁言)
-                                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
+                                onOpenUser = { uid, gid -> go(Routes.userProfile(uid, gid)) },
 
                                 // 私聊会话列表点一条: 进私聊会话页
-                                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
+                                onOpenPm = { uid, cid -> go(Routes.pmChat(cid, uid)) },
                                 // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
-                                onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
+                                onOpenGroupAt = { gid, mid -> go(Routes.socialGroup(gid, mid)) },
+                                // 页面级捕获层: 「群组 / 私聊」液体玻璃分段控件用它做真实 backdrop 模糊
+                                glassBackdrop = backdrop,
                             )
                             else -> MyScreen(
                                 onThemeChanged = onThemeChanged,
@@ -400,19 +464,19 @@ fun MainScreen(
                                     openLink(url, title)
                                 },
                                 onOpenUpdate = { info ->
-                                    navController.navigate(Routes.update(info))
+                                    go(Routes.update(info))
                                 },
                                 onOpenContributors = {
-                                    navController.navigate(Routes.CONTRIBUTORS)
+                                    go(Routes.CONTRIBUTORS)
                                 },
                                 onOpenAccount = {
-                                    navController.navigate(Routes.ACCOUNT)
+                                    go(Routes.ACCOUNT)
                                 },
                                 onOpenMessages = {
-                                    navController.navigate(Routes.MESSAGES)
+                                    go(Routes.MESSAGES)
                                 },
                                 onOpenNotifySettings = {
-                                    navController.navigate(Routes.NOTIFY_SETTINGS)
+                                    go(Routes.NOTIFY_SETTINGS)
                                 },
                             )
                         }
@@ -426,7 +490,7 @@ fun MainScreen(
                     onTabSelected = { index ->
                         if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
                             // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)
-                            navController.navigate(Routes.ACCOUNT)
+                            go(Routes.ACCOUNT)
                         } else {
                             scope.launch { pagerState.animateScrollToPage(index) }
                         }
@@ -438,7 +502,7 @@ fun MainScreen(
         }
 
         // 详情页
-        composable(
+        appScreen(
             route = Routes.DETAIL,
             arguments = listOf(navArgument("appId") { type = NavType.IntType }),
         ) { backStackEntry ->
@@ -451,13 +515,13 @@ fun MainScreen(
                     openLink(url, title, password)
                 },
                 onOpenSubApp = { subId ->
-                    navController.navigate(Routes.detail(subId))
+                    go(Routes.detail(subId))
                 },
             )
         }
 
         // 内置浏览器
-        composable(
+        appScreen(
             route = Routes.WEBVIEW,
             arguments = listOf(
                 navArgument("url") { type = NavType.StringType; defaultValue = "" },
@@ -477,21 +541,21 @@ fun MainScreen(
         }
 
         // 投稿名单页
-        composable(Routes.CONTRIBUTORS) {
+        appScreen(Routes.CONTRIBUTORS) {
             ContributorsScreen(
                 onBack = { navController.popBackStack() },
             )
         }
 
         // 账号页 (登录 / 注册 / 个人资料)
-        composable(Routes.ACCOUNT) {
+        appScreen(Routes.ACCOUNT) {
             AccountScreen(
                 onBack = { navController.popBackStack() },
             )
         }
 
         // 群组聊天页 (从「群组」tab 点进来, 直接进入指定群)
-        composable(
+        appScreen(
             route = Routes.SOCIAL_GROUP,
             arguments = listOf(
                 navArgument("groupId") { type = NavType.IntType },
@@ -508,20 +572,56 @@ fun MainScreen(
                     navController.popBackStack(Routes.MAIN, false)
                 },
                 initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
-                onNeedLogin = { navController.navigate(Routes.ACCOUNT) },
+                onNeedLogin = { go(Routes.ACCOUNT) },
                 initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
                 openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
                 // 群聊消息里的链接: 内置浏览器打开
                 onOpenWeb = { url, title -> openLink(url, title) },
                 // 群聊里点头像: 带上当前群 id → 主页里就能直接禁言 (只对本群生效)
-                onOpenUser = { uid, gid -> navController.navigate(Routes.userProfile(uid, gid)) },
-                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(cid, uid)) },
-                onOpenGroupAt = { gid, mid -> navController.navigate(Routes.socialGroup(gid, mid)) },
+                onOpenUser = { uid, gid -> go(Routes.userProfile(uid, gid)) },
+                onOpenPm = { uid, cid -> go(Routes.pmChat(cid, uid)) },
+                onOpenGroupAt = { gid, mid -> go(Routes.socialGroup(gid, mid)) },
+                // 群聊右上角「☰」: 进群详情页 (群公告 / 群相册 / 群成员 / 退出群聊)
+                onOpenGroupInfo = { gid -> go(Routes.groupInfo(gid)) },
+                glassBackdrop = backdrop,
+            )
+        }
+
+        // 群详情页 (契约 B6): 群公告 / 群相册 / 群成员 / 消息免打扰 / 全员禁言 / 退出群聊
+        appScreen(
+            route = Routes.GROUP_INFO,
+            arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
+        ) { backStackEntry ->
+            GroupInfoScreen(
+                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onBack = { navController.popBackStack() },
+                onOpenMembers = { id -> go(Routes.groupMembers(id)) },
+                onOpenUser = { uid, id -> go(Routes.userProfile(uid, id)) },
+                // 群公告里的链接: 走内置浏览器
+                onOpenWeb = { url, title -> openLink(url, title) },
+                // 退出群聊成功: 直接回群列表 (群详情页 + 群聊页一起弹掉)
+                onLeft = { navController.popBackStack(Routes.MAIN, false) },
+            )
+        }
+
+        // 群成员列表页 (契约 B6): 搜索昵称 / 用户名 + 分页 + 点成员进主页
+        appScreen(
+            route = Routes.GROUP_MEMBERS,
+            arguments = listOf(
+                navArgument("groupId") { type = NavType.IntType },
+                navArgument("name") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { backStackEntry ->
+            GroupMemberListScreen(
+                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
+                onBack = { navController.popBackStack() },
+                groupName = backStackEntry.arguments?.getString("name") ?: "",
+                onOpenUser = { uid, gid -> go(Routes.userProfile(uid, gid)) },
             )
         }
 
         // 消息中心 (通知列表; link 走统一链接分流, http(s) 内置浏览器)
-        composable(Routes.MESSAGES) {
+        appScreen(Routes.MESSAGES) {
             MessagesScreen(
                 onBack = { navController.popBackStack() },
                 onOpenWeb = { url, title ->
@@ -529,24 +629,24 @@ fun MainScreen(
                 },
                 // @我 / 群消息通知: 跳进对应群聊并定位到那条消息; 群公告通知: 进群并弹出公告
                 onOpenGroup = { groupId, messageId, showNotice ->
-                    navController.navigate(Routes.socialGroup(groupId, messageId, showNotice))
+                    go(Routes.socialGroup(groupId, messageId, showNotice))
                 },
                 // 私聊通知 (link = pm:<conv_id>:<msg_id>): 进私聊会话并定位到那条消息
                 onOpenPm = { convId, messageId ->
-                    navController.navigate(Routes.pmChat(convId = convId, messageId = messageId))
+                    go(Routes.pmChat(convId = convId, messageId = messageId))
                 },
             )
         }
 
         // 消息通知设置 (我的 -> 消息通知): 后台接收开关 + 权限引导
-        composable(Routes.NOTIFY_SETTINGS) {
+        appScreen(Routes.NOTIFY_SETTINGS) {
             NotifySettingsScreen(
                 onBack = { navController.popBackStack() },
             )
         }
 
         // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己; 自己看时没有「发消息」按钮)
-        composable(
+        appScreen(
             route = Routes.USER_PROFILE,
             arguments = listOf(
                 navArgument("userId") { type = NavType.IntType },
@@ -558,12 +658,14 @@ fun MainScreen(
                 userId = backStackEntry.arguments?.getInt("userId") ?: 0,
                 groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
                 onBack = { navController.popBackStack() },
-                onOpenPm = { uid, cid -> navController.navigate(Routes.pmChat(convId = cid, userId = uid)) },
+                onOpenPm = { uid, cid -> go(Routes.pmChat(convId = cid, userId = uid)) },
+                // 用户简介里的链接: 走内置浏览器
+                onOpenWeb = { url, title -> openLink(url, title) },
             )
         }
 
         // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知进入)
-        composable(
+        appScreen(
             route = Routes.PM_CHAT,
             arguments = listOf(
                 navArgument("convId") { type = NavType.IntType; defaultValue = 0 },
@@ -579,12 +681,12 @@ fun MainScreen(
                 onBack = { navController.popBackStack() },
                 onOpenWeb = { url, title -> openLink(url, title) },
                 // 私聊里点头像: 没有群上下文 → groupId = 0 (全站视角)
-                onOpenUser = { uid -> navController.navigate(Routes.userProfile(uid)) },
+                onOpenUser = { uid -> go(Routes.userProfile(uid)) },
             )
         }
 
         // 软件更新页 (OShin 同款: 下载并安装)
-        composable(
+        appScreen(
             route = Routes.UPDATE,
             arguments = listOf(
                 navArgument("version") { type = NavType.StringType; defaultValue = "" },
@@ -833,7 +935,7 @@ private fun PmNotifyWatcher() {
                     }
                 }
             }
-            kotlinx.coroutines.delay(8000L)
+            kotlinx.coroutines.delay(4000L)
         }
     }
 
@@ -853,7 +955,8 @@ private fun PmNotifyWatcher() {
 
     // 订阅流事件:
     // - 私聊 -> 响
-    // - 群消息且 atMe == 1 || atAll == 1 -> 也响 (群里刷屏不响, 只有被 @ 才响)
+    // - 群消息 -> 也响 (v1.1.1: 群里任何人发消息都有提示音, 和 QQ/微信一致);
+    //   自己发的消息不响; 该群被我设了「消息免打扰」(event.muted) 时不响
     // - Reconnected -> 这里什么都不用做 (各页面自己补一次全量刷新)
     LaunchedEffect(Unit) {
         MessageStream.events.collect { event ->
@@ -864,7 +967,8 @@ private fun PmNotifyWatcher() {
                     NotifySound.play(context)
                 }
                 is StreamEvent.Group -> {
-                    if (event.atMe == 1 || event.atAll == 1) NotifySound.play(context)
+                    val mine = event.userId != 0 && event.userId == UserStore.current?.id
+                    if (!mine && !event.muted) NotifySound.play(context)
                 }
                 StreamEvent.Reconnected -> Unit
             }

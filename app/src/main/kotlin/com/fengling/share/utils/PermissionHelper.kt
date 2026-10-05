@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.util.Log
 import android.provider.Settings as AndroidSettings
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -95,8 +96,22 @@ object PermissionHelper {
                 // 魅族那页要显式告诉它看哪个包
                 if (pkg == "com.meizu.safe") putExtra("packageName", context.packageName)
             }
-            if (runCatching { context.startActivity(intent) }.isSuccess) return
+            // 先问一句「这个页面在不在」(v1.1.2): 该机型没这个页面就直接下一个候选,
+            // 少一次注定失败的 startActivity。包可见性已在 Manifest <queries> 里声明。
+            val resolvable = runCatching {
+                context.packageManager.resolveActivity(intent, 0) != null
+            }.getOrDefault(false)
+            if (resolvable && runCatching { context.startActivity(intent) }.isSuccess) {
+                Log.i(TAG, "自启动页跳转成功: " + pkg + "/" + cls)
+                return
+            }
+            // resolveActivity == null 也可能只是厂商没在清单里导出: 再硬跳一次, 失败就下一个
+            if (!resolvable && runCatching { context.startActivity(intent) }.isSuccess) {
+                Log.i(TAG, "自启动页硬跳成功 (resolve 为 null): " + pkg + "/" + cls)
+                return
+            }
         }
+        Log.w(TAG, "没有可用的自启动页, 退化到应用详情页: " + context.packageName)
         openAppDetailSettings(context)
     }
 
@@ -152,6 +167,9 @@ object PermissionHelper {
         }
     }
 
+    /** 日志 tag (跳转自启动页的可观测性: 真机排查到底跳没跳成功) */
+    private const val TAG = "FLS_PERM"
+
     /** 各家「自启动 / 后台运行」入口, 顺序 = 尝试顺序 */
     private val AUTOSTART_PAGES: List<Pair<String, String>> = listOf(
         // 小米 / 红米 / POCO
@@ -162,9 +180,18 @@ object PermissionHelper {
         // 荣耀
         "com.hihonor.systemmanager" to "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
         "com.hihonor.systemmanager" to "com.hihonor.systemmanager.appcontrol.activity.StartupAppControlActivity",
-        // OPPO / 一加 / realme
+        // OPPO / 一加 / realme —— ColorOS 12+ 把「自启动管理」从安全中心挪进了「电池」应用 (v1.1.2 实测)：
+        // ColorOS 14 真机上只有下面第一条真实存在 (dumpsys package com.oplus.battery 的证据:
+        // action com.oplus.battery.permission.startup.StartupAppListActivity ->
+        // com.oplus.battery/com.oplus.startupapp.view.StartupAppListActivity)，
+        // 而 com.coloros.safecenter 在这台机器上**根本没装** (现名 com.oplus.safecenter，且里面没有自启动页)，
+        // 所以旧表里的 coloros 候选必然全跳失败 —— 这就是「允许自启动」点了没反应的根因。
+        "com.oplus.battery" to "com.oplus.startupapp.view.StartupAppListActivity",
+        "com.oplus.battery" to "com.oplus.startupapp.view.OptimizationAutoStartActivity",
+        // 旧机型 (ColorOS 7~11) 的安全中心入口, 保底留着
         "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
         "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
+        "com.oppo.safecenter" to "com.oplus.safecenter.permission.startup.StartupAppListActivity",
         "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
         // vivo / iQOO
         "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",

@@ -1,5 +1,7 @@
 package com.fengling.share.data
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -9,7 +11,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -97,20 +101,32 @@ object ApiClient {
      *
      * - URL 里 action 必须放查询串 (api.php 用 $_GET['action'] 路由), token 也走查询串
      *   (current_user() 支持 param('token'); 不用 Authorization 头, 免得 nginx 丢头)。
-     * - `pm_id=0&group_id=0` = 服务端从「现在」开始, 不重放历史 (见契约 A1)。
+     * - `pmId` / `groupId` 是「已收到的最大消息 id」游标: `0` = 服务端从「现在」开始 (不重放历史),
+     *   `> 0` = 从该 id **之后**开始推, 可以把断线期间的消息补齐 (v1.1.2 起由
+     *   [com.fengling.share.data.StreamCursor] 持久化, 见契约 A1)。
      * - 逐行解析 `event:` / `data:`; `:` 开头是心跳注释行, 忽略; `event: bye` 视为服务端
      *   正常收尾 -> 返回 Result.success, 让外层 (MessageStream) 立刻重连。
      * - onEvent 在 IO 线程回调, UI 侧自己 withContext。
+     * - `onActivity` 每读到**任何一行**(含 10 秒一次的 `: hb` 心跳注释行) 都回调一次,
+     *   给 [com.fengling.share.service.MessageService] 判断「连接是不是还活着」(v1.1.2)。
      *
      * @return 成功 = 服务端正常收尾 / 连接自然结束; 失败 = 建连失败 (含 401)
      */
-    suspend fun streamMessages(onEvent: (StreamEvent) -> Unit): Result<Unit> =
+    suspend fun streamMessages(
+        pmId: Int = 0,
+        groupId: Int = 0,
+        onActivity: (() -> Unit)? = null,
+        onEvent: (StreamEvent) -> Unit,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val url = StringBuilder(BASE_URL)
                     .append("?action=stream&token=")
                     .append(URLEncoder.encode(UserStore.token, "UTF-8"))
-                    .append("&pm_id=0&group_id=0")
+                    // 游标 (v1.1.2): 0 = 从现在开始 (首次安装 / 刚退出登录, 不重放历史);
+                    // > 0 = 从该 id 之后开始推 —— 断线期间服务端攒的积压会补推过来, 不再丢那 2 秒窗口
+                    .append("&pm_id=").append(pmId)
+                    .append("&group_id=").append(groupId)
                     .toString()
                 val call = streamClient.newCall(Request.Builder().url(url).get().build())
                 // 协程被取消 (App 退后台 -> MessageStream.stop()) 时 cancel 掉 Call,
@@ -131,6 +147,8 @@ object ApiClient {
                         var eventName = ""
                         while (true) {
                             val line = source.readUtf8Line() ?: break
+                            // 任何一行 (心跳/事件/空行) 都证明这条连接是活的
+                            onActivity?.invoke()
                             when {
                                 // 心跳行 `: hb` (纯注释) 直接忽略
                                 line.startsWith(":") -> Unit
@@ -183,6 +201,13 @@ object ApiClient {
             nickname = j.optString("nickname", ""),
             content = j.optString("content", ""),
             image = j.optString("image", ""),
+            // Wave 2: 视频消息 (老服务端不推这几个键 -> 空/0, 行为不变)
+            video = j.optString("video", ""),
+            videoW = j.optInt("video_w", 0),
+            videoH = j.optInt("video_h", 0),
+            videoDuration = j.optInt("video_duration", 0),
+            videoSize = j.optLong("video_size", 0L),
+            msgType = j.optString("msg_type", ""),
             createdAt = j.optString("created_at", ""),
         )
     }.getOrNull()
@@ -198,8 +223,17 @@ object ApiClient {
             nickname = j.optString("nickname", ""),
             content = j.optString("content", ""),
             image = j.optString("image", ""),
+            // Wave 2: 视频消息五件套 (老服务端不推 -> 空/0)
+            video = j.optString("video", ""),
+            videoW = j.optInt("video_w", 0),
+            videoH = j.optInt("video_h", 0),
+            videoDuration = j.optInt("video_duration", 0),
+            videoSize = j.optLong("video_size", 0L),
             atMe = j.optInt("at_me", 0),
             atAll = j.optInt("at_all", 0),
+            // 服务端在 group 事件里带上「我是否对该群开了免打扰」(契约 A6), 老服务端没有这个键 -> false
+            muted = j.optInt("muted", 0) == 1,
+            msgType = j.optString("msg_type", ""),
             createdAt = j.optString("created_at", ""),
         )
     }.getOrNull()
@@ -520,6 +554,125 @@ object ApiClient {
         }
     }
 
+    // ===================== Wave 2: 视频消息 (服务端已上线, 契约既成事实) =====================
+
+    /**
+     * 视频消息配置 (公开接口, 无需鉴权)
+     * 200 {"code":0,"msg":"ok","data":{"enabled":1,"max_mb":100}}
+     * - enabled=0 → 客户端隐藏/禁用视频入口
+     * - maxMb       → 客户端发送前校验用的**服务端真实上限** (不写死 100)
+     */
+    suspend fun videoConfig(): Result<VideoConfig> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request("video_config").optJSONObject("data") ?: JSONObject()
+            VideoConfig(
+                enabled = d.optInt("enabled", 0) == 1,
+                maxMb = d.optInt("max_mb", 0),
+            )
+        }
+    }
+
+    /**
+     * 上传聊天视频 (multipart, 字段名固定 file, action=social_video_upload)
+     *
+     * 与图片上传的三点不同:
+     * 1. **流式**: 不把 100MB 读进内存, 边读边写边回报字节进度 (内存里只有 64KB 缓冲);
+     * 2. **长超时专用 client**: 100MB 实测要 50~70 秒, 全局 client 的 15s readTimeout 必然超时,
+     *    这里 `client.newBuilder()` 派生一个只用于本请求的 client, 不动全局默认值;
+     * 3. **必须带上 video_w/video_h/video_duration/video_size**: 服务端 video_meta_params()
+     *    直接读这 4 个字段落库 (不做探测), 不传就是 0。
+     *
+     * @param videoSize 文件字节数 (OpenableColumns.SIZE); 同时用作 multipart 的 Content-Length
+     * @param isCancelled 返回 true 时中止上传 (抛 ApiException("已取消上传"))
+     * @param onProgress 0~100 百分比回调 (**在 IO 线程**, 调用方自己切主线程)
+     */
+    suspend fun uploadChatVideo(
+        context: Context,
+        uri: Uri,
+        videoW: Int = 0,
+        videoH: Int = 0,
+        videoDuration: Int = 0,
+        videoSize: Long = 0L,
+        filename: String = "chat.mp4",
+        mime: String = "video/mp4",
+        isCancelled: () -> Boolean = { false },
+        onProgress: (Int) -> Unit = {},
+    ): Result<ChatVideo> = withContext(Dispatchers.IO) {
+        apiCall {
+            val resolver = context.contentResolver
+            val total = videoSize.coerceAtLeast(0L)
+            val part = object : RequestBody() {
+                override fun contentType() =
+                    (if (mime.contains("/")) mime else "video/mp4").toMediaType()
+
+                override fun contentLength(): Long = total
+
+                override fun writeTo(sink: BufferedSink) {
+                    val input = resolver.openInputStream(uri)
+                        ?: throw ApiException("无法读取所选视频")
+                    input.use { ins ->
+                        val buf = ByteArray(64 * 1024)
+                        var sent = 0L
+                        var last = -1
+                        while (true) {
+                            if (isCancelled()) throw ApiException("已取消上传")
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            sink.write(buf, 0, n)
+                            sent += n
+                            val pct = if (total > 0L) {
+                                ((sent * 100L) / total).toInt().coerceIn(0, 100)
+                            } else {
+                                // 拿不到字节数时按「读到的块数」给个粗略进度, 别让用户以为卡死
+                                (-1)
+                            }
+                            if (pct >= 0 && pct != last) {
+                                last = pct
+                                onProgress(pct)
+                            }
+                        }
+                        if (last < 100) onProgress(100)
+                    }
+                }
+            }
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", filename, part)
+                .addFormDataPart("video_w", videoW.toString())
+                .addFormDataPart("video_h", videoH.toString())
+                .addFormDataPart("video_duration", videoDuration.toString())
+                .addFormDataPart("video_size", videoSize.toString())
+                .build()
+            val req = Request.Builder()
+                .url(StringBuilder(BASE_URL).append("?action=social_video_upload").toString())
+                .header("Authorization", "Bearer ${UserStore.token}")
+                .post(body)
+                .build()
+            val longClient = client.newBuilder()
+                .writeTimeout(10, TimeUnit.MINUTES)
+                .readTimeout(10, TimeUnit.MINUTES)
+                .callTimeout(15, TimeUnit.MINUTES)
+                .build()
+            longClient.newCall(req).execute().use { response ->
+                val text = response.body?.string() ?: "{}"
+                val obj = JSONObject(text)
+                if (obj.optInt("code", -1) != 0) {
+                    throw ApiException(obj.optString("msg", "视频上传失败"))
+                }
+                val d = obj.optJSONObject("data") ?: JSONObject()
+                ChatVideo(
+                    url = jsonStr(d, "url"),
+                    // size 以服务端实际收到为准 (前端只用来做展示/兜底)
+                    size = if (d.isNull("size")) 0L else d.optLong("size", 0L),
+                    width = jsonInt(d, "width"),
+                    height = jsonInt(d, "height"),
+                    duration = jsonInt(d, "duration"),
+                    cleaned = jsonInt(d, "cleaned"),
+                )
+            }
+        }
+    }
+
     /** 退出登录 (通知后端作废 token, 本地登录态由调用方 UserStore.clear()) */
     suspend fun logoutAccount(): Result<Unit> = withContext(Dispatchers.IO) {
         apiCall {
@@ -570,6 +723,168 @@ object ApiClient {
                 UserStore.token,
             )
             body.optJSONObject("data")?.optInt("muted", 0)?.let { it == 1 } ?: muted
+        }
+    }
+
+    /**
+     * 管理员: 开启 / 关闭某个群的「全体禁言」(action=social_group_allmute_set, 契约 A3)。
+     *
+     * 开启后除管理员外任何人都不能发言, 服务端会返回 403 + 中文文案
+     * (客户端在群聊页另有一层「输入框禁用 + 横幅」的前置拦截)。
+     */
+    suspend fun socialGroupAllMuteSet(groupId: Int, muted: Boolean): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            apiCall {
+                val d = request(
+                    "social_group_allmute_set",
+                    mapOf<String, Any?>("group_id" to groupId, "muted" to if (muted) 1 else 0),
+                    UserStore.token,
+                ).optJSONObject("data")
+                // 服务端返回 data.all_muted (0/1); 拿不到就按本地意图返回
+                d?.optInt("all_muted", if (muted) 1 else 0)?.let { it == 1 } ?: muted
+            }
+        }
+
+    /**
+     * 加入群聊 (契约 A2, action=social_group_join)。
+     *
+     * 群聊「先加入才能发消息」: 未加入时服务端会拒绝 social_send,
+     * 客户端在输入框位置显示「加入群聊」按钮, 点它调这个接口。
+     * @return true = 已在群里 (joined=1 或 already=1)
+     */
+    suspend fun socialGroupJoin(groupId: Int): Result<Boolean> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "social_group_join",
+                mapOf<String, Any?>("group_id" to groupId),
+                UserStore.token,
+            ).optJSONObject("data")
+            // 服务端返回 data.joined=1 / data.already=0|1, 缺字段按成功兜底
+            (d?.optInt("joined", 1) ?: 1) == 1
+        }
+    }
+
+    /**
+     * 退出群聊 (契约 A2, action=social_group_leave)。
+     * 群主不能退 (服务端返回中文错误文案, 客户端 Toast 原文)。
+     */
+    suspend fun socialGroupLeave(groupId: Int): Result<Boolean> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "social_group_leave",
+                mapOf<String, Any?>("group_id" to groupId),
+                UserStore.token,
+            ).optJSONObject("data")
+            (d?.optInt("left", 1) ?: 1) == 1
+        }
+    }
+
+    /** 群相册里的一张图 (契约 A3, image 是原图地址) */
+    data class GroupImage(
+        val id: Int = 0,
+        val userId: Int = 0,
+        val nickname: String = "",
+        val username: String = "",
+        val avatar: String = "",
+        val image: String = "",
+        val imageW: Int = 0,
+        val imageH: Int = 0,
+        val createdAt: String = "",
+    ) {
+        companion object {
+            fun fromJson(j: JSONObject): GroupImage = GroupImage(
+                id = j.optInt("id", 0),
+                userId = j.optInt("user_id", 0),
+                nickname = jsonStr(j, "nickname"),
+                username = jsonStr(j, "username"),
+                avatar = jsonStr(j, "avatar"),
+                image = jsonStr(j, "image"),
+                imageW = jsonInt(j, "image_w"),
+                imageH = jsonInt(j, "image_h"),
+                createdAt = jsonStr(j, "created_at"),
+            )
+        }
+    }
+
+    /** 群相册一页 (契约 A3, page 从 1 开始, page_size 默认 30 最大 60) */
+    data class GroupImagesPage(
+        val list: List<GroupImage> = emptyList(),
+        val page: Int = 1,
+        val pageSize: Int = 30,
+        val total: Int = 0,
+        val hasMore: Boolean = false,
+    )
+
+    /** 群相册 (需登录): 按时间倒序分页, 返回原图地址 */
+    suspend fun socialGroupImages(
+        groupId: Int,
+        page: Int = 1,
+        pageSize: Int = 30,
+    ): Result<GroupImagesPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val d = request(
+                "social_group_images",
+                mapOf<String, Any?>("group_id" to groupId, "page" to page, "page_size" to pageSize),
+                UserStore.token,
+            ).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            val total = d?.optInt("total", 0) ?: 0
+            val size = d?.optInt("page_size", pageSize) ?: pageSize
+            GroupImagesPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { GroupImage.fromJson(arr.getJSONObject(it)) },
+                page = d?.optInt("page", page) ?: page,
+                pageSize = size,
+                total = total,
+                hasMore = if (d != null && !d.isNull("has_more")) jsonBool(d, "has_more")
+                else page * size < total,
+            )
+        }
+    }
+
+    /** 群成员一页 (契约 A3): 带 is_member / member_count, 排序 群主 > 管理员 > 成员, 加入时间升序 */
+    data class GroupMembersPage(
+        val list: List<SocialGroupMember> = emptyList(),
+        val page: Int = 1,
+        val pageSize: Int = 50,
+        val total: Int = 0,
+        val isMember: Boolean = true,
+        val memberCount: Int = 0,
+        val hasMore: Boolean = false,
+    )
+
+    /**
+     * 群成员分页 (需登录)
+     * @param keyword 非空时按昵称 / 用户名模糊搜索
+     */
+    suspend fun socialGroupMembersPage(
+        groupId: Int,
+        keyword: String = "",
+        page: Int = 1,
+        pageSize: Int = 50,
+    ): Result<GroupMembersPage> = withContext(Dispatchers.IO) {
+        apiCall {
+            val params = mutableMapOf<String, Any?>(
+                "group_id" to groupId,
+                "page" to page,
+                "page_size" to pageSize,
+            )
+            if (keyword.isNotBlank()) params["keyword"] = keyword
+            val d = request("social_group_members", params, UserStore.token).optJSONObject("data")
+            val arr = d?.optJSONArray("list")
+            val total = d?.optInt("total", 0) ?: 0
+            val size = d?.optInt("page_size", pageSize) ?: pageSize
+            GroupMembersPage(
+                list = if (arr == null) emptyList() else
+                    (0 until arr.length()).map { SocialGroupMember.fromJson(arr.getJSONObject(it)) },
+                page = d?.optInt("page", page) ?: page,
+                pageSize = size,
+                total = total,
+                isMember = if (d == null || d.isNull("is_member")) true else jsonBool(d, "is_member"),
+                memberCount = d?.optInt("member_count", 0) ?: 0,
+                hasMore = if (d != null && !d.isNull("has_more")) jsonBool(d, "has_more")
+                else page * size < total,
+            )
         }
     }
 
@@ -691,6 +1006,16 @@ object ApiClient {
         imageW: Int = 0,
         /** 原图高 (0 = 未知) */
         imageH: Int = 0,
+        /** 视频消息: 上传接口拿到的直链 (必须以 .../chat/ 开头, 否则「视频地址不合法」) */
+        video: String = "",
+        /** 视频宽 (客户端探测后回传, 服务端只做范围兜底) */
+        videoW: Int = 0,
+        /** 视频高 */
+        videoH: Int = 0,
+        /** 视频时长 (秒) */
+        videoDuration: Int = 0,
+        /** 视频字节数 */
+        videoSize: Long = 0L,
     ): Result<Int> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
@@ -704,6 +1029,14 @@ object ApiClient {
                 params["image"] = image
                 params["image_w"] = imageW
                 params["image_h"] = imageH
+            }
+            // 纯视频消息: content 传空串 + 带上 video 五件套; 服务端据此把 msg_type 落成 "video"
+            if (video.isNotBlank()) {
+                params["video"] = video
+                params["video_w"] = videoW
+                params["video_h"] = videoH
+                params["video_duration"] = videoDuration
+                params["video_size"] = videoSize
             }
             request("social_send", params, UserStore.token)
                 .optJSONObject("data")?.optInt("id", 0) ?: 0
@@ -830,6 +1163,12 @@ object ApiClient {
         image: String = "",
         imageW: Int = 0,
         imageH: Int = 0,
+        /** 视频直链 (必须先走 uploadChatVideo), 前缀必须 .../chat/ */
+        video: String = "",
+        videoW: Int = 0,
+        videoH: Int = 0,
+        videoDuration: Int = 0,
+        videoSize: Long = 0L,
     ): Result<PmSendResult> = withContext(Dispatchers.IO) {
         apiCall {
             val params = mutableMapOf<String, Any?>("content" to content)
@@ -840,6 +1179,14 @@ object ApiClient {
                 params["image"] = image
                 params["image_w"] = imageW
                 params["image_h"] = imageH
+            }
+            // 纯视频消息: content 传空串 + 带 video 五件套
+            if (video.isNotBlank()) {
+                params["video"] = video
+                params["video_w"] = videoW
+                params["video_h"] = videoH
+                params["video_duration"] = videoDuration
+                params["video_size"] = videoSize
             }
             val d = request("pm_send", params, UserStore.token).optJSONObject("data") ?: JSONObject()
             PmSendResult.fromJson(d)
@@ -1100,6 +1447,13 @@ private fun jsonBool(j: JSONObject, key: String): Boolean {
     }
 }
 
+/**
+ * 同 jsonBool, 但缺字段时用调用方给的默认值 ——
+ * show_prizes / show_stock 这类开关默认是「开」, 老服务端没返回时不能变成隐藏。
+ */
+private fun jsonBoolOr(j: JSONObject, key: String, def: Boolean): Boolean =
+    if (j.has(key) && !j.isNull(key)) jsonBool(j, key) else def
+
 /** 兼容后端返回 int / 字符串数字 / null 三种写法 */
 private fun jsonInt(j: JSONObject, key: String, def: Int = 0): Int {
     if (j.isNull(key)) return def
@@ -1126,6 +1480,42 @@ private fun jsonStrList(j: JSONObject, key: String): List<String> {
     else single.split(',').map { it.trim() }.filter { it.isNotBlank() }
 }
 
+/**
+ * 是不是「系统消息」(契约 A3/B5): msg_type=system, 例如「xxx加入了群聊」。
+ *
+ * 系统消息在群聊里居中灰字显示、不弹系统通知、不进未读。
+ * 服务端还没上线 msg_type 时, 用文案兜底(加群/退群提示), 免得回归期弹通知。
+ */
+fun isSystemMessage(msgType: String, content: String): Boolean {
+    if (msgType.equals("system", ignoreCase = true)) return true
+    if (msgType.isNotBlank()) return false
+    val c = content.trim()
+    return c.endsWith("加入了群聊") || c.endsWith("退出了群聊")
+}
+
+/** 视频消息配置 (video_config 接口, 公开): enabled=0 时入口隐藏, maxMb = 服务端真实上限 */
+data class VideoConfig(
+    val enabled: Boolean = false,
+    /** 单条视频上限 (MB), 服务端 video_config.max_mb */
+    val maxMb: Int = 0,
+)
+
+/**
+ * 视频上传结果 (social_video_upload 接口)
+ * width/height/duration 由**客户端探测后回传**, 服务端原样落库后随消息返回。
+ */
+data class ChatVideo(
+    val url: String = "",
+    /** 服务端实际收到的字节数 */
+    val size: Long = 0L,
+    val width: Int = 0,
+    val height: Int = 0,
+    /** 秒 */
+    val duration: Int = 0,
+    /** 本次上传触发的自动清理条数 (0 = 没清理) */
+    val cleaned: Int = 0,
+)
+
 /** 群聊图片: 上传接口返回 (width/height 是原图尺寸, 用于气泡按比例排版) */
 data class ChatImage(
     val url: String = "",
@@ -1150,6 +1540,8 @@ data class SocialGroup(
     val messageCount: Int = 0,
     /** 我是否对这个世界开了消息免打扰 */
     val muted: Boolean = false,
+    /** 群主 / 管理员是否开启了「全体禁言」(true = 只有管理员能发言, 契约 A2) */
+    val allMuted: Boolean = false,
     /** 该群未读条数 (只算别人发的、未撤回的消息; 0 = 全部已读) */
     val unread: Int = 0,
     /** 第一条未读消息 id (无未读为 0); 进群时拿它当 around_id 定位 */
@@ -1166,6 +1558,8 @@ data class SocialGroup(
     val atAll: Int = 0,
     /** 第一条「@所有人」的消息 id */
     val atAllFirst: Int = 0,
+    /** 我是否已加入这个群 (false = 未加入, 只能看不能发言; 契约 A2 is_member; 老服务端不返回时按已加入兜底) */
+    val isMember: Boolean = true,
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroup = SocialGroup(
@@ -1177,6 +1571,7 @@ data class SocialGroup(
             memberCount = j.optInt("member_count", 0),
             messageCount = j.optInt("message_count", 0),
             muted = j.optInt("muted", 0) == 1,
+            allMuted = j.optInt("all_muted", 0) == 1,
             unread = j.optInt("unread", 0),
             firstUnreadId = j.optInt("first_unread_id", 0),
             lastMessage = j.optJSONObject("last_message")?.let { LastMessage.fromJson(it) },
@@ -1185,6 +1580,7 @@ data class SocialGroup(
             atMeFirst = jsonInt(j, "at_me_first"),
             atAll = jsonInt(j, "at_all"),
             atAllFirst = jsonInt(j, "at_all_first"),
+            isMember = if (j.isNull("is_member")) true else jsonBool(j, "is_member"),
         )
     }
 }
@@ -1198,6 +1594,10 @@ data class LastMessage(
     val content: String = "",
     /** 纯图片消息: content 为空, image 非空 → 前端显示 [图片] */
     val image: String = "",
+    /** 纯视频消息: content 为空, video 非空 → 前端显示 [视频] */
+    val video: String = "",
+    /** 消息类型: "system" = 系统消息(加入了群聊等), "video" = 视频; 老服务端没有这个键 → 空串 (契约 A3) */
+    val msgType: String = "",
     val createdAt: String = "",
 ) {
     companion object {
@@ -1207,6 +1607,8 @@ data class LastMessage(
             nickname = jsonStr(j, "nickname"),
             content = jsonStr(j, "content"),
             image = jsonStr(j, "image"),
+            video = jsonStr(j, "video"),
+            msgType = jsonStr(j, "msg_type"),
             createdAt = jsonStr(j, "created_at"),
         )
     }
@@ -1219,7 +1621,15 @@ data class SocialGroupMember(
     val nickname: String = "",
     val username: String = "",
     val avatar: String = "",
+    /**
+     * 群角色 (契约 A3): "owner" = 群主 / "admin" = 群管理员 / "member" = 普通成员。
+     * 注意: 这是**群内**角色, 不是全站管理员 —— 判断能不能管这个群看 [isAdmin]。
+     */
     val role: String = "",
+    /** 全站角色 (契约 A3 user_brief.global_role): "admin" = 全站管理员, 其它 = 普通用户 */
+    val globalRole: String = "",
+    /** 是否全站管理员 (服务端 is_admin); 只有全站管理员能禁言 / 全员禁言 */
+    val isAdmin: Boolean = false,
     /** 是否被管理员禁言 (禁言只影响发言, 仍然能看消息) */
     val muted: Boolean = false,
     /** 禁言剩余时长文案, 例如「剩余 1 小时」/「永久」 */
@@ -1227,6 +1637,8 @@ data class SocialGroupMember(
     val muteReason: String = "",
     /** 管理员打在这个成员身上的标签 (契约 F1, 防骗警示) */
     val tags: List<String> = emptyList(),
+    /** 加入群聊时间 "yyyy-MM-dd HH:mm:ss" (契约 A3 social_group_members; 空串 = 未知) */
+    val joinedAt: String = "",
 ) {
     companion object {
         fun fromJson(j: JSONObject): SocialGroupMember = SocialGroupMember(
@@ -1235,10 +1647,19 @@ data class SocialGroupMember(
             username = jsonStr(j, "username"),
             avatar = jsonStr(j, "avatar"),
             role = jsonStr(j, "role"),
+            globalRole = jsonStr(j, "global_role"),
+            // 全站管理员只看 is_admin; 老服务端没有这两个字段时退回「role == admin」的老语义
+            isAdmin = if (j.has("is_admin")) {
+                jsonBool(j, "is_admin")
+            } else {
+                jsonStr(j, "global_role") == "admin" ||
+                    (j.isNull("global_role") && jsonStr(j, "role") == "admin")
+            },
             muted = j.optInt("muted", 0) == 1,
             muteLeft = jsonStr(j, "mute_left"),
             muteReason = jsonStr(j, "mute_reason"),
             tags = jsonStrList(j, "tags"),
+            joinedAt = jsonStr(j, "joined_at"),
         )
     }
 }
@@ -1252,6 +1673,8 @@ data class SocialMessage(
     val role: String = "user",
     /** 发送者的管理员标签 (契约 F1), 显示在群聊气泡昵称旁 */
     val tags: List<String> = emptyList(),
+    /** 消息类型: "" = 普通 / "system" = 系统消息(如「xxx加入了群聊」, 居中灰字, 不弹通知) 契约 A3 */
+    val msgType: String = "",
     val content: String = "",
     /** 图片消息: 对象存储直链 (空串 = 没图; 撤回后也是空串) */
     val image: String = "",
@@ -1259,6 +1682,14 @@ data class SocialMessage(
     val imageW: Int = 0,
     /** 原图高 */
     val imageH: Int = 0,
+    /** 视频消息: 视频直链 (空串 = 没视频; 被自动清理后也是空串且 content 追加 [视频已清理]) */
+    val video: String = "",
+    val videoW: Int = 0,
+    val videoH: Int = 0,
+    /** 视频时长 (秒) */
+    val videoDuration: Int = 0,
+    /** 视频字节数 */
+    val videoSize: Long = 0L,
     val at: List<Int> = emptyList(),
     /** 引用的原消息 (0 = 不是引用) */
     val quoteId: Int = 0,
@@ -1279,10 +1710,16 @@ data class SocialMessage(
                 avatar = jsonStr(j, "avatar"),
                 role = jsonStr(j, "role").ifBlank { "user" },
                 tags = jsonStrList(j, "tags"),
+                msgType = jsonStr(j, "msg_type"),
                 content = jsonStr(j, "content"),
                 image = jsonStr(j, "image"),
                 imageW = jsonInt(j, "image_w"),
                 imageH = jsonInt(j, "image_h"),
+                video = jsonStr(j, "video"),
+                videoW = jsonInt(j, "video_w"),
+                videoH = jsonInt(j, "video_h"),
+                videoDuration = jsonInt(j, "video_duration"),
+                videoSize = if (j.isNull("video_size")) 0L else j.optLong("video_size", 0L),
                 at = if (atArr == null) {
                     emptyList()
                 } else {
@@ -1362,6 +1799,50 @@ data class LotteryRecord(
     }
 }
 
+/**
+ * 开放时段状态 (lottery_window_state, 契约 D 节新增)
+ * - open = 现在能不能抽; reason 取值 disabled / before_start / after_end / outside_window / open
+ * - secondsToOpen / secondsToClose 是服务端那一刻算出的秒数, 客户端用 serverTime 对齐后本地逐秒递减
+ * - 服务端还没部署新接口时整个对象为 null, 页面不显示状态卡也不限制抽奖
+ */
+data class LotteryWindow(
+    /** 现在是否在开放时段内 */
+    val open: Boolean = false,
+    /** disabled / before_start / after_end / outside_window / open */
+    val reason: String = "",
+    /** 服务端给的中文原因 (如「现在不在抽奖时间内」) */
+    val reasonText: String = "",
+    /** 开放时段的友好文案 (如「每天 19:30-20:00」, 未启用时段时为空) */
+    val text: String = "",
+    /** 下次开放时间 Y-m-d H:i:s (空 = 没有下一个时段) */
+    val nextOpenAt: String = "",
+    /** 本次关闭时间 Y-m-d H:i:s */
+    val nextCloseAt: String = "",
+    /** 距下次开放还有多少秒 */
+    val secondsToOpen: Int = 0,
+    /** 距本次关闭还有多少秒 */
+    val secondsToClose: Int = 0,
+    /** 服务端当前时间 Y-m-d H:i:s (数据库 NOW() 基准) */
+    val serverTime: String = "",
+    /** 服务端判断我当前是否可以参与抽奖 */
+    val myAllowed: Boolean = true,
+) {
+    companion object {
+        fun fromJson(j: JSONObject): LotteryWindow = LotteryWindow(
+            open = jsonBool(j, "open"),
+            reason = jsonStr(j, "reason"),
+            reasonText = jsonStr(j, "reason_text"),
+            text = jsonStr(j, "text"),
+            nextOpenAt = jsonStr(j, "next_open_at"),
+            nextCloseAt = jsonStr(j, "next_close_at"),
+            secondsToOpen = jsonInt(j, "seconds_to_open"),
+            secondsToClose = jsonInt(j, "seconds_to_close"),
+            serverTime = jsonStr(j, "server_time"),
+            myAllowed = jsonBoolOr(j, "my_allowed", true),
+        )
+    }
+}
+
 /** 抽奖总览 (lottery_info) */
 data class LotteryInfo(
     /** 后台开关: false = 抽奖活动已关闭, 客户端要禁用抽奖按钮 */
@@ -1381,6 +1862,43 @@ data class LotteryInfo(
     val myTodayDrawn: Int = 0,
     /** 我今天还能抽几次 (dailyLimit = 0 时为不限) */
     val myTodayLeft: Int = 0,
+    /** 服务端当前时间 (Y-m-d H:i:s, 数据库 NOW() 基准), 客户端用它对齐倒计时 */
+    val serverTime: String = "",
+    /**
+     * 开放时段状态 (lottery_window_state); 服务端还没部署新接口时为 null,
+     * 这时客户端整块隐藏状态卡, 并按「不限制时段」处理。
+     */
+    val window: LotteryWindow? = null,
+    /** 每日重置时刻 HH:MM (次数按这个时刻切分「今日/本周」) */
+    val dailyResetTime: String = "00:00",
+    /** 每人每周次数上限 (0 = 不限) */
+    val weekLimit: Int = 0,
+    /** 我本周已经抽了几次 */
+    val myWeekDrawn: Int = 0,
+    /** 我本周还能抽几次 */
+    val myWeekLeft: Int = 0,
+    /** 两次抽奖最小间隔秒数 (0 = 不限) */
+    val cooldownSeconds: Int = 0,
+    /** 距上次抽奖还差多少秒 (0 = 可以抽) */
+    val cooldownLeft: Int = 0,
+    /** 客户端是否显示奖项列表 (false = 后台要求隐藏) */
+    val showPrizes: Boolean = true,
+    /** 客户端是否显示剩余数量 (false = 后台要求隐藏) */
+    val showStock: Boolean = true,
+    /** 全站每日发放上限 (0 = 不限) */
+    val dailyTotalLimit: Int = 0,
+    /** 全站今日还剩多少张可发 */
+    val dailyTotalLeft: Int = 0,
+    /** 抽中弹窗自定义文案 (空 = 客户端用默认标题) */
+    val successText: String = "",
+    /** 奖品抽完时的提示 (空 = 客户端用默认文案) */
+    val emptyText: String = "",
+    /** 活动开始日期 YYYY-MM-DD (空 = 不限) */
+    val startDate: String = "",
+    /** 活动结束日期 YYYY-MM-DD (空 = 不限) */
+    val endDate: String = "",
+    /** 是否启用了自定义开放时段 */
+    val windowsEnabled: Boolean = false,
     val prizes: List<LotteryPrize> = emptyList(),
     /** 我最近的中奖记录 */
     val records: List<LotteryRecord> = emptyList(),
@@ -1389,6 +1907,8 @@ data class LotteryInfo(
         fun fromJson(j: JSONObject): LotteryInfo {
             val prizeArr = j.optJSONArray("prizes")
             val recordArr = j.optJSONArray("records")
+            // window 是新增字段: 老服务端没返回时保持 null (状态卡整块隐藏, 不崩)
+            val windowObj = j.optJSONObject("window")
             return LotteryInfo(
                 enabled = jsonBool(j, "enabled"),
                 title = jsonStr(j, "title"),
@@ -1399,6 +1919,24 @@ data class LotteryInfo(
                 dailyLimit = jsonInt(j, "daily_limit"),
                 myTodayDrawn = jsonInt(j, "my_today_drawn"),
                 myTodayLeft = jsonInt(j, "my_today_left"),
+                serverTime = jsonStr(j, "server_time"),
+                window = if (windowObj == null) null else LotteryWindow.fromJson(windowObj),
+                dailyResetTime = jsonStr(j, "daily_reset_time").ifBlank { "00:00" },
+                weekLimit = jsonInt(j, "week_limit"),
+                myWeekDrawn = jsonInt(j, "my_week_drawn"),
+                myWeekLeft = jsonInt(j, "my_week_left"),
+                cooldownSeconds = jsonInt(j, "cooldown_seconds"),
+                cooldownLeft = jsonInt(j, "cooldown_left"),
+                // 缺字段时默认「显示」, 避免老服务端把奖项/库存误隐
+                showPrizes = jsonBoolOr(j, "show_prizes", true),
+                showStock = jsonBoolOr(j, "show_stock", true),
+                dailyTotalLimit = jsonInt(j, "daily_total_limit"),
+                dailyTotalLeft = jsonInt(j, "daily_total_left"),
+                successText = jsonStr(j, "success_text"),
+                emptyText = jsonStr(j, "empty_text"),
+                startDate = jsonStr(j, "start_date"),
+                endDate = jsonStr(j, "end_date"),
+                windowsEnabled = jsonBool(j, "windows_enabled"),
                 prizes = if (prizeArr == null) emptyList() else
                     (0 until prizeArr.length()).map { LotteryPrize.fromJson(prizeArr.getJSONObject(it)) },
                 records = if (recordArr == null) emptyList() else
@@ -1562,6 +2100,14 @@ data class PmMessage(
     val image: String = "",
     val imageW: Int = 0,
     val imageH: Int = 0,
+    /** 视频直链 (空串 = 没视频; 被自动清理后为空串且 content 追加 [视频已清理]) */
+    val video: String = "",
+    val videoW: Int = 0,
+    val videoH: Int = 0,
+    val videoDuration: Int = 0,
+    val videoSize: Long = 0L,
+    /** 消息类型: "" = 普通 / "video" = 视频 (老图片消息 msg_type 仍是空串) */
+    val msgType: String = "",
     val isRecalled: Boolean = false,
     /** 服务端直接告诉我们这条是不是自己发的 */
     val mine: Boolean = false,
@@ -1577,6 +2123,15 @@ data class PmMessage(
             image = jsonStr(j, "image"),
             imageW = jsonInt(j, "image_w"),
             imageH = jsonInt(j, "image_h"),
+            video = jsonStr(j, "video"),
+            videoW = jsonInt(j, "video_w"),
+            videoH = jsonInt(j, "video_h"),
+            videoDuration = jsonInt(j, "video_duration"),
+            videoSize = if (j.isNull("video_size")) 0L else j.optLong("video_size", 0L),
+            // 老服务端 pm_msg_public 里 video 非空时 msg_type 才是 "video"; 这里再兜一层
+            msgType = jsonStr(j, "msg_type").ifBlank {
+                if (jsonStr(j, "video").isNotBlank()) "video" else ""
+            },
             isRecalled = jsonBool(j, "is_recalled"),
             mine = jsonBool(j, "mine"),
             createdAt = jsonStr(j, "created_at"),

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -45,7 +46,8 @@ fun rememberGlassBackdrop2(): Pair<com.kyant.backdrop.Backdrop, Modifier> {
     val graphicsLayer = rememberGraphicsLayer()
     val backdrop = kyantRememberLayerBackdrop(graphicsLayer)
     val captureModifier = Modifier.kyantLayerBackdrop(backdrop)
-    return backdrop to captureModifier
+    // 采样用的那份套上「跟手期间不折射」, 捕获用的仍是原始 backdrop (v1.1.10)
+    return remember(backdrop) { backdrop.mutedDuringReveal() } to captureModifier
 }
 
 /**

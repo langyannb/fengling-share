@@ -24,8 +24,8 @@ android {
         applicationId = "com.fengling.share"
         minSdk = 33
         targetSdk = 34
-        versionCode = 137
-        versionName = "1.1.0"
+        versionCode = 151
+        versionName = "1.1.14"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -91,6 +91,12 @@ dependencies {
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    // 视频播放 (ExoPlayer) + 播放缓存 (SimpleCache 300MB LRU) + 上传前压缩
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.datasource)
+    implementation(libs.androidx.media3.ui)
+    // 阶段3 (1.1.14): 上传前压缩用 Transformer + 内置 mp4 封装器
+    implementation(libs.androidx.media3.transformer)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

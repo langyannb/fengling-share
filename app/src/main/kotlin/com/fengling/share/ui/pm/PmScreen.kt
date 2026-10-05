@@ -2,6 +2,7 @@ package com.fengling.share.ui.pm
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -32,11 +38,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -49,7 +57,10 @@ import com.fengling.share.data.PmConversation
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.GlassRadius
+import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.TagChips
+import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.social.LoginRequiredView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -58,11 +69,10 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 会话列表静默刷新间隔 (毫秒): 和群列表一样 8 秒 */
-private const val PM_LIST_POLL_MS = 8000L
+private const val PM_LIST_POLL_MS = 4000L
 
 /**
  * 私聊会话列表 (接口契约 A 节 pm_conversations)。
@@ -77,6 +87,8 @@ fun PmScreen(
     /** 点头像看对方主页 */
     onOpenUser: ((userId: Int) -> Unit)? = null,
     onNeedLogin: (() -> Unit)? = null,
+    /** 顶部留给浮动分段控件的高度 (液体玻璃要能从下面透出内容才有模糊可看) */
+    topPadding: Dp = 0.dp,
     modifier: Modifier = Modifier,
 ) {
     if (!UserStore.isLoggedIn()) {
@@ -88,10 +100,15 @@ fun PmScreen(
     val context = LocalContext.current
     val foreground = rememberPmForeground()
 
-    var conversations by remember { mutableStateOf<List<PmConversation>>(emptyList()) }
+    // 返回重建时直接吃缓存 (非空 → 不显示加载态), 首启动才走「加载中…」
+    var conversations by remember {
+        mutableStateOf(PmListCache.conversations ?: emptyList<PmConversation>())
+    }
     var totalUnread by remember { mutableStateOf(0) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(PmListCache.conversations == null) }
     var refreshing by remember { mutableStateOf(false) }
+    // 任何一处改动都同步进缓存 (拉取成功 / 已读清零 / SSE 变化)
+    LaunchedEffect(conversations) { PmListCache.conversations = conversations }
     var error by remember { mutableStateOf("") }
 
     /** 拉会话列表; silent = true 时不显示加载态 (后台轮询用) */
@@ -140,67 +157,61 @@ fun PmScreen(
         }
     }
 
-    PullToRefresh(
-        isRefreshing = refreshing,
-        onRefresh = { load(true) },
-        modifier = modifier.fillMaxSize(),
-    ) {
-        when {
-            loading && conversations.isEmpty() -> CenterHint("加载中…")
-            conversations.isEmpty() -> Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = if (error.isNotBlank()) error else "还没有私聊会话\n在群里点头像就能发起私聊",
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-                if (error.isNotBlank()) {
-                    Spacer(Modifier.height(14.dp))
-                    Card(onClick = { load(false) }, cornerRadius = 12.dp) {
-                        Text(
-                            text = "重新加载",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        )
-                    }
+    when {
+        loading && conversations.isEmpty() -> CenterHint("加载中…")
+        conversations.isEmpty() -> Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = if (error.isNotBlank()) error else "还没有私聊会话\n在群里点头像就能发起私聊",
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+            if (error.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                Card(onClick = { load(false) }, cornerRadius = 12.dp) {
+                    Text(
+                        text = "重新加载",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    )
                 }
             }
+        }
 
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 100.dp),
-            ) {
-                item {
-                    val hint = "点击会话进入私聊 · 和群聊消息分开显示" +
-                        (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
-                    Text(
-                        text = hint,
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
-                }
-                items(conversations, key = { it.convId }) { conv ->
-                    PmConversationCard(
-                        conversation = conv,
-                        onClick = { onOpenChat(conv.userId, conv.convId) },
-                        onAvatarClick = {
-                            if (onOpenUser != null && conv.userId > 0) {
-                                onOpenUser(conv.userId)
-                            } else {
-                                Toast.makeText(context, "该用户暂时打不开主页", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                    )
-                }
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
+        ) {
+            item {
+                val hint = "点击会话进入私聊 · 和群聊消息分开显示" +
+                    (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
+                Text(
+                    text = hint,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            }
+            items(conversations, key = { it.convId }) { conv ->
+                PmConversationCard(
+                    conversation = conv,
+                    onClick = { onOpenChat(conv.userId, conv.convId) },
+                    onAvatarClick = {
+                        if (onOpenUser != null && conv.userId > 0) {
+                            onOpenUser(conv.userId)
+                        } else {
+                            Toast.makeText(context, "该用户暂时打不开主页", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
             }
         }
     }
@@ -213,17 +224,33 @@ private fun PmConversationCard(
     onClick: () -> Unit,
     onAvatarClick: () -> Unit,
 ) {
-    Card(
-        onClick = onClick,
+    // 契约 C: 私聊列表卡片玻璃化 + 按下缩到 0.97 松手弹回 (和群列表观感统一)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 700f),
+        label = "pmCardPress",
+    )
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        cornerRadius = 16.dp,
+            .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .glassCard(radius = GlassRadius.card)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            ),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(GlassSpacing.cardInner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 头像: 点一下看主页, 不让点击穿透到整行的「进会话」
@@ -381,4 +408,15 @@ private fun rememberPmForeground(): Boolean {
         }
     }
     return foreground
+}
+
+/**
+ * 私聊会话列表的**进程内缓存** (用户 m00464 反馈「返回会卡一下」)。
+ *
+ * 点会话进聊天页走 NavHost 路由, 返回时本页重建, conversations 为空 + loading = true
+ * → 闪一次「加载中…」再等网络往返。返回时先吃缓存立刻出图, 再后台静默刷新。
+ * 只在内存里, 不落盘、不跨进程, 退出 App 即失效。
+ */
+private object PmListCache {
+    var conversations: List<PmConversation>? = null
 }

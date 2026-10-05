@@ -20,7 +20,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -68,6 +67,8 @@ import android.app.DownloadManager
 import android.os.Environment
 import android.widget.Toast
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
@@ -406,16 +407,17 @@ fun WebViewScreen(
         }
     }
 
-    // 返回键: 始终启用, 内部判断 —— 有 WebView 历史先回退, 无历史才关闭
-    BackHandler {
-        if (canGoBack) {
-            webView.goBack()
-        } else {
-            onBack()
-        }
+    // 契约 B: 预测性返回 —— 用 PredictiveBackHandler 取代旧式 BackHandler (抢返回、无任何动画)。
+    // enabled 由 canGoBack 这个 state 驱动 (不是直接读 webView.canGoBack() —— 那样不会触发重组,
+    // 就是上面注释里说的「enabled 陈旧」隐患):
+    //   有内部历史 -> 手势跟手把网页滑出去, 松手过半 commit 后 goBack() 回退网页, 未过半回弹;
+    //   没有历史   -> 本回调不接管, 返回交给 Navigation 播 pop 转场回上一页。
+    val backProgress = rememberPredictiveBackProgress(enabled = canGoBack) {
+        webView.goBack()
     }
 
     Scaffold(
+        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = pageTitle,

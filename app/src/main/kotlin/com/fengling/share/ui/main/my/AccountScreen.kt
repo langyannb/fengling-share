@@ -58,6 +58,8 @@ import com.fengling.share.data.UserStore
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.CaptchaDialog
+import com.fengling.share.ui.components.predictiveBackTransform
+import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -97,6 +99,8 @@ fun AccountScreen(
     // 切换账号时把选中的用户名带进登录框
     var switchPrefill by remember { mutableStateOf("") }
 
+    // 契约 B: 预测性返回(跟手) —— 跟手右移+缩小淡出, 松手过半分提交返回, 否则回弹;
+    // 未开「预测性返回手势动画」的系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(), 功能不变。
     Scaffold(
         modifier = modifier,
         topBar = {
