@@ -1427,7 +1427,7 @@ fun PmChatScreen(
         )
     }
 
-    // ===== Wave 2: 全屏播放视频 (VideoView + MediaController, 左上角关闭) =====
+    // ===== Wave 2: 全屏播放视频 (阶段2 起 ExoPlayer + 300MB LRU 缓存, 左上角关闭) =====
     if (fullscreenVideo.isNotBlank()) {
         VideoFullscreenDialog(url = fullscreenVideo, onDismiss = { fullscreenVideo = "" })
     }

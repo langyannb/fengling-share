@@ -2176,7 +2176,7 @@ private fun ChatView(
                             },
                             // 点图片: 全屏查看大图
                             onImageTap = { url -> previewImage = url },
-                            // Wave 2: 点视频气泡 = 全屏播放 (VideoView + MediaController)
+                            // Wave 2: 点视频气泡 = 全屏播放 (阶段2 起用 Media3 ExoPlayer + 300MB LRU 播放缓存)
                             onVideoTap = { url -> fullscreenVideo = url },
                             // 长按对方头像 = @ 他
                             onAvatarLongPress = {
@@ -3116,7 +3116,7 @@ private fun ChatView(
         )
     }
 
-    // ===== Wave 2: 全屏播放视频 (点气泡里的视频打开, VideoView + MediaController, 左上角关闭) =====
+    // ===== Wave 2: 全屏播放视频 (点气泡里的视频打开, 阶段2 起 ExoPlayer + 缓存, 左上角关闭) =====
     if (fullscreenVideo.isNotBlank()) {
         VideoFullscreenDialog(url = fullscreenVideo, onDismiss = { fullscreenVideo = "" })
     }
@@ -3406,7 +3406,7 @@ private fun MessageRow(
             ) {
                 Column {
                     // ===== Wave 2: 视频消息 (放在图片分支之前, 图片分支一个字节都不动) =====
-                    // 正常视频: VideoView 停在第 1 秒当封面 + 中心 ▶ + 右下时长, 点开全屏播放;
+                    // 正常视频: 深色静态封面 + 中心 ▶ + 右下时长, 点开全屏播放;
                     // 已清理: 灰底占位「视频已清理」, 长按依然能撤回 / 删除
                     if (isVideo) {
                         if (videoCleaned) {

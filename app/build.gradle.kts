@@ -91,6 +91,10 @@ dependencies {
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    // 视频播放 (ExoPlayer) + 播放缓存 (SimpleCache 300MB LRU) + 上传前压缩
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.datasource)
+    implementation(libs.androidx.media3.ui)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

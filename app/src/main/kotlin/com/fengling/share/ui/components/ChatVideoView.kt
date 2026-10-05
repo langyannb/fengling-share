@@ -1,11 +1,6 @@
 package com.fengling.share.ui.components
 
-import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color as AndroidColor
-import android.net.Uri
-import android.widget.MediaController
-import android.widget.VideoView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -28,28 +23,25 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import android.widget.Toast
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -85,11 +77,12 @@ private fun DurationBadge(text: String, modifier: Modifier = Modifier) {
 /**
  * 视频消息气泡 (群聊 / 私聊共用)
  *
- * - 画面用 **AndroidView { VideoView }** (不加 ExoPlayer/Media3 依赖), 停在首帧当封面:
- *   静音 + seekTo(1) —— 不 seek 的话很多视频第一帧是黑的。
- * - 点一下 → 交给 onOpenFullscreen() 打开全屏播放 (全屏 Dialog + VideoView + MediaController)。
- * - 长按 → onLongPress() 走原有的撤回/删除菜单 (与图片消息同一套)。
- * - 真机未实测: 只能说明「代码路径已接好」, 手势/首帧表现以装机后为准。
+ * 阶段2 起不再用系统 Video View 抽首帧当封面 (每条视频都要把整段文件拉下来才能出首帧, 手机拍的
+ * mp4 的 moov 还在文件尾部, 代价更大); 改成静态深色封面 + 播放按钮, 点开才由全屏 ExoPlayer
+ * 走 300MB LRU 缓存加载。
+ *
+ * - 点一下 -> onOpenFullscreen() 打开全屏播放
+ * - 长按 -> onLongPress() 走原有的撤回/删除菜单 (与图片消息同一套)
  */
 @Composable
 fun VideoBubble(
@@ -104,80 +97,38 @@ fun VideoBubble(
     cornerRadius: Dp = 10.dp,
 ) {
     val (w, h) = videoBubbleSize(videoW, videoH)
-    var ready by remember(url) { mutableStateOf(false) }
-    var failed by remember(url) { mutableStateOf(false) }
     val shape = RoundedCornerShape(cornerRadius)
 
     Box(
         modifier = modifier
             .size(width = w, height = h)
             .clip(shape)
-            .background(Color.Black)
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(Color(0xFF33333A), Color(0xFF101014)),
+                ),
+            )
             .pointerInput(url) {
                 detectTapGestures(
-                    onTap = { if (!failed) onOpenFullscreen() },
+                    onTap = { onOpenFullscreen() },
                     onLongPress = { onLongPress() },
                 )
             },
         contentAlignment = Alignment.Center,
     ) {
-        if (!failed) {
-            key(url) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx: Context ->
-                        VideoView(ctx).apply {
-                            setBackgroundColor(AndroidColor.BLACK)
-                            // 气泡里只当「会动的封面」: 静音 + 不自动播放
-                            setOnPreparedListener { mp ->
-                                runCatching {
-                                    mp.setVolume(0f, 0f)
-                                    mp.isLooping = false
-                                }
-                                runCatching { seekTo(1) }
-                                ready = true
-                            }
-                            setOnErrorListener { _, _, _ ->
-                                failed = true
-                                true
-                            }
-                            runCatching { setVideoURI(Uri.parse(url)) }
-                        }
-                    },
-                )
-            }
-        }
-
-        if (!ready && !failed) {
-            CircularProgressIndicator(
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.42f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = "播放",
+                tint = Color.White,
                 modifier = Modifier.size(26.dp),
-                strokeWidth = 2.dp,
-                color = Color.White.copy(alpha = 0.75f),
             )
-        }
-
-        if (failed) {
-            Text(
-                text = "视频加载失败",
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = 12.sp,
-            )
-        } else {
-            // 中间的播放按钮: 纯视觉提示, 点击由外层 Box 的 detectTapGestures 接
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.42f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "播放",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp),
-                )
-            }
         }
 
         DurationBadge(
@@ -322,7 +273,12 @@ fun VideoSendingBubble(
 }
 
 /**
- * 全屏播放 (群聊 / 私聊共用): 全屏黑底 Dialog + VideoView + MediaController。
+ * 全屏播放 (群聊 / 私聊共用): 全屏黑底 Dialog + ExoPlayer (走 300MB LRU 播放缓存)。
+ *
+ * 阶段2 换掉原来的 Video View + Media Controller:
+ * - 加载中有转圈 + 「视频加载中…」, 不再是一屏纯黑;
+ * - 失败自动重试 1 次, 再失败给中文原因 + 错误码 + 「重新加载」;
+ * - 退到后台自动暂停 (findLifecycleOwner), 退出对话框释放播放器。
  * 用 usePlatformDefaultWidth=false 让 Dialog 真正铺满屏幕。
  */
 @Composable
@@ -331,7 +287,9 @@ fun VideoFullscreenDialog(
     onDismiss: () -> Unit,
 ) {
     if (url.isBlank()) return
-    val context = LocalContext.current
+    var state by remember(url) { mutableStateOf<VideoPlaybackState>(VideoPlaybackState.Loading) }
+    var retryToken by remember(url) { mutableIntStateOf(0) }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -341,28 +299,20 @@ fun VideoFullscreenDialog(
                 .fillMaxSize()
                 .background(Color.Black),
         ) {
-            key(url) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx: Context ->
-                        VideoView(ctx).apply {
-                            setBackgroundColor(AndroidColor.BLACK)
-                            val controller = MediaController(ctx)
-                            controller.setAnchorView(this)
-                            setMediaController(controller)
-                            setOnPreparedListener { mp ->
-                                runCatching { mp.isLooping = false }
-                                start()
-                            }
-                            setOnErrorListener { _, _, _ ->
-                                Toast.makeText(ctx, "视频播放失败", Toast.LENGTH_SHORT).show()
-                                true
-                            }
-                            runCatching { setVideoURI(Uri.parse(url)) }
-                        }
-                    },
-                )
-            }
+            CachedVideoSurface(
+                url = url,
+                modifier = Modifier.fillMaxSize(),
+                showController = true,
+                retryToken = retryToken,
+                onState = { state = it },
+            )
+
+            VideoPlaybackOverlay(
+                state = state,
+                onRetry = { retryToken++ },
+                modifier = Modifier.fillMaxSize(),
+            )
+
             Icon(
                 imageVector = Icons.Filled.Close,
                 contentDescription = "关闭",
