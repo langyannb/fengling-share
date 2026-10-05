@@ -931,7 +931,7 @@ private fun PmNotifyWatcher() {
                     }
                 }
             }
-            kotlinx.coroutines.delay(8000L)
+            kotlinx.coroutines.delay(4000L)
         }
     }
 

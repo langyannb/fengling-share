@@ -101,12 +101,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 私聊轮询间隔 (毫秒): 和群聊一样 3 秒 */
-private const val PM_POLL_INTERVAL_MS = 3000L
+private const val PM_POLL_INTERVAL_MS = 2000L
 
 /**
  * 私聊会话页 (接口契约 A 节 pm_messages / pm_send / pm_read / pm_recall)。
@@ -561,66 +560,60 @@ fun PmChatScreen(
             Box(Modifier.weight(1f)) {
                 // 契约 C: 页面级柔和渐变底 (静态绘制, 零模糊开销), 给气泡/图片垫层次
                 AppGradientBackground()
-                PullToRefresh(
-                    isRefreshing = refreshing,
-                    onRefresh = { loadLatest(true) },
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    when {
-                        loading && messages.isEmpty() -> PmCenterHint("加载中…")
-                        messages.isEmpty() -> PmCenterHint(
-                            if (loadError.isNotBlank()) loadError
-                            else "还没有聊过, 发条消息打个招呼吧",
-                        )
+                when {
+                    loading && messages.isEmpty() -> PmCenterHint("加载中…")
+                    messages.isEmpty() -> PmCenterHint(
+                        if (loadError.isNotBlank()) loadError
+                        else "还没有聊过, 发条消息打个招呼吧",
+                    )
 
-                        else -> LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                        ) {
-                            if (hasMoreBefore) {
-                                item(key = "load_older") {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { loadOlder(manual = true) }
-                                            .padding(vertical = 10.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = if (loadingMore) "加载更早的消息…"
-                                            else "上滑或点这里加载更早的消息",
-                                            fontSize = 11.sp,
-                                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                        )
-                                    }
+                    else -> LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        if (hasMoreBefore) {
+                            item(key = "load_older") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { loadOlder(manual = true) }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = if (loadingMore) "加载更早的消息…"
+                                        else "上滑或点这里加载更早的消息",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    )
                                 }
                             }
-                            itemsIndexed(messages, key = { _, m -> m.id }) { index, msg ->
-                                val mine = if (myId > 0) msg.userId == myId else msg.mine
-                                // 契约 C: 连续同作者消息收紧间距; 进场只淡入 (placementSpec = null,
-                                // 否则「加载更早的消息」往顶部插数据时整列被推着走)
-                                val prev = messages.getOrNull(index - 1)
-                                val compact = prev != null && !prev.isRecalled && !msg.isRecalled &&
-                                    prev.userId == msg.userId
-                                PmMessageRow(
-                                    modifier = pmMessageItemEnter(),
-                                    compact = compact,
-                                    msg = msg,
-                                    mine = mine,
-                                    peerName = peer?.displayName.orEmpty(),
-                                    peerAvatar = peer?.avatar.orEmpty(),
-                                    myName = UserStore.current?.displayName.orEmpty(),
-                                    myAvatar = UserStore.current?.avatarUrl.orEmpty(),
-                                    onLongPress = { actionTarget = msg },
-                                    onAvatarTap = {
-                                        val uid = if (mine) myId else msg.userId
-                                        if (onOpenUser != null && uid > 0) onOpenUser(uid)
-                                    },
-                                    onImageTap = { url -> previewImage = url },
-                                    highlight = highlightId == msg.id || unreadAnchorId == msg.id,
-                                )
-                            }
+                        }
+                        itemsIndexed(messages, key = { _, m -> m.id }) { index, msg ->
+                            val mine = if (myId > 0) msg.userId == myId else msg.mine
+                            // 契约 C: 连续同作者消息收紧间距; 进场只淡入 (placementSpec = null,
+                            // 否则「加载更早的消息」往顶部插数据时整列被推着走)
+                            val prev = messages.getOrNull(index - 1)
+                            val compact = prev != null && !prev.isRecalled && !msg.isRecalled &&
+                                prev.userId == msg.userId
+                            PmMessageRow(
+                                modifier = pmMessageItemEnter(),
+                                compact = compact,
+                                msg = msg,
+                                mine = mine,
+                                peerName = peer?.displayName.orEmpty(),
+                                peerAvatar = peer?.avatar.orEmpty(),
+                                myName = UserStore.current?.displayName.orEmpty(),
+                                myAvatar = UserStore.current?.avatarUrl.orEmpty(),
+                                onLongPress = { actionTarget = msg },
+                                onAvatarTap = {
+                                    val uid = if (mine) myId else msg.userId
+                                    if (onOpenUser != null && uid > 0) onOpenUser(uid)
+                                },
+                                onImageTap = { url -> previewImage = url },
+                                highlight = highlightId == msg.id || unreadAnchorId == msg.id,
+                            )
                         }
                     }
                 }

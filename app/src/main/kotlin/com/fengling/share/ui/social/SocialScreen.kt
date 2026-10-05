@@ -144,7 +144,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -161,7 +160,7 @@ private object SocialListCache {
 }
 
 /** 轮询间隔 (毫秒): 聊天页每 3 秒拉一次新消息 */
-private const val POLL_INTERVAL_MS = 3000L
+private const val POLL_INTERVAL_MS = 2000L
 
 /** 群消息内容里的 @昵称 (中文/字母/数字/下划线, 不含空白与 @) */
 private val MENTION_REGEX = Regex("@[^\\s@]{1,20}")
@@ -231,7 +230,7 @@ internal fun LoginRequiredView(onBack: (() -> Unit)?, onNeedLogin: (() -> Unit)?
  * SocialScreen - 社交页 (群组列表 → 群聊)
  *
  * 结构:
- * - 首页: PullToRefresh + 群组卡片列表 (群名/简介/公告摘要/消息数), 空状态可重试
+ * - 首页: 群组卡片列表 (群名/简介/公告摘要/消息数), 空状态可重试 (v1.1.12 起去掉下拉刷新)
  * - 聊天页: 消息气泡 (自己靠右主色 / 别人靠左灰色) + @高亮 + 3 秒轮询 + 长按撤回
  *
  * 轮询只在页面处于前台 (ON_RESUME) 时进行, 页面退到后台自动停止。
@@ -414,7 +413,7 @@ fun SocialScreen(
     LaunchedEffect(listForeground, currentGroup) {
         if (!listForeground || currentGroup != null) return@LaunchedEffect
         while (true) {
-            kotlinx.coroutines.delay(8000L)
+            kotlinx.coroutines.delay(4000L)
             loadGroups(true, silent = true)
             // 私聊未读总数并入同一个 8 秒静默轮询 (契约 B2)
             loadPmUnread()
@@ -687,54 +686,48 @@ private fun GroupList(
     /** 顶部留给浮动分段控件的高度 (液体玻璃要能从下面透出内容才有模糊可看) */
     topPadding: Dp = 0.dp,
 ) {
-    PullToRefresh(
-        isRefreshing = refreshing,
-        onRefresh = onRefresh,
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        when {
-            loading && groups.isEmpty() -> CenterHint("加载中…")
-            groups.isEmpty() -> Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = if (error.isNotBlank()) error else "暂无可用群组",
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-                if (error.isNotBlank()) {
-                    Spacer(Modifier.height(14.dp))
-                    SmallActionButton(text = "重新加载", onClick = onRetry)
-                }
+    when {
+        loading && groups.isEmpty() -> CenterHint("加载中…")
+        groups.isEmpty() -> Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = if (error.isNotBlank()) error else "暂无可用群组",
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+            if (error.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                SmallActionButton(text = "重新加载", onClick = onRetry)
             }
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
-            ) {
-                item {
-                    // 顺手汇总一下未读总数 (免打扰的群也算在里面)
-                    val totalUnread = groups.sumOf { it.unread }
-                    val listHint = "点击群组进入聊天 · 群公告与消息实时同步" +
-                        (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
-                    Text(
-                        text = listHint,
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
-                }
-                items(groups, key = { it.id }) { g ->
-                    GroupCard(
-                        group = g,
-                        onClick = { onOpen(g) },
-                        onOpenAt = { mid -> onOpenAt(g, mid) },
-                    )
-                }
+        }
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
+        ) {
+            item {
+                // 顺手汇总一下未读总数 (免打扰的群也算在里面)
+                val totalUnread = groups.sumOf { it.unread }
+                val listHint = "点击群组进入聊天 · 群公告与消息实时同步" +
+                    (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
+                Text(
+                    text = listHint,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            }
+            items(groups, key = { it.id }) { g ->
+                GroupCard(
+                    group = g,
+                    onClick = { onOpen(g) },
+                    onOpenAt = { mid -> onOpenAt(g, mid) },
+                )
             }
         }
     }
@@ -1696,92 +1689,86 @@ private fun ChatView(
         }
 
         Box(Modifier.weight(1f)) {
-            PullToRefresh(
-                isRefreshing = refreshing,
-                onRefresh = { loadLatest(true) },
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                when {
-                    loading && messages.isEmpty() -> CenterHint("加载中…")
-                    messages.isEmpty() -> CenterHint("还没有人说话, 来打个招呼吧")
-                    else -> LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                    ) {
-                        // 顶部: 还有更早的消息时占一行 (自动加载时显示提示, 也可以手动点一下)
-                        if (hasMoreBefore) {
-                            item(key = "load_older") {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { loadOlder(manual = true) }
-                                        .padding(vertical = 10.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        text = if (loadingMore) "加载更早的消息…"
-                                        else "上滑或点这里加载更早的消息",
-                                        fontSize = 11.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                    )
-                                }
+            when {
+                loading && messages.isEmpty() -> CenterHint("加载中…")
+                messages.isEmpty() -> CenterHint("还没有人说话, 来打个招呼吧")
+                else -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    // 顶部: 还有更早的消息时占一行 (自动加载时显示提示, 也可以手动点一下)
+                    if (hasMoreBefore) {
+                        item(key = "load_older") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { loadOlder(manual = true) }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = if (loadingMore) "加载更早的消息…"
+                                    else "上滑或点这里加载更早的消息",
+                                    fontSize = 11.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
                             }
                         }
-                        items(messages, key = { it.id }) { msg ->
-                            // 契约 B5: 系统消息 (「xxx加入了群聊」这种) 单独走居中灰字样式:
-                            // 没有头像、没有气泡、不可长按 (不能引用/撤回/复制)
-                            if (isSystemMessage(msg.msgType, msg.content)) {
-                                SystemMessageRow(
-                                    msg = msg,
-                                    groupId = group.id,
-                                    onOpenUser = onOpenUser,
-                                    modifier = messageItemEnter(),
-                                )
-                            } else {
-                            val mine = me != null && msg.userId == me.id
-                            MessageRow(
+                    }
+                    items(messages, key = { it.id }) { msg ->
+                        // 契约 B5: 系统消息 (「xxx加入了群聊」这种) 单独走居中灰字样式:
+                        // 没有头像、没有气泡、不可长按 (不能引用/撤回/复制)
+                        if (isSystemMessage(msg.msgType, msg.content)) {
+                            SystemMessageRow(
                                 msg = msg,
-                                mine = mine,
-                                canRecall = !msg.isRecalled && (mine || isAdmin),
-                                onLongPress = { actionTarget = msg },
-                                highlight = highlightId == msg.id || unreadAnchorId == msg.id,
+                                groupId = group.id,
+                                onOpenUser = onOpenUser,
                                 modifier = messageItemEnter(),
-                                // 消息里的链接: 用内置浏览器打开
-                                onOpenLink = { url ->
-                                    if (onOpenWeb != null) {
-                                        onOpenWeb(url, group.name)
-                                    } else {
-                                        onToast("没有可用的内置浏览器")
-                                    }
-                                },
-                                // 点头像/昵称: 打开用户主页 (含自己, 主页里自己看不显示「发消息」);
-                                // 没接主页时退回旧的成员操作面板
-                                onAvatarTap = {
-                                    if (onOpenUser != null) {
-                                        onOpenUser(msg.userId, group.id)
-                                    } else {
-                                        openMemberPanel(msg)
-                                    }
-                                },
-                                // 点图片: 全屏查看大图
-                                onImageTap = { url -> previewImage = url },
-                                // 长按对方头像 = @ 他
-                                onAvatarLongPress = {
-                                    insertMention(
-                                        SocialGroupMember(
-                                            id = msg.userId,
-                                            nickname = msg.nickname,
-                                            username = "",
-                                            avatar = msg.avatar,
-                                            role = msg.role,
-                                        ),
-                                    )
-                                    focusInput()
-                                    onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
-                                },
                             )
-                            }
+                        } else {
+                        val mine = me != null && msg.userId == me.id
+                        MessageRow(
+                            msg = msg,
+                            mine = mine,
+                            canRecall = !msg.isRecalled && (mine || isAdmin),
+                            onLongPress = { actionTarget = msg },
+                            highlight = highlightId == msg.id || unreadAnchorId == msg.id,
+                            modifier = messageItemEnter(),
+                            // 消息里的链接: 用内置浏览器打开
+                            onOpenLink = { url ->
+                                if (onOpenWeb != null) {
+                                    onOpenWeb(url, group.name)
+                                } else {
+                                    onToast("没有可用的内置浏览器")
+                                }
+                            },
+                            // 点头像/昵称: 打开用户主页 (含自己, 主页里自己看不显示「发消息」);
+                            // 没接主页时退回旧的成员操作面板
+                            onAvatarTap = {
+                                if (onOpenUser != null) {
+                                    onOpenUser(msg.userId, group.id)
+                                } else {
+                                    openMemberPanel(msg)
+                                }
+                            },
+                            // 点图片: 全屏查看大图
+                            onImageTap = { url -> previewImage = url },
+                            // 长按对方头像 = @ 他
+                            onAvatarLongPress = {
+                                insertMention(
+                                    SocialGroupMember(
+                                        id = msg.userId,
+                                        nickname = msg.nickname,
+                                        username = "",
+                                        avatar = msg.avatar,
+                                        role = msg.role,
+                                    ),
+                                )
+                                focusInput()
+                                onToast("已 @ " + msg.nickname.ifBlank { "群成员" })
+                            },
+                        )
                         }
                     }
                 }

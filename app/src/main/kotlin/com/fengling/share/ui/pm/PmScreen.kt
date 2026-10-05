@@ -69,11 +69,10 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 会话列表静默刷新间隔 (毫秒): 和群列表一样 8 秒 */
-private const val PM_LIST_POLL_MS = 8000L
+private const val PM_LIST_POLL_MS = 4000L
 
 /**
  * 私聊会话列表 (接口契约 A 节 pm_conversations)。
@@ -158,67 +157,61 @@ fun PmScreen(
         }
     }
 
-    PullToRefresh(
-        isRefreshing = refreshing,
-        onRefresh = { load(true) },
-        modifier = modifier.fillMaxSize(),
-    ) {
-        when {
-            loading && conversations.isEmpty() -> CenterHint("加载中…")
-            conversations.isEmpty() -> Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = if (error.isNotBlank()) error else "还没有私聊会话\n在群里点头像就能发起私聊",
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-                if (error.isNotBlank()) {
-                    Spacer(Modifier.height(14.dp))
-                    Card(onClick = { load(false) }, cornerRadius = 12.dp) {
-                        Text(
-                            text = "重新加载",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        )
-                    }
+    when {
+        loading && conversations.isEmpty() -> CenterHint("加载中…")
+        conversations.isEmpty() -> Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = if (error.isNotBlank()) error else "还没有私聊会话\n在群里点头像就能发起私聊",
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+            if (error.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                Card(onClick = { load(false) }, cornerRadius = 12.dp) {
+                    Text(
+                        text = "重新加载",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    )
                 }
             }
+        }
 
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
-            ) {
-                item {
-                    val hint = "点击会话进入私聊 · 和群聊消息分开显示" +
-                        (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
-                    Text(
-                        text = hint,
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
-                }
-                items(conversations, key = { it.convId }) { conv ->
-                    PmConversationCard(
-                        conversation = conv,
-                        onClick = { onOpenChat(conv.userId, conv.convId) },
-                        onAvatarClick = {
-                            if (onOpenUser != null && conv.userId > 0) {
-                                onOpenUser(conv.userId)
-                            } else {
-                                Toast.makeText(context, "该用户暂时打不开主页", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                    )
-                }
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
+        ) {
+            item {
+                val hint = "点击会话进入私聊 · 和群聊消息分开显示" +
+                    (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
+                Text(
+                    text = hint,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            }
+            items(conversations, key = { it.convId }) { conv ->
+                PmConversationCard(
+                    conversation = conv,
+                    onClick = { onOpenChat(conv.userId, conv.convId) },
+                    onAvatarClick = {
+                        if (onOpenUser != null && conv.userId > 0) {
+                            onOpenUser(conv.userId)
+                        } else {
+                            Toast.makeText(context, "该用户暂时打不开主页", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
             }
         }
     }
