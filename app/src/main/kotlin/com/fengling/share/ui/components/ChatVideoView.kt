@@ -46,6 +46,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
+import com.fengling.share.data.VIDEO_COVER_PARAM
 import com.fengling.share.data.VideoCoverLoader
 import com.fengling.share.data.VideoThumbCache
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -113,6 +114,8 @@ private fun VideoCover(url: String, modifier: Modifier = Modifier) {
     val request = remember(url, frameMillis, context) {
         ImageRequest.Builder(context)
             .data(url)
+            // 明确告诉抽帧解码器「这是视频」: 对象存储不回 video 类型的 Content-Type 时也能出封面
+            .setParameter(VIDEO_COVER_PARAM, true)
             .videoFrameMillis(frameMillis)
             .build()
     }

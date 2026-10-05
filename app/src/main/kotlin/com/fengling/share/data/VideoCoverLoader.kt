@@ -8,6 +8,12 @@ import coil.fetch.SourceResult
 import coil.request.Options
 
 /**
+ * 视频封面专用 ImageLoader 的「这是视频」标记参数 (v1.1.15)。
+ * 只在工程内部用, 名字带 coil# 前缀避免和 Coil 自带参数撞车。
+ */
+const val VIDEO_COVER_PARAM = "coil#fls_video_cover"
+
+/**
  * 视频封面专用的 Coil ImageLoader (v1.1.15)
  *
  * 抽帧要用 coil-video 的 VideoFrameDecoder, 而本工程没有 Application 子类、没有全局
@@ -38,25 +44,23 @@ object VideoCoverLoader {
  *
  * 直接用 coil-video 的 VideoFrameDecoder.Factory 有个坑: 它只认 fetcher 报上来的 MIME
  * (`mimeType.startsWith("video/")`), 而对象存储没回 Content-Type 时 Coil 拿到的是 null,
- * 结果就是「静默不出封面」, 又变回黑屏。所以这里在它的判断之外再加一条兜底:
- * 地址看着就是视频 (mp4 / mov / m4v / webm, 或者服务端的 /chat/ 目录) 就照抽不误, 否则让给别人。
+ * 结果就是「静默不出封面」, 又变回黑屏。
+ *
+ * 所以这里认两个条件之一:
+ *   ① 请求带了 [VIDEO_COVER_PARAM] 标记 (视频气泡发的请求一定带 —— 地址是不是视频我们自己最清楚);
+ *   ② fetcher 报的 MIME 本来就是 video 开头的。
+ * 两条都不满足才返回 null 让给别的解码器, 不会影响这个 loader 之外的任何图片。
  */
 private class VideoCoverFrameFactory : Decoder.Factory {
-
-    private val official = VideoFrameDecoder.Factory()
 
     override fun create(
         result: SourceResult,
         options: Options,
         imageLoader: ImageLoader,
     ): Decoder? {
-        if (official.create(result, options, imageLoader) != null) {
-            return VideoFrameDecoder(result.source, options)
-        }
-        val data = result.source.data.toString().lowercase()
-        val looksLikeVideo = data.contains(".mp4") || data.contains(".mov") ||
-            data.contains(".m4v") || data.contains(".webm") || data.contains("/chat/")
-        return if (looksLikeVideo) VideoFrameDecoder(result.source, options) else null
+        val marked = options.parameters.value(VIDEO_COVER_PARAM) == true
+        val mimeIsVideo = result.mimeType?.startsWith("video/") == true
+        return if (marked || mimeIsVideo) VideoFrameDecoder(result.source, options) else null
     }
 
     override fun equals(other: Any?) = other is VideoCoverFrameFactory
