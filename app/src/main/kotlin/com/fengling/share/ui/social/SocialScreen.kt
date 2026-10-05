@@ -2,6 +2,8 @@ package com.fengling.share.ui.social
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
@@ -1909,7 +1911,7 @@ private fun ChatView(
 
     /**
      * 「相册选视频」: 优先系统照片选择器 (PickVisualMedia + VideoOnly, 只给看视频、不要读全盘权限),
-     * ROM 没有这个东西时回退老的 GetContent("video/*")。两条路都直接进 startVideoSend。
+     * ROM 没有这个东西时回退老的 GetContent(video 通配 mime)。两条路都直接进 startVideoSend。
      */
     val pickChatVideo = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -2496,7 +2498,7 @@ private fun ChatView(
                     }
                 },
             )
-            // Wave 2 视频: 相册选视频 (PickVisualMedia(VideoOnly), 不可用回退 GetContent("video/*"))。
+            // Wave 2 视频: 相册选视频 (PickVisualMedia(VideoOnly), 不可用回退 GetContent(video 通配 mime))。
             // 原来的「相册 / 拍摄」是图片链路, 契约要求「现有功能入口要保留可点」→ 视频另起两个入口,
             // 不动图片那两个 (也符合契约里「(待 wave2) 视频」的预留)。
             if (videoEnabled) {

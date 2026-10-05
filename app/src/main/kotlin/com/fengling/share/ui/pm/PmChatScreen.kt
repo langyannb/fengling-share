@@ -729,7 +729,7 @@ fun PmChatScreen(
         }
     }
 
-    /** 「相册选视频」: 优先系统照片选择器 (PickVisualMedia + VideoOnly), 不可用回退 GetContent("video/*") */
+    /** 「相册选视频」: 优先系统照片选择器 (PickVisualMedia + VideoOnly), 不可用回退 GetContent(video 通配 mime) */
     val pickChatVideo = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) startVideoSend(uri) }
