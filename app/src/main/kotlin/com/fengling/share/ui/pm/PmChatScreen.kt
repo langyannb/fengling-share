@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -524,16 +525,12 @@ fun PmChatScreen(
         }
     }
 
-    // 契约 B: 预测性返回 (跟手) —— 手势进度 0→1 跟手右移 + 缩小淡出, 松手 <50% 回弹, >=50% 提交返回。
-    // 未开「预测性返回手势动画」或低版本系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(),
-    // 功能与原来完全一致, 不会崩。
-    // 页内有全屏大图预览时: 返回手势先把大图关掉, 再退页 (和系统返回语义一致)
-    val backProgress = rememberPredictiveBackProgress(enabled = true) {
-        if (previewImage.isNotBlank()) previewImage = "" else onBack()
-    }
+    // v1.1.10: 跟手动画交回框架 (NavHost 的 SeekableTransitionState 会按手势进度 seek pop 转场)。
+    // 页内有全屏大图预览时: 返回键先把大图关掉, 再退页 (和系统返回语义一致)
+    BackHandler(enabled = previewImage.isNotBlank()) { previewImage = "" }
 
     Scaffold(
-        modifier = modifier.predictiveBackTransform(backProgress),
+        modifier = modifier,
         topBar = {
             AppTopBar(
                 title = peer?.displayName?.takeIf { it.isNotBlank() } ?: "私聊",

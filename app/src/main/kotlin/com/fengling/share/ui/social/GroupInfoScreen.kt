@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -302,13 +303,11 @@ fun GroupInfoScreen(
     // 契约 B: 预测性返回 (跟手) —— 手势进度 0→1 跟手右移 + 缩小淡出, 松手 <50% 回弹, >=50% 提交返回。
     // 未开「预测性返回手势动画」或低版本系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(),
     // 功能与原来完全一致, 不会崩。
-    // 群相册大图查看中: 返回手势先关大图 (previewIndex >= 0), 再退页
-    val backProgress = rememberPredictiveBackProgress(enabled = true) {
-        if (previewIndex >= 0) previewIndex = -1 else onBack()
-    }
+    // 群相册大图查看中: 返回键先关大图 (previewIndex >= 0); 其余情况交给框架的预测性返回退页
+    BackHandler(enabled = previewIndex >= 0) { previewIndex = -1 }
 
     Scaffold(
-        modifier = Modifier.predictiveBackTransform(backProgress),
+        modifier = Modifier,
         topBar = { AppTopBar(title = "群详情", onBack = onBack) },
     ) { innerPadding ->
         val g = group

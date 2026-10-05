@@ -151,10 +151,8 @@ fun GroupMemberListScreen(
     // 契约 B: 预测性返回 (跟手) —— 手势进度 0→1 跟手右移 + 缩小淡出, 松手 <50% 回弹, >=50% 提交返回。
     // 未开「预测性返回手势动画」或低版本系统上系统不回传进度, 回调立刻正常结束 -> 直接 onBack(),
     // 功能与原来完全一致, 不会崩。
-    val backProgress = rememberPredictiveBackProgress(enabled = true) { onBack() }
-
     Scaffold(
-        modifier = Modifier.predictiveBackTransform(backProgress),
+        modifier = Modifier,
         topBar = {
             AppTopBar(
                 title = if (groupName.isNotBlank()) groupName + " · 群成员" else "群成员",

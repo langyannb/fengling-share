@@ -99,8 +99,6 @@ import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
 import com.fengling.share.ui.components.navigation.LiquidBottomBar
-import com.fengling.share.ui.components.BackReveal
-import com.fengling.share.ui.components.backRevealOverlay
 import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
@@ -182,8 +180,8 @@ object Routes {
  * 契约 B: NavHost 每个目的地统一补齐四段转场 (进入 / 退出 / 返回进入 / 返回退出)。
  *
  * 进入 = 右侧滑入 (与页面切换方向一致);
- * 返回 = 当前页轻微右滑 + 缩小淡出, 上一级放大淡入 —— 与系统预测返回手势的跟手动画无缝衔接
- * (manifest enableOnBackInvokedCallback=true 时, 松手提交后就是这段转场)。
+ * 返回 = 上一级左视差跟入 + 当前页整屏右移 —— 手势进行中系统会把进度 seek 进这段转场
+ * (navigation-compose 的 SeekableTransitionState), 所以不能有 fadeIn/scaleIn。
  * 规格统一写在这里, 新增目的地直接 appScreen(route) 即可, 不会再出现「有的页面有动画有的没有」。
  */
 private fun NavGraphBuilder.appScreen(
@@ -195,23 +193,17 @@ private fun NavGraphBuilder.appScreen(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
-    val popSpec = spring<Float>(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
     composable(
         route = route,
         arguments = arguments,
-        enterTransition = { slideInHorizontally(slideSpec) { it } + fadeIn(popSpec) },
-        exitTransition = { slideOutHorizontally(slideSpec) { -it } + fadeOut(popSpec) },
-        popEnterTransition = {
-            slideInHorizontally(slideSpec) { -it / 4 } + fadeIn(popSpec) +
-                scaleIn(initialScale = 0.96f, animationSpec = popSpec)
-        },
-        popExitTransition = {
-            slideOutHorizontally(slideSpec) { it / 4 } + fadeOut(popSpec) +
-                scaleOut(targetScale = 0.94f, animationSpec = popSpec)
-        },
+        // 进入: 新页从右滑入, 旧页向左让 1/4
+        enterTransition = { slideInHorizontally(slideSpec) { it } },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
+        // 返回: 系统手势进度会被 NavHost seek 进这段 pop 转场 —— 上一级从左侧轻微跟入,
+        // 当前页整屏右移 (1:1 跟手, 从哪来回哪去)。
+        // **不能 fadeIn / scaleIn**: 淡入会让跟手时被让出来的那半屏整片发白。
+        popEnterTransition = { slideInHorizontally(slideSpec) { -it / 4 } },
+        popExitTransition = { slideOutHorizontally(slideSpec) { it } },
         content = content,
     )
 }
@@ -224,22 +216,12 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // 可预测式返回 (ColorOS 16 同款「从哪来回哪去」): push 之前先把当前这一屏截下来,
-    // 侧滑跟手时铺在当前页面下方 —— 系统只给手势进度, 上一级画面必须自己画 (见 BackReveal)。
+    // 所有内部导航统一走这里。
+    // v1.1.10: 自研快照层整个撤掉 —— navigation-compose 的 NavHost 自带预测性返回:
+    // 手势进度会 seek 它内部的 SeekableTransitionState (pop 时上一级被放在下层 zIndex),
+    // 上一级是**活的**页面, 不需要截图, 也就没有空白/卡顿。
     fun go(route: String) {
-        // PixelCopy 是异步的 (1~2 帧): 等当前这一屏截好再导航, 免得截到新页面
-        BackReveal.captureBeforeNavigate(context, route) {
-            navController.navigate(route)
-        }
-    }
-
-    // 目的地切换: 把刚才那张截图按路由转正 / 切换, 多级返回也能对上正确的上一级
-    DisposableEffect(navController) {
-        val listener = NavController.OnDestinationChangedListener { _, destination, _ ->
-            BackReveal.onDestinationChanged(destination.route)
-        }
-        navController.addOnDestinationChangedListener(listener)
-        onDispose { navController.removeOnDestinationChangedListener(listener) }
+        navController.navigate(route)
     }
 
     // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊) — OShin 同款方案
@@ -400,34 +382,20 @@ fun MainScreen(
         )
     }
 
-    // 进入 = 滑动切换动画 (用户定案: 点击应用右滑进入, 旧页左滑出)
-    // 返回 = 系统预测返回动画 (跟手缩放回上一级, 不要滑出):
-    // manifest enableOnBackInvokedCallback=true 时系统手势跟手,
-    // 提交后 pop 转场用缩放+淡出延续预测返回观感 (官方 predictive-back)
+    // 进入 = 滑动切换 (点击应用右滑进入, 旧页左移 1/4 视差)
+    // 返回 = 预测性返回跟手 (同 appScreen, 见上面的说明)
     val slideSpec = spring<IntOffset>(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
-    val popSpec = spring<Float>(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
-        // 手势进行中, 在被让出来的那一条里补上「上一级画面」-> 侧滑一半就能看见上一级
-        modifier = Modifier
-            .fillMaxSize()
-            .backRevealOverlay(),
+        modifier = Modifier.fillMaxSize(),
         enterTransition = { slideInHorizontally(slideSpec) { it } },
-        exitTransition = { slideOutHorizontally(slideSpec) { -it } },
-        // 返回: 预测返回风格 — 当前页缩小淡出, 上一级放大淡入
-        popEnterTransition = {
-            scaleIn(initialScale = 0.95f, animationSpec = popSpec) + fadeIn(animationSpec = popSpec)
-        },
-        popExitTransition = {
-            scaleOut(targetScale = 0.9f, animationSpec = popSpec) + fadeOut(animationSpec = popSpec)
-        },
+        exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
+        popEnterTransition = { slideInHorizontally(slideSpec) { -it / 4 } },
+        popExitTransition = { slideOutHorizontally(slideSpec) { it } },
     ) {
         appScreen(Routes.MAIN) {
             // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (kyant/backdrop, 不用 Scaffold bottomBar 槽位)
