@@ -102,3 +102,18 @@ fun Modifier.predictiveBackTransform(
         shape = RoundedCornerShape(corner * p)
     }
 }
+
+/**
+ * 「被露出的那一层」在跟手过程中的视差: 从 0.90 放大回 1.0 + 轻微左移。
+ *
+ * 用于群组页这种「列表与群聊长在同一个 composable」的场景: 群聊层跟手右移时,
+ * 下面真实的群列表同时做这个放大, 观感与 ColorOS 16 的上一级一致。
+ * 注意只在「上面确实盖着一层」时才挂它 (否则静止状态下列表会被缩小 0.9)。
+ */
+fun Modifier.listBehindTransform(progress: State<Float>): Modifier = this.graphicsLayer {
+    val p = progress.value.coerceIn(0f, 1f)
+    transformOrigin = TransformOrigin(0.5f, 0.5f)
+    translationX = -size.width * 0.05f * (1f - p)
+    scaleX = 0.90f + 0.10f * p
+    scaleY = 0.90f + 0.10f * p
+}

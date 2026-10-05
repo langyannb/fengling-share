@@ -126,6 +126,7 @@ import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
 import com.fengling.share.ui.components.SegmentBarHeight
 
+import com.fengling.share.ui.components.listBehindTransform
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.MuteOptionPicker
@@ -472,15 +473,7 @@ fun SocialScreen(
     }
 
     Scaffold(
-        modifier = modifier
-            .fillMaxSize()
-            .predictiveBackTransform(
-                progress = backProgress,
-                // 内嵌模式没有横向的上一级页面, 只做缩小淡出 (露出底部渐变), 免得滑出一片空白
-                slideFraction = 0f,
-                scaleDown = 0.06f,
-                fadeOut = 0.45f,
-            ),
+        modifier = modifier.fillMaxSize(),
         topBar = {
             val g = currentGroup
             when {
@@ -545,18 +538,26 @@ fun SocialScreen(
                         .fillMaxSize()
                         .layerBackdrop(listBackdrop),
                 ) {
-                Column(modifier = Modifier.fillMaxSize()) {
                 val group = currentGroup
+                // 群聊层与列表层**同时**组合: 跟手右滑时露出来的是真实的群列表, 不是一片背景色
+                // (用 when 二选一就做不到 ColorOS 16 的「从哪来回哪去」)。
+                Box(modifier = Modifier.fillMaxSize()) {
+                // 列表层: 被露出的那一层, 跟手时做 0.90 -> 1.0 视差放大 (只在盖着群聊时才挂)
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (group != null) Modifier.listBehindTransform(backProgress) else Modifier),
+                ) {
                     when {
                         // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
-                        showTabs && tab == 1 && group == null -> PmScreen(
+                        showTabs && tab == 1 -> PmScreen(
                             onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
                             // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
                             onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
                             topPadding = tabTopSpace,
                             onNeedLogin = onNeedLogin,
                         )
-                        group == null -> GroupList(
+                        else -> GroupList(
                             groups = groups,
                             loading = loading,
                             refreshing = refreshing,
@@ -579,29 +580,37 @@ fun SocialScreen(
                                 }
                             },
                         )
-                        else -> ChatView(
-                            group = group,
-                            me = UserStore.current,
-                            menu = chatMenu,
-                            refreshTick = refreshTick,
-                            locateMessageId = if (locateMsgId > 0) locateMsgId else initialMessageId,
-                            onOpenWeb = onOpenWeb,
-                            onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
-                            // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
-                            onMarkRead = { clearUnread(group.id) },
-                            // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
-                            onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
-                            // 契约 B3: 加入群聊成功 → 本地马上把 isMember 置 true, 并刷新群资料
-                            // (标题里的成员数 +1) 与群列表; 底部输入区随即从「加入群聊」变回输入框
-                            glassBackdrop = glassBackdrop,
-                            onJoined = {
-                                currentGroup = currentGroup?.copy(isMember = true)
-                                groups = groups.map { row ->
-                                    if (row.id == group.id) row.copy(isMember = true) else row
-                                }
-                                loadGroups(true, silent = true)
-                            },
-                        )
+                    }
+                }
+                // 群聊层: 盖在列表之上, 由 predictiveBackTransform 跟手右移 —— 滑到一半就能
+                // 看见下面真实的群列表 (ColorOS 16 的跟手返回), 松手回弹/提交都自然衔接
+                if (group != null) {
+                    ChatView(
+                        group = group,
+                        me = UserStore.current,
+                        menu = chatMenu,
+                        refreshTick = refreshTick,
+                        locateMessageId = if (locateMsgId > 0) locateMsgId else initialMessageId,
+                        onOpenWeb = onOpenWeb,
+                        onToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                        // 进群定位完成 → 标记已读 → 清掉群列表上的未读角标
+                        onMarkRead = { clearUnread(group.id) },
+                        // 群聊进来带上群 id: 主页上的禁言只对本群生效 (契约 F2)
+                        onOpenUser = { uid, _ -> onOpenUser?.invoke(uid, group.id) },
+                        // 契约 B3: 加入群聊成功 → 本地马上把 isMember 置 true, 并刷新群资料
+                        // (标题里的成员数 +1) 与群列表; 底部输入区随即从「加入群聊」变回输入框
+                        glassBackdrop = glassBackdrop,
+                        onJoined = {
+                            currentGroup = currentGroup?.copy(isMember = true)
+                            groups = groups.map { row ->
+                                if (row.id == group.id) row.copy(isMember = true) else row
+                            }
+                            loadGroups(true, silent = true)
+                        },
+            modifier = Modifier
+                .fillMaxSize()
+                .predictiveBackTransform(progress = backProgress),
+        )
                 }
                 }
                 }
@@ -978,6 +987,8 @@ private fun ChatView(
     onJoined: () -> Unit = {},
     /** 页面级捕获层: 输入栏 / 顶栏做毛玻璃用, null 时自动退化为半透明底 (契约 C) */
     glassBackdrop: Backdrop? = null,
+    /** 群聊层自己的 modifier: 群组页拿它做可预测式返回的跟手变换 (v1.1.8) */
+    modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     // 复制消息用得到系统剪贴板
@@ -1599,7 +1610,7 @@ private fun ChatView(
     }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             // 长按选中公告/消息文字后, 点页面空白处取消选中 (重建公告文本 = 清掉选中态)。
             // 子控件 (按钮/输入框/图片/气泡文字) 会先消费点击, 所以这里只吃掉「真正空白处」的点击,
