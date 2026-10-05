@@ -427,7 +427,12 @@ object ApiClient {
      * 只有真网络错 / 服务器 5xx / 非限速业务错才会把失败交回调用方 (气泡标红, 用户可点重发)。
      * 文本 / 图片 / 视频三路最终都要过这里 (它们最后都落到 pmSend / socialSend)。
      */
-    suspend fun <T> sendWithGate(key: String, block: suspend () -> Result<T>): Result<T> =
+    suspend fun <T> sendWithGate(
+        key: String,
+        /** 排队闸门轮到这一条、即将真正发请求时的回调 (UI 用来把「排队中」切成「发送中」) */
+        onStart: (() -> Unit)? = null,
+        block: suspend () -> Result<T>,
+    ): Result<T> =
         withContext(Dispatchers.IO) {
             val mutex = sendMutexes.getOrPut(key) { Mutex() }
             mutex.withLock {
@@ -437,8 +442,10 @@ object ApiClient {
                     // 本地提前排队: 距这个 key 上次发送至少 2.4 秒, 从源头避开服务端的 2 秒窗口
                     val gap = SEND_MIN_GAP_MS - (SystemClock.elapsedRealtime() - (sendLastAt[key] ?: 0L))
                     if (gap > 0) delay(gap)
-                    last = block()
+                    // v1.1.16: 从「开始发」计时 (服务端按消息创建时间算 2 秒窗口), 比发完再计时更准
                     sendLastAt[key] = SystemClock.elapsedRealtime()
+                    onStart?.invoke()
+                    last = block()
                     val err = last.exceptionOrNull()
                     if (err == null || !isSendTooFast(err.message) || attempt >= SEND_MAX_RETRY) break
                     attempt++
@@ -1092,7 +1099,9 @@ object ApiClient {
         videoDuration: Int = 0,
         /** 视频字节数 */
         videoSize: Long = 0L,
-    ): Result<Int> = sendWithGate(groupSendGate(groupId)) {
+        /** 排队闸门轮到这条时回调: UI 把气泡从「排队中」切成「发送中」 */
+        onStart: (() -> Unit)? = null,
+    ): Result<Int> = sendWithGate(groupSendGate(groupId), onStart) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
             if (at.isNotEmpty()) {

@@ -1109,6 +1109,22 @@ private fun ChatView(
     /** 首屏/刷新落地用无动画的 scrollToItem (从顶部动画滚到最新一条看起来像「抖一下」) */
     var settleWithoutAnimation by remember { mutableStateOf(true) }
 
+    /** LazyColumn 顶部「上滑加载更早的消息」那一行占的 index 数 (有更早消息时才有这一行) */
+    fun headerCount(): Int = if (hasMoreBefore) 1 else 0
+
+    /**
+     * LazyColumn 里真实的条目总数 = 顶部加载行 (可能有) + 已收到的消息 + 本地乐观气泡。
+     * v1.1.16 修复: 以前几处滚动都直接用 messages.lastIndex, 把上面这两段都漏掉了 ——
+     * 自己发完消息后 outgoing 少一条、messages 多一条, 「跟到最新」只滚到倒数第二行附近,
+     * 表现就是「发送后先定到自己那条、成功后又被弹回去」。
+     */
+    fun listCount(): Int = headerCount() + messages.size + outgoing.size
+
+    /** 已有消息在发 / 在排队时, 新气泡的初始状态用「排队中」 */
+    fun sendBusy(): Boolean = outgoing.any {
+        it.state == SendState.Sending || it.state == SendState.Queued
+    }
+
     /**
      * 当前是否「贴在底部」(带「最后一条已进入可视区」的一格容差, 与 atBottom 判据一致)。
      * 判据带上容差是为了防抖动: 贴底时刚来一条新消息会让 canScrollForward 立刻变 true,
@@ -1117,9 +1133,10 @@ private fun ChatView(
      */
     fun isStuckToBottom(): Boolean {
         if (!listState.canScrollForward) return true
-        if (messages.isEmpty()) return true
+        if (listCount() <= 0) return true
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return false
-        return lastVisible >= messages.lastIndex - 1
+        // 容差 1 格: 最后一行 (含自己的乐观气泡) 已进入可视区就算贴底
+        return lastVisible >= listCount() - 2
     }
 
     // 持续维护 atBottom (用户滚到底部时顺手把「上翻期间新增」角标清零)
@@ -1144,7 +1161,8 @@ private fun ChatView(
 
     /** 回到最新消息: 滚到底部 + 清掉上翻期间累积的新消息角标 */
     fun jumpToLatest() {
-        val last = messages.lastIndex
+        // 真底部 = 顶部加载行 + 消息 + 本地乐观气泡 的最后一项
+        val last = listCount() - 1
         if (last >= 0) scope.launch { runCatching { listState.animateScrollToItem(last) } }
         newWhileAway = 0
     }
@@ -1359,8 +1377,9 @@ private fun ChatView(
             return@LaunchedEffect
         }
         autoScrollPending = false
-        if (messages.isEmpty()) return@LaunchedEffect
-        val target = messages.lastIndex
+        // v1.1.16: 跟到底要算上顶部加载行与本地乐观气泡, 否则永远差一两行
+        val target = listCount() - 1
+        if (target < 0) return@LaunchedEffect
         runCatching {
             if (settleWithoutAnimation) {
                 settleWithoutAnimation = false
@@ -1375,7 +1394,7 @@ private fun ChatView(
     // token 只在「确实发出了一条」时 +1, 动画过程中不会再变 key, 所以能滚完整。
     LaunchedEffect(ownSendToken) {
         if (ownSendToken <= 0) return@LaunchedEffect
-        val total = (if (hasMoreBefore) 1 else 0) + messages.size + outgoing.size
+        val total = listCount()
         if (total <= 0) return@LaunchedEffect
         runCatching { listState.animateScrollToItem(total - 1) }
     }
@@ -1389,7 +1408,8 @@ private fun ChatView(
         if (idx < 0) return@LaunchedEffect
         highlightId = target
         // 无动画定位: 进群时从顶部动画滚到未读那条, 看起来就是「抖一下」
-        runCatching { listState.scrollToItem(idx) }
+        // v1.1.16: LazyColumn 的 index 要算上顶部加载行, 否则会停在目标消息的上面一行
+        runCatching { listState.scrollToItem(headerCount() + idx) }
         locateId = 0
         // 定位自己决定位置, 不让「跟最新消息」的逻辑再补一次滚动
         autoScrollPending = false
@@ -1585,6 +1605,31 @@ private fun ChatView(
      * 失败 / 取消都只把这一条标成 Failed (不弹 toast 打断), 点红色感叹号重发;
      * 重发时若已经拿到直链 (uploadedUrl 非空) 就不再重传一遍, 免得白等一分钟。
      */
+    /** 闸门轮到这一条了: 气泡从「排队中」切成「发送中」(回调来自 IO 线程, 回主线程改状态) */
+    fun markSending(localId: String) {
+        scope.launch {
+            outgoing = outgoing.map {
+                if (it.localId == localId && it.state == SendState.Queued) {
+                    it.copy(state = SendState.Sending)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    /**
+     * 发送成功后的收尾 (v1.1.16): 先由调用方 mergeNew 合并真实消息, 这里再摘掉本地占位。
+     * 顺序反过来的话列表会「先少一条、再多一条」, 视觉上就是自己那条被弹走一下又回来。
+     * 拉真实消息失败也不留永久转圈 —— 占位照样摘掉, 真实消息最迟 3 秒后由轮询补上。
+     */
+    fun finishLocalSend(localId: String) {
+        outgoing = outgoing.filterNot { it.localId == localId }
+        // mergeNew 可能因为轮询已经先拿到而「没有新增」(这时它不会置 autoScrollPending),
+        // 这里兜底再明确滚一次真底部
+        autoScrollPending = true
+    }
+
     suspend fun performSendVideo(localId: String) {
         val item = outgoing.firstOrNull { it.localId == localId } ?: return
         val originalUri = item.videoUri ?: return
@@ -1722,12 +1767,14 @@ private fun ChatView(
             videoH = uploadH,
             videoDuration = uploadDuration,
             videoSize = uploadSize,
+            onStart = { markSending(localId) },
         )
             .onSuccess {
-                outgoing = outgoing.filterNot { it.localId == localId }
+                // 先合并真实消息, 再摘本地占位 (finishLocalSend) —— 见它的注释
                 val after = messages.maxOfOrNull { it.id } ?: 0
                 ApiClient.socialMessages(group.id, afterId = after)
                     .onSuccess { new -> mergeNew(new, forceScroll = true) }
+                finishLocalSend(localId)
             }
             .onFailure {
                 outgoing = outgoing.map {
@@ -1754,12 +1801,14 @@ private fun ChatView(
             item.mentionIds,
             atAll = item.atAll,
             quoteId = item.quoteId,
+            onStart = { markSending(localId) },
         )
             .onSuccess {
-                outgoing = outgoing.filterNot { it.localId == localId }
+                // 先合并真实消息, 再摘本地占位 (finishLocalSend) —— 见它的注释
                 val after = messages.maxOfOrNull { it.id } ?: 0
                 ApiClient.socialMessages(group.id, afterId = after)
                     .onSuccess { new -> mergeNew(new, forceScroll = true) }
+                finishLocalSend(localId)
             }
             .onFailure {
                 // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
@@ -1772,8 +1821,13 @@ private fun ChatView(
     /** 点失败消息上的红色感叹号: 重发同一条 (第二条又失败就再次回到失败态) */
     fun retrySend(localId: String) {
         if (outgoing.none { it.localId == localId }) return
+        val queued = sendBusy()
         outgoing = outgoing.map {
-            if (it.localId == localId) it.copy(state = SendState.Sending) else it
+            if (it.localId == localId) {
+                it.copy(state = if (queued) SendState.Queued else SendState.Sending)
+            } else {
+                it
+            }
         }
         scope.launch { performSend(localId) }
     }
@@ -1811,7 +1865,8 @@ private fun ChatView(
             mentionIds = mentionIds,
             atAll = wantAll,
             quoteId = quoteId,
-            state = SendState.Sending,
+            // v1.1.16: 上一条还没发完就显示「排队中」, 别让用户对着一个没解释的转圈干等
+            state = if (sendBusy()) SendState.Queued else SendState.Sending,
             message = SocialMessage(
                 // 本地临时消息用负 id: 永远不会和服务端 id 撞上, 也方便一眼看出是本地占位
                 id = -seq,
