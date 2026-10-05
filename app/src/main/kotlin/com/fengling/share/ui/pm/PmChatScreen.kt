@@ -243,10 +243,24 @@ fun PmChatScreen(
     /** 已读上报去重: 记住最近一次上报的 last_id, 避免重复请求 */
     var lastReadReported by remember { mutableStateOf(0) }
 
+    fun headerCount(): Int = if (hasMoreBefore) 1 else 0
+
+    /**
+     * LazyColumn 里真实的条目总数 = 顶部加载行 (可能有) + 已收到的消息 + 本地乐观气泡。
+     * v1.1.17 修复: 与群聊同一处 bug —— 以前滚动一直用 messages.lastIndex, 漏掉上面两段,
+     * 自己发完消息后「跟到最新」会停在倒数第二行附近 (表现: 先定到自己那条、成功后又被弹回去)。
+     */
+    fun listCount(): Int = headerCount() + messages.size + outgoing.size
+
+    /** 已有消息在发 / 在排队时, 新气泡的初始状态用「排队中」 */
+    fun sendBusy(): Boolean = outgoing.any {
+        it.state == SendState.Sending || it.state == SendState.Queued
+    }
+
     fun isStuckToBottom(): Boolean {
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return true
-        if (lastVisible < messages.size - 1) return false
-        return lastVisible >= messages.lastIndex - 1
+        if (listCount() <= 0) return true
+        return lastVisible >= listCount() - 2
     }
 
     LaunchedEffect(listState) {
@@ -258,7 +272,7 @@ fun PmChatScreen(
 
     /** 回到最新消息: 滚到底部 + 清掉上翻期间累积的新消息角标 */
     fun jumpToLatest() {
-        val last = messages.lastIndex
+        val last = listCount() - 1
         if (last >= 0) scope.launch { runCatching { listState.animateScrollToItem(last) } }
         newWhileAway = 0
     }
@@ -420,8 +434,8 @@ fun PmChatScreen(
             return@LaunchedEffect
         }
         autoScrollPending = false
-        if (messages.isEmpty()) return@LaunchedEffect
-        val target = messages.lastIndex
+        val target = listCount() - 1
+        if (target < 0) return@LaunchedEffect
         runCatching {
             if (settleWithoutAnimation) {
                 settleWithoutAnimation = false
@@ -448,7 +462,7 @@ fun PmChatScreen(
         val idx = messages.indexOfFirst { it.id == target }
         if (idx < 0) return@LaunchedEffect
         highlightId = target
-        runCatching { listState.scrollToItem(idx) }
+        runCatching { listState.scrollToItem(headerCount() + idx) }
         delay(2800)
         if (highlightId == target) highlightId = 0
     }
@@ -467,6 +481,25 @@ fun PmChatScreen(
      * 与群聊同一套逻辑: 上传用专用长超时 client (100MB 要 50~70 秒), 失败/取消只标失败态可重发,
      * 重发时已经拿到直链 (uploadedUrl 非空) 就不再重传一遍。
      */
+    /** 门控等待结束、真正开始发送时: 把「排队中」翻成「发送中」 */
+    fun markSending(localId: String) {
+        scope.launch {
+            outgoing = outgoing.map {
+                if (it.localId == localId && it.state == SendState.Queued) {
+                    it.copy(state = SendState.Sending)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    /** 发送成功收尾: 摘掉本地占位 + 明确滚到真底部 (轮询可能已先拿到, 这里兜底) */
+    fun finishLocalSend(localId: String) {
+        outgoing = outgoing.filterNot { it.localId == localId }
+        autoScrollPending = true
+    }
+
     suspend fun performSendVideo(localId: String) {
         val item = outgoing.firstOrNull { it.localId == localId } ?: return
         val originalUri = item.videoUri ?: return
@@ -601,13 +634,14 @@ fun PmChatScreen(
             videoH = uploadH,
             videoDuration = uploadDuration,
             videoSize = uploadSize,
+            onStart = { markSending(localId) },
         )
             .onSuccess { res ->
                 if (res.convId > 0) convId = res.convId
-                outgoing = outgoing.filterNot { it.localId == localId }
                 val after = messages.maxOfOrNull { it.id } ?: 0
                 ApiClient.pmMessages(convId = convId, afterId = after)
                     .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+                finishLocalSend(localId)
             }
             .onFailure {
                 outgoing = outgoing.map {
@@ -632,13 +666,14 @@ fun PmChatScreen(
             toUser = if (convId <= 0) peerUserId else 0,
             convId = convId,
             content = item.text,
+            onStart = { markSending(localId) },
         )
             .onSuccess { res ->
                 if (res.convId > 0) convId = res.convId
-                outgoing = outgoing.filterNot { it.localId == localId }
                 val after = messages.maxOfOrNull { it.id } ?: 0
                 ApiClient.pmMessages(convId = convId, afterId = after)
                     .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+                finishLocalSend(localId)
             }
             .onFailure {
                 // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
@@ -651,8 +686,13 @@ fun PmChatScreen(
     /** 点失败消息上的红色感叹号: 重发同一条 */
     fun retrySend(localId: String) {
         if (outgoing.none { it.localId == localId }) return
+        val queued = sendBusy()
         outgoing = outgoing.map {
-            if (it.localId == localId) it.copy(state = SendState.Sending) else it
+            if (it.localId == localId) {
+                it.copy(state = if (queued) SendState.Queued else SendState.Sending)
+            } else {
+                it
+            }
         }
         scope.launch { performSend(localId) }
     }
@@ -678,7 +718,7 @@ fun PmChatScreen(
         outgoing = outgoing + OutgoingPmMsg(
             localId = localId,
             text = text,
-            state = SendState.Sending,
+            state = if (sendBusy()) SendState.Queued else SendState.Sending,
             message = PmMessage(
                 // 本地临时消息用负 id: 永远不会和服务端 id 撞上 (拉新消息也是按 afterId > 0 拉)
                 id = -seq,
@@ -811,7 +851,7 @@ fun PmChatScreen(
             outgoing = outgoing + OutgoingPmMsg(
                 localId = localId,
                 text = "",
-                state = SendState.Sending,
+                state = if (sendBusy()) SendState.Queued else SendState.Sending,
                 message = PmMessage(
                     // 本地占位: 负 id + msgType=video, 真正的 video 直链要等上传完才有
                     id = -seq,

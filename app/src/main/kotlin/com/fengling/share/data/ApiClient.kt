@@ -1254,7 +1254,8 @@ object ApiClient {
         videoH: Int = 0,
         videoDuration: Int = 0,
         videoSize: Long = 0L,
-    ): Result<PmSendResult> = sendWithGate(PM_SEND_GATE) {
+        onStart: (() -> Unit)? = null,
+    ): Result<PmSendResult> = sendWithGate(PM_SEND_GATE, onStart) {
         apiCall {
             val params = mutableMapOf<String, Any?>("content" to content)
             if (toUser > 0) params["to_user"] = toUser
