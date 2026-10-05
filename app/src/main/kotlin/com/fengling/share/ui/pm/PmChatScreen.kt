@@ -467,7 +467,7 @@ fun PmChatScreen(
             outgoing = outgoing.map {
                 if (it.localId == localId) it.copy(compressPct = 0) else it
             }
-            val packed = compressVideoForUpload(
+            var packed = compressVideoForUpload(
                 context = context,
                 uri = originalUri,
                 sourceShortSide = minOf(item.videoW, item.videoH),
@@ -480,6 +480,11 @@ fun PmChatScreen(
                         if (it.localId == localId) it.copy(compressPct = pct) else it
                     }
                 }
+            }
+            if (packed != null && item.videoSize > 0L && packed.length() >= item.videoSize) {
+                // 压完反而没变小 (源文件本来就编码得很紧): 丢掉产物, 原文件直传, 不白白多花流量
+                runCatching { packed.delete() }
+                packed = null
             }
             if (packed != null) {
                 val info = withContext(Dispatchers.IO) { VideoProbe.probe(context, Uri.fromFile(packed)) }
