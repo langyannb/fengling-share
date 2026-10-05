@@ -21,7 +21,7 @@ import kotlinx.coroutines.CancellationException
 private const val TAG = "FLS_BACK"
 
 /** 松手提交后, 页面顺势滑出屏幕用多久 (ms) */
-private const val COMMIT_SLIDE_MS = 150L
+private const val COMMIT_SLIDE_MS = 150
 
 /** 提交后等转场收尾再复位本地进度 (ms); 页面若已被销毁, 协程取消, 不会执行 */
 private const val COMMIT_SETTLE_MS = 400L
