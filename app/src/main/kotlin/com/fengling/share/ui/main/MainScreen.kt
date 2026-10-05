@@ -717,6 +717,7 @@ fun MainScreen(
             )
         }
     }
+    }
 }
 
 /**
@@ -979,7 +980,6 @@ private fun PmNotifyWatcher() {
                 StreamEvent.Reconnected -> Unit
             }
         }
-    }
     }
 }
 

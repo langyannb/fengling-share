@@ -402,7 +402,9 @@ fun WebViewScreen(
 
     // v1.1.15: WebView 自己的底色也跟 App 主题背景一致 ——
     // 网页换页 / 重渲染的空档露出来的是 App 底色, 不再是刺眼的白闪。
-    SideEffect { webView.setBackgroundColor(MiuixTheme.colorScheme.background.toArgb()) }
+    // MiuixTheme 只能在组合里读, 所以先把颜色取出来, 再交给非组合的 SideEffect
+    val webBackgroundArgb = MiuixTheme.colorScheme.background.toArgb()
+    SideEffect { webView.setBackgroundColor(webBackgroundArgb) }
 
     // 页面离开时: 停加载 + 销毁 WebView 实例 (每次进入都是全新实例, 不残留历史/状态)
     DisposableEffect(Unit) {

@@ -58,7 +58,7 @@ private class VideoCoverFrameFactory : Decoder.Factory {
         options: Options,
         imageLoader: ImageLoader,
     ): Decoder? {
-        val marked = options.parameters.value(VIDEO_COVER_PARAM) == true
+        val marked = options.parameters.value<Boolean>(VIDEO_COVER_PARAM) == true
         val mimeIsVideo = result.mimeType?.startsWith("video/") == true
         return if (marked || mimeIsVideo) VideoFrameDecoder(result.source, options) else null
     }
