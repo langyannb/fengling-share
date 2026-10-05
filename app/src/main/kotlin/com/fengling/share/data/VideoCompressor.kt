@@ -45,12 +45,6 @@ private const val COMPRESS_MAX_SHORT_SIDE_PX = 720
 private const val COMPRESS_VIDEO_BITRATE_BPS = 2_500_000
 private const val COMPRESS_AUDIO_BITRATE_BPS = 96_000
 
-/**
- * ftyp 之后给 moov 预留的空间: 装得下就写在文件头 (= faststart, 边下边播),
- * 装不下会被 mp4 封装器挪回文件尾 (仍然可播, 只是首播要等尾部下载完)。
- */
-private const val COMPRESS_MOOV_RESERVE_BYTES = 256 * 1024
-
 private const val COMPRESS_POLL_INTERVAL_MS = 200L
 private const val COMPRESS_OUTPUT_PREFIX = "upload_compressed_"
 private const val COMPRESS_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1000L
@@ -186,15 +180,21 @@ private fun cleanupStaleCompressOutputs(context: Context) {
 }
 
 /**
- * 让输出 mp4 尽量 faststart 的封装器: 委托给 Media3 内置的 mp4 封装器,
- * 开「可流式输出」并在 ftyp 之后预留一段空间给 moov。
- * (Media3 默认不带这个行为, 手机直出视频的 moov 往往在文件尾, 播放器要等文件下完才出画面。)
+ * 让输出尽量 faststart 的封装器: 委托 Media3 内置的 mp4 封装器, 明确打开「可流式输出」。
+ *
+ * 静态证据 (media3 1.11.1 源码, 尚未真机扫字节序):
+ * - 打开开关后 Mp4Writer 在 ftyp 之后会预留 DEFAULT_MOOV_BOX_SIZE_BYTES = 400000 字节的 moov 位
+ *   (Mp4Writer.java:51 常量, :323-327 预留); 采样数据写在预留区之后。
+ * - 收尾时 maybeWriteMoovAtStart() (Mp4Writer.java:385-400) 只要 moov 装得下就把 moov 写在预留位
+ *   (也就是在 mdat 采样数据**之前**), 剩下的空隙填 free box;
+ *   装不下才退回文件尾, 并把预留位改写成 free box (:401-411)。
+ * 所以 moov 不大的输出 (我们压到 720p / 2.5Mbps 的产物) 会拿到 moov 在前的文件。
+ * 这是「尽力而为」不是保证: 长视频 moov 超过 400KB 时仍会落在文件尾。
  */
 @OptIn(UnstableApi::class)
 private object FastStartMp4MuxerFactory : Muxer.Factory {
     private val delegate: InAppMp4Muxer.Factory = InAppMp4Muxer.Factory()
         .setAttemptStreamableOutputEnabled(true)
-        .setFreeSpaceAfterFileTypeBoxBytes(COMPRESS_MOOV_RESERVE_BYTES)
 
     override fun create(path: String): Muxer = delegate.create(path)
 
