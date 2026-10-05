@@ -227,8 +227,10 @@ fun MainScreen(
     // 可预测式返回 (ColorOS 16 同款「从哪来回哪去」): push 之前先把当前这一屏截下来,
     // 侧滑跟手时铺在当前页面下方 —— 系统只给手势进度, 上一级画面必须自己画 (见 BackReveal)。
     fun go(route: String) {
-        BackReveal.captureBeforeNavigate(context, route)
-        navController.navigate(route)
+        // PixelCopy 是异步的 (1~2 帧): 等当前这一屏截好再导航, 免得截到新页面
+        BackReveal.captureBeforeNavigate(context, route) {
+            navController.navigate(route)
+        }
     }
 
     // 目的地切换: 把刚才那张截图按路由转正 / 切换, 多级返回也能对上正确的上一级

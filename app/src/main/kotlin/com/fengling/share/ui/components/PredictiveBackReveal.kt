@@ -4,8 +4,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
-import android.graphics.Canvas
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.PixelCopy
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -22,28 +24,25 @@ import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
 
 /**
- * 可预测式返回的「上一级画面」快照 (v1.1.7)
+ * 可预测式返回的「上一级画面」快照 (v1.1.9)
  *
- * 为什么要自己画: 系统的可预测式返回 (predictive back) 只会把手势进度 0..1 喂给 App,
- * **上一级界面长什么样得 App 自己呈现**。而 NavHost 在手势进行中只组合当前目的地,
- * 上一级根本没被组合 —— 于是侧滑只能露出一片背景色, 做不到 ColorOS 16 那种
- * 「从哪来回哪去 / 侧滑一半就能看见上一级内容」。
+ * 为什么要自己画: 系统的可预测式返回只把手势进度 0..1 喂给 App, **上一级界面长什么样
+ * 得 App 自己呈现**。NavHost 在手势进行中只组合当前目的地, 上一级根本没被组合 ——
+ * 不画就是一片背景色, 做不到 ColorOS 16 那种「从哪来回哪去 / 侧滑一半就看见上一级」。
  *
- * 做法 (按路由存快照, 多级返回也不会串图):
- *  1. 每次 push 之前调用 [captureBeforeNavigate] 把当前窗口截成位图, 按「目标路由」暂存;
- *  2. 目的地真的切过去后, 这张图转正进 shots (最多 4 张, 超出丢最旧), 并设为当前路由的 behind;
- *  3. 手势进行中 [progress] > 0 时, 挂在 NavHost 上的 [backRevealBackdrop] 把 behind
- *     铺在当前页面下方: 0.90 -> 1.0 放大 + 轻微视差 + 由暗转亮;
- *  4. 松手回弹 / 提交后由系统转场接管, 观感连贯。
+ * v1.1.7 用 View.draw(Canvas) 软件绘制抓屏 —— 画不出 Compose 的硬件层与毛玻璃
+ * (RenderEffect), 抓出来是空白, 表现就是「返回过程中一片空白」。v1.1.9 改用
+ * PixelCopy 直接取窗口的真实帧 (含毛玻璃), 抓屏是异步的 (1~2 帧 ≈ 30ms),
+ * 所以导航动作挪到截图完成之后。
  */
 object BackReveal {
     private const val TAG = "FLS_BACK"
 
-    /** 同时最多保留几层快照 (每张约 1.7MB, 4 张足够覆盖多级返回) */
-    private const val MAX_SHOTS = 4
+    /** 同时最多保留几层快照 (0.6 倍约 5MB 一张, 实测返回栈一般就到 2 层) */
+    private const val MAX_SHOTS = 2
 
-    /** 快照按窗口尺寸缩到 40% 再存, 铺回时放大, 视觉够用又省内存 */
-    private const val SNAPSHOT_SCALE = 0.4f
+    /** 快照按窗口尺寸缩到 60% 再存: 铺回时放到全屏只放大 1.67 倍, 肉眼看不出糊 */
+    private const val SNAPSHOT_SCALE = 0.6f
 
     /** 手势进度 0..1 (由 rememberPredictiveBackProgress 写入) */
     var progress by mutableFloatStateOf(0f)
@@ -56,23 +55,76 @@ object BackReveal {
     private val shots = LinkedHashMap<String, ImageBitmap>()
     private var pending: ImageBitmap? = null
     private var pendingRoute: String? = null
+    private var capturing = false
 
-    /** 导航前同步截屏 (在点击所在的线程上跑, 十几毫秒; 手势进行中不截, 免得截到自己的跟手状态) */
-    fun captureBeforeNavigate(context: Context, targetRoute: String) {
-        if (progress > 0f) return
-        val shot = captureWindow(context) ?: return
-        pending = shot
-        pendingRoute = targetRoute
-        Log.d(TAG, "已记录上一级画面 -> " + targetRoute)
+    /**
+     * 导航前把当前这一屏截下来, 截好后再执行 [onReady] (里面才真正 navigate)。
+     * 手势进行中 / 正在截图 / 窗口还没尺寸 都直接放行, 不阻塞导航。
+     */
+    fun captureBeforeNavigate(context: Context, targetRoute: String, onReady: () -> Unit) {
+        val activity = context.findActivity()
+        val view = activity?.window?.decorView
+        val w = view?.width ?: 0
+        val h = view?.height ?: 0
+        if (progress > 0f || capturing || activity == null || view == null || w <= 0 || h <= 0) {
+            onReady()
+            return
+        }
+        val full = try {
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        } catch (t: Throwable) {
+            Log.w(TAG, "分配快照失败: " + t.message)
+            onReady()
+            return
+        }
+        capturing = true
+        val done = { result: Boolean ->
+            try {
+                if (result) {
+                    // 缩到 60%: 内存从 13MB 降到 5MB, 铺回时放到全屏仍然清楚
+                    val sw = (w * SNAPSHOT_SCALE).roundToInt().coerceAtLeast(1)
+                    val sh = (h * SNAPSHOT_SCALE).roundToInt().coerceAtLeast(1)
+                    val small = Bitmap.createScaledBitmap(full, sw, sh, true)
+                    if (small !== full) full.recycle()
+                    pending = small.asImageBitmap()
+                    pendingRoute = targetRoute
+                    Log.d(TAG, "已记录上一级画面 -> " + targetRoute)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "缩放缓照失败: " + t.message)
+            } finally {
+                capturing = false
+                onReady()
+            }
+        }
+        try {
+            PixelCopy.request(
+                activity.window,
+                full,
+                { res ->
+                    if (res == PixelCopy.SUCCESS) {
+                        done(true)
+                    } else {
+                        Log.w(TAG, "PixelCopy 失败: " + res)
+                        done(false)
+                    }
+                },
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "PixelCopy 异常: " + t.message)
+            done(false)
+        }
     }
 
-    /** 目的地变化回调: pending 与路由配对成功就转正, 并把 behind 换成当前路由自己的上一级画面 */
+    /** 目的地变化: pending 与路由配对成功就转正, 并把 behind 换成当前路由自己的上一级画面 */
     fun onDestinationChanged(route: String?) {
         val shot = pending
         val shotRoute = pendingRoute
         pending = null
         pendingRoute = null
         if (shot != null && route != null && route == shotRoute) {
+            shots.remove(route)
             shots[route] = shot
             while (shots.size > MAX_SHOTS) {
                 val oldest = shots.keys.firstOrNull() ?: break
@@ -80,27 +132,9 @@ object BackReveal {
             }
         }
         behind = if (route != null) shots[route] else null
-    }
-
-    private fun captureWindow(context: Context): ImageBitmap? = try {
-        val activity = context.findActivity()
-        val view = activity?.window?.decorView
-        val w = view?.width ?: 0
-        val h = view?.height ?: 0
-        if (view == null || w <= 0 || h <= 0) {
-            null
-        } else {
-            val full = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            view.draw(Canvas(full))
-            val sw = (w * SNAPSHOT_SCALE).roundToInt().coerceAtLeast(1)
-            val sh = (h * SNAPSHOT_SCALE).roundToInt().coerceAtLeast(1)
-            val small = Bitmap.createScaledBitmap(full, sw, sh, true)
-            if (small !== full) full.recycle()
-            small.asImageBitmap()
-        }
-    } catch (t: Throwable) {
-        Log.w(TAG, "截屏失败: " + t.message)
-        null
+        // 新页面接管: 手势进度归零。被弹掉的旧页面用的是自己那份 Animatable,
+        // 不受这里影响 (它在转场里依然是滑出去的状态, 不会跳回来)。
+        progress = 0f
     }
 }
 

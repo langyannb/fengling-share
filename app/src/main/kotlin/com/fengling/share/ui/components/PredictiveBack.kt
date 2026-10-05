@@ -5,6 +5,7 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
@@ -18,6 +19,12 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 
 private const val TAG = "FLS_BACK"
+
+/** 松手提交后, 页面顺势滑出屏幕用多久 (ms) */
+private const val COMMIT_SLIDE_MS = 150L
+
+/** 提交后等转场收尾再复位本地进度 (ms); 页面若已被销毁, 协程取消, 不会执行 */
+private const val COMMIT_SETTLE_MS = 400L
 
 /**
  * 可预测式返回 (predictive back) 进度 (v1.1.7)
@@ -59,12 +66,16 @@ fun rememberPredictiveBackProgress(
             BackReveal.progress = 0f
             throw e
         }
-        // 手势提交: 补到 1 再真正返回
-        progress.snapTo(1f)
-        BackReveal.progress = 1f
+        // 手势提交: 先让页面顺势滑完 (150ms 内滑出屏幕), 再真正返回。
+        // 不能直接 snapTo(1f) 就 onBack + 立刻复位 —— 上一版正是这样: 被弹出的页面会在
+        // 同一帧被打回原位再滑出去, 看上去就是「返回之后卡一下」。
         Log.d(TAG, "可预测式返回: 提交")
+        progress.animateTo(1f, tween(durationMillis = COMMIT_SLIDE_MS))
+        BackReveal.progress = 1f
         onBack()
-        // 页面没被销毁 (例如 WebView 内部历史回退) -> 复位, 不留偏移
+        // 正常返回时本页会被销毁、协程取消, 下面复位不执行;
+        // 只有「原地返回」(例如 WebView 内部历史回退) 会走到, 复位不留偏移
+        kotlinx.coroutines.delay(COMMIT_SETTLE_MS)
         progress.snapTo(0f)
         BackReveal.progress = 0f
     }

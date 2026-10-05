@@ -24,8 +24,8 @@ android {
         applicationId = "com.fengling.share"
         minSdk = 33
         targetSdk = 34
-        versionCode = 145
-        versionName = "1.1.8"
+        versionCode = 146
+        versionName = "1.1.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

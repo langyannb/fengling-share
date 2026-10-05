@@ -126,6 +126,7 @@ import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.LiquidSegmentedBar
 import com.fengling.share.ui.components.SegmentBarHeight
 
+import com.fengling.share.ui.components.appGradientBackground
 import com.fengling.share.ui.components.listBehindTransform
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
@@ -607,8 +608,11 @@ fun SocialScreen(
                             }
                             loadGroups(true, silent = true)
                         },
+            // 不透明底: 列表层现在常驻在下面, 群聊层若还是透的就会「隔着聊天看见列表」
+            // (v1.1.8 的毛病)。铺一层与页面一致的渐变底, 跟手时移动的是一张实心页面。
             modifier = Modifier
                 .fillMaxSize()
+                .appGradientBackground()
                 .predictiveBackTransform(progress = backProgress),
         )
                 }
