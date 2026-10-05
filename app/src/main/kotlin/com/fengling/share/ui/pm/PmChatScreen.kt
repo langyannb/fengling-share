@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -410,6 +411,38 @@ fun PmChatScreen(
         ApiClient.pmRead(convId, last)
     }
 
+    /** 真正把一条本地临时消息发给服务端: 成功 = 移除本地占位 + 立刻拉真实消息, 失败 = 标成失败态 */
+    suspend fun performSend(localId: String) {
+        val item = outgoing.firstOrNull { it.localId == localId } ?: return
+        ApiClient.pmSend(
+            toUser = if (convId <= 0) peerUserId else 0,
+            convId = convId,
+            content = item.text,
+        )
+            .onSuccess { res ->
+                if (res.convId > 0) convId = res.convId
+                outgoing = outgoing.filterNot { it.localId == localId }
+                val after = messages.maxOfOrNull { it.id } ?: 0
+                ApiClient.pmMessages(convId = convId, afterId = after)
+                    .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+            }
+            .onFailure {
+                // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
+                outgoing = outgoing.map {
+                    if (it.localId == localId) it.copy(state = SendState.Failed) else it
+                }
+            }
+    }
+
+    /** 点失败消息上的红色感叹号: 重发同一条 */
+    fun retrySend(localId: String) {
+        if (outgoing.none { it.localId == localId }) return
+        outgoing = outgoing.map {
+            if (it.localId == localId) it.copy(state = SendState.Sending) else it
+        }
+        scope.launch { performSend(localId) }
+    }
+
     /**
      * v1.1.12 乐观发送: 发送按钮不再被「发送中」门控 (只看内容非空)。
      * 点下去立刻清空输入框 + 把本地临时消息挂到列表尾部 (转圈「发送中」), 服务端返回后换成真实消息。
@@ -446,38 +479,6 @@ fun PmChatScreen(
                 ).format(java.util.Date()),
             ),
         )
-        scope.launch { performSend(localId) }
-    }
-
-    /** 真正把一条本地临时消息发给服务端: 成功 = 移除本地占位 + 立刻拉真实消息, 失败 = 标成失败态 */
-    suspend fun performSend(localId: String) {
-        val item = outgoing.firstOrNull { it.localId == localId } ?: return
-        ApiClient.pmSend(
-            toUser = if (convId <= 0) peerUserId else 0,
-            convId = convId,
-            content = item.text,
-        )
-            .onSuccess { res ->
-                if (res.convId > 0) convId = res.convId
-                outgoing = outgoing.filterNot { it.localId == localId }
-                val after = messages.maxOfOrNull { it.id } ?: 0
-                ApiClient.pmMessages(convId = convId, afterId = after)
-                    .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
-            }
-            .onFailure {
-                // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
-                outgoing = outgoing.map {
-                    if (it.localId == localId) it.copy(state = SendState.Failed) else it
-                }
-            }
-    }
-
-    /** 点失败消息上的红色感叹号: 重发同一条 */
-    fun retrySend(localId: String) {
-        if (outgoing.none { it.localId == localId }) return
-        outgoing = outgoing.map {
-            if (it.localId == localId) it.copy(state = SendState.Sending) else it
-        }
         scope.launch { performSend(localId) }
     }
 
@@ -728,38 +729,40 @@ fun PmChatScreen(
                                 highlight = highlightId == msg.id || unreadAnchorId == msg.id,
                             )
                         }
+
+                            // v1.1.12 乐观发送: 本地临时消息挂在列表最尾部 —— 转圈 = 发送中, 红色感叹号 = 失败可重发
+                            items(outgoing, key = { it.localId }) { item ->
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    PmMessageRow(
+                                        msg = item.message,
+                                        // 本地临时消息一定是自己发的
+                                        mine = true,
+                                        peerName = peer?.displayName.orEmpty().ifBlank { "对方" },
+                                        peerAvatar = peer?.avatar.orEmpty(),
+                                        myName = UserStore.current?.displayName.orEmpty(),
+                                        myAvatar = UserStore.current?.avatarUrl.orEmpty(),
+                                        onLongPress = {},
+                                        onAvatarTap = {},
+                                        onImageTap = { url -> previewImage = url },
+                                        highlight = false,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(end = 14.dp),
+                                        horizontalArrangement = Arrangement.End,
+                                    ) {
+                                        SendStatusIndicator(
+                                            state = item.state,
+                                            onRetry = { retrySend(item.localId) },
+                                        )
+                                    }
+                                }
+                            }
                     }
 
-                    // v1.1.12 乐观发送: 本地临时消息挂在列表最尾部 —— 转圈 = 发送中, 红色感叹号 = 失败可重发
-                    items(outgoing, key = { it.localId }) { item ->
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            PmMessageRow(
-                                msg = item.message,
-                                // 本地临时消息一定是自己发的
-                                mine = true,
-                                peerName = peer?.displayName.orEmpty().ifBlank { "对方" },
-                                peerAvatar = peer?.avatar.orEmpty(),
-                                myName = UserStore.current?.displayName.orEmpty(),
-                                myAvatar = UserStore.current?.avatarUrl.orEmpty(),
-                                onLongPress = {},
-                                onAvatarTap = {},
-                                onImageTap = { url -> previewImage = url },
-                                highlight = false,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(end = 14.dp),
-                                horizontalArrangement = Arrangement.End,
-                            ) {
-                                SendStatusIndicator(
-                                    state = item.state,
-                                    onRetry = { retrySend(item.localId) },
-                                )
-                            }
-                        }
-                    }
+
                 }
 
                 // 右下角「回到最新消息」
@@ -1258,11 +1261,10 @@ private fun PmMessageRow(
                 // v1.1.12: 气泡里的链接要能点开 (内置浏览器), 又不能抢掉长按菜单 —— 手势自己做:
                 // onTextLayout 拿到排版结果, 把点击坐标换成字符偏移, 再查 linkify 打好的 URL 注解
                 var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-                val shown = remember(msg.id, msg.content, mine) {
-                    linkify(
-                        content = msg.content,
-                        linkColor = if (mine) Color(0xFFFFF3C4) else MiuixTheme.colorScheme.primary,
-                    )
+                // MiuixTheme.colorScheme 是 @Composable 属性, 不能放进 remember 的 lambda, 先取出来
+                val linkColor = if (mine) Color(0xFFFFF3C4) else MiuixTheme.colorScheme.primary
+                val shown = remember(msg.id, msg.content, linkColor) {
+                    linkify(content = msg.content, linkColor = linkColor)
                 }
                 Text(
                     text = shown,

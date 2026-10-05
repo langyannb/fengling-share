@@ -1510,6 +1510,39 @@ private fun ChatView(
         }
     }
 
+    /** 真正把一条本地临时消息发给服务端: 成功 = 移除本地占位 + 立刻拉真实消息, 失败 = 标成失败态 */
+    suspend fun performSend(localId: String) {
+        val item = outgoing.firstOrNull { it.localId == localId } ?: return
+        ApiClient.socialSend(
+            group.id,
+            item.text,
+            item.mentionIds,
+            atAll = item.atAll,
+            quoteId = item.quoteId,
+        )
+            .onSuccess {
+                outgoing = outgoing.filterNot { it.localId == localId }
+                val after = messages.maxOfOrNull { it.id } ?: 0
+                ApiClient.socialMessages(group.id, afterId = after)
+                    .onSuccess { new -> mergeNew(new, forceScroll = true) }
+            }
+            .onFailure {
+                // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
+                outgoing = outgoing.map {
+                    if (it.localId == localId) it.copy(state = SendState.Failed) else it
+                }
+            }
+    }
+
+    /** 点失败消息上的红色感叹号: 重发同一条 (第二条又失败就再次回到失败态) */
+    fun retrySend(localId: String) {
+        if (outgoing.none { it.localId == localId }) return
+        outgoing = outgoing.map {
+            if (it.localId == localId) it.copy(state = SendState.Sending) else it
+        }
+        scope.launch { performSend(localId) }
+    }
+
     /**
      * v1.1.12 乐观发送: 发送按钮不再被「发送中」门控 (只看内容非空, 连点两条也能各自发出去)。
      * 点下去立刻清空输入框 + 把本地临时消息挂到列表尾部 (转圈「发送中」), 服务端返回后再换成真实消息。
@@ -1560,39 +1593,6 @@ private fun ChatView(
                     .format(java.util.Date()),
             ),
         )
-        scope.launch { performSend(localId) }
-    }
-
-    /** 真正把一条本地临时消息发给服务端: 成功 = 移除本地占位 + 立刻拉真实消息, 失败 = 标成失败态 */
-    suspend fun performSend(localId: String) {
-        val item = outgoing.firstOrNull { it.localId == localId } ?: return
-        ApiClient.socialSend(
-            group.id,
-            item.text,
-            item.mentionIds,
-            atAll = item.atAll,
-            quoteId = item.quoteId,
-        )
-            .onSuccess {
-                outgoing = outgoing.filterNot { it.localId == localId }
-                val after = messages.maxOfOrNull { it.id } ?: 0
-                ApiClient.socialMessages(group.id, afterId = after)
-                    .onSuccess { new -> mergeNew(new, forceScroll = true) }
-            }
-            .onFailure {
-                // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
-                outgoing = outgoing.map {
-                    if (it.localId == localId) it.copy(state = SendState.Failed) else it
-                }
-            }
-    }
-
-    /** 点失败消息上的红色感叹号: 重发同一条 (第二条又失败就再次回到失败态) */
-    fun retrySend(localId: String) {
-        if (outgoing.none { it.localId == localId }) return
-        outgoing = outgoing.map {
-            if (it.localId == localId) it.copy(state = SendState.Sending) else it
-        }
         scope.launch { performSend(localId) }
     }
 
