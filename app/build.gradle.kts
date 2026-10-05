@@ -95,6 +95,8 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.datasource)
     implementation(libs.androidx.media3.ui)
+    // 阶段3 (1.1.14): 上传前压缩用 Transformer + 内置 mp4 封装器
+    implementation(libs.androidx.media3.transformer)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

@@ -103,6 +103,8 @@ import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VideoProbe
+import com.fengling.share.data.compressVideoForUpload
+import com.fengling.share.data.shouldCompressVideo
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
@@ -447,18 +449,89 @@ fun PmChatScreen(
      */
     suspend fun performSendVideo(localId: String) {
         val item = outgoing.firstOrNull { it.localId == localId } ?: return
-        val uri = item.videoUri ?: return
+        val originalUri = item.videoUri ?: return
         var url = item.uploadedUrl
+        // ===== 阶段3 (1.1.14): 大视频先压再传 (与群聊同一套逻辑) =====
+        // 压缩只做一次 (compressTried), 压不动 (null) 就原样直传: 发送链路不能因为压不了就断。
+        var uri = originalUri
+        var uploadW = item.videoW
+        var uploadH = item.videoH
+        var uploadDuration = item.videoDuration
+        var uploadSize = item.videoSize
+        var uploadName = item.fileName
+        var uploadMime = item.mime
+        var compressedFile: java.io.File? = null
+        if (url.isBlank() && !item.compressTried &&
+            shouldCompressVideo(item.videoSize, item.videoW, item.videoH, item.videoDuration)
+        ) {
+            outgoing = outgoing.map {
+                if (it.localId == localId) it.copy(compressPct = 0) else it
+            }
+            val packed = compressVideoForUpload(
+                context = context,
+                uri = originalUri,
+                sourceShortSide = minOf(item.videoW, item.videoH),
+                isCancelled = {
+                    outgoing.firstOrNull { it.localId == localId }?.cancelRequested == true
+                },
+            ) { pct ->
+                scope.launch {
+                    outgoing = outgoing.map {
+                        if (it.localId == localId) it.copy(compressPct = pct) else it
+                    }
+                }
+            }
+            if (packed != null) {
+                val info = withContext(Dispatchers.IO) { VideoProbe.probe(context, Uri.fromFile(packed)) }
+                uri = Uri.fromFile(packed)
+                uploadW = info.width
+                uploadH = info.height
+                uploadDuration = info.durationSec
+                uploadSize = packed.length()
+                uploadName = "chat.mp4"
+                uploadMime = "video/mp4"
+                compressedFile = packed
+            }
+            outgoing = outgoing.map {
+                if (it.localId == localId) {
+                    it.copy(
+                        videoUri = uri,
+                        videoW = uploadW,
+                        videoH = uploadH,
+                        videoDuration = uploadDuration,
+                        videoSize = uploadSize,
+                        fileName = uploadName,
+                        mime = uploadMime,
+                        compressPct = -1,
+                        compressTried = true,
+                    )
+                } else {
+                    it
+                }
+            }
+            if (outgoing.firstOrNull { it.localId == localId }?.cancelRequested == true) {
+                compressedFile?.let { tmp -> runCatching { tmp.delete() } }
+                outgoing = outgoing.map {
+                    if (it.localId == localId) {
+                        it.copy(state = SendState.Failed, cancelRequested = false, progress = 0)
+                    } else {
+                        it
+                    }
+                }
+                onToast("已取消发送")
+                return
+            }
+        }
         if (url.isBlank()) {
             val res = ApiClient.uploadChatVideo(
                 context = context,
                 uri = uri,
-                videoW = item.videoW,
-                videoH = item.videoH,
-                videoDuration = item.videoDuration,
-                videoSize = item.videoSize,
-                filename = item.fileName,
-                mime = item.mime,
+                videoW = uploadW,
+                videoH = uploadH,
+                videoDuration = uploadDuration,
+                videoSize = uploadSize,
+                filename = uploadName,
+                mime = uploadMime,
                 isCancelled = {
                     outgoing.firstOrNull { it.localId == localId }?.cancelRequested == true
                 },
@@ -488,16 +561,18 @@ fun PmChatScreen(
             outgoing = outgoing.map {
                 if (it.localId == localId) it.copy(uploadedUrl = url, progress = 100) else it
             }
+            // 压缩临时文件上传完就没用了 (重发走 uploadedUrl, 不再读本地文件), 立刻删掉
+            compressedFile?.let { tmp -> runCatching { tmp.delete() } }
         }
         ApiClient.pmSend(
             toUser = if (convId <= 0) peerUserId else 0,
             convId = convId,
             content = item.text,
             video = url,
-            videoW = item.videoW,
-            videoH = item.videoH,
-            videoDuration = item.videoDuration,
-            videoSize = item.videoSize,
+            videoW = uploadW,
+            videoH = uploadH,
+            videoDuration = uploadDuration,
+            videoSize = uploadSize,
         )
             .onSuccess { res ->
                 if (res.convId > 0) convId = res.convId
@@ -1023,6 +1098,8 @@ fun PmChatScreen(
                                                 cancellable = item.state == SendState.Sending,
                                                 // 100% 之后还有「服务端落盘」一段, 文案切成「服务器处理中…」
                                                 serverProcessing = item.progress >= 100 && item.state == SendState.Sending,
+                                                // 阶段3: 压缩中显示「压缩中 x%」, 压完自动接回上传进度
+                                                compressPct = item.compressPct,
                                                 onCancel = { cancelVideoSend(item.localId) },
                                                 onLongPress = {},
                                             )
@@ -1806,6 +1883,10 @@ private data class OutgoingPmMsg(
     val thumbnail: Bitmap? = null,
     val fileName: String = "chat.mp4",
     val mime: String = "video/mp4",
+    /** 阶段3 (1.1.14) 上传前压缩进度 0~100; -1 = 这条没在压缩 (气泡显示上传进度) */
+    val compressPct: Int = -1,
+    /** 压缩已经试过 (成功或失败都算): 重发时不再压一遍, 压不动时也不再反复尝试 */
+    val compressTried: Boolean = false,
 )
 
 /** 本地临时消息的序号 (负 id 用), 进程内自增就够 */

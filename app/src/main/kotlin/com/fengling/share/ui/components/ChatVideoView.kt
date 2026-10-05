@@ -202,9 +202,15 @@ fun VideoSendingBubble(
      * 现在这一段明确写成「服务器处理中…」, 让这段等待有解释。
      */
     serverProcessing: Boolean = false,
+    /**
+     * 阶段3 (1.1.14) 上传前压缩的进度 0~100; -1 = 这条没在压缩。
+     * 大于等于 0 时进度环和文案都跟着压缩走 (「压缩中 x%」), 压完自动接回上传进度。
+     */
+    compressPct: Int = -1,
 ) {
     val (w, h) = videoBubbleSize(videoW, videoH)
-    val pct = progress.coerceIn(0, 100)
+    val compressing = compressPct >= 0
+    val pct = (if (compressing) compressPct else progress).coerceIn(0, 100)
     Box(
         modifier = modifier
             .size(width = w, height = h)
@@ -253,9 +259,11 @@ fun VideoSendingBubble(
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                // 100% 之后还剩「服务端落盘 + 写库」这一段, 单独给个文案, 别让它看起来是卡住
+                // 阶段顺序: 压缩中 x% → 上传中 x% → 服务器处理中… (100% 之后还有落盘 + 写库)
                 text = when {
+                    compressing -> "压缩中 " + pct + "%"
                     serverProcessing -> "服务器处理中…"
+                    cancellable && pct > 0 -> "上传中 " + pct + "%"
                     cancellable -> "点击取消"
                     else -> "发送中"
                 },
