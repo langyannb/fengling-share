@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -15,11 +16,13 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.kyant.backdrop.backdrops.layerBackdrop as kyantLayerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop as kyantRememberLayerBackdrop
 
@@ -31,12 +34,28 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop as kyantRememberLayerB
  *   GlassCard(backdrop = backdrop) { 玻璃卡片 }
  */
 
-/** 创建液态玻璃 backdrop (页面级, 调用一次) */
+/**
+ * 创建液态玻璃 backdrop (miuix-blur, 页面级, 调用一次)
+ *
+ * 和 [rememberGlassBackdrop2] 的区别: 这个走 miuix 的 `Backdrop`/`LayerBackdrop`,
+ * 参考项目的 `FloatingBottomBar` 只认这套类型; kyant 那套给 [com.fengling.share.ui.social.SocialScreen]
+ * 的分段控件用, 两者不能互换。
+ *
+ * @param enabled false 时不挂捕获层 (用户关掉模糊/设备不支持), backdrop 仍然返回, 但采到的是空内容
+ * @param surfaceColor 捕获时先铺的不透明底色 —— 不铺的话纯透明区域模糊出来是黑的
+ */
 @Composable
-fun rememberGlassBackdrop(): Pair<Backdrop, Modifier> {
+fun rememberGlassBackdrop(
+    enabled: Boolean = true,
+    surfaceColor: Color = MiuixTheme.colorScheme.surface,
+): Pair<LayerBackdrop, Modifier> {
     val graphicsLayer = rememberGraphicsLayer()
-    val backdrop = rememberLayerBackdrop(graphicsLayer) { }
-    val captureModifier = Modifier.layerBackdrop(backdrop)
+    val state = rememberUpdatedState(surfaceColor)
+    val backdrop = rememberLayerBackdrop(graphicsLayer) {
+        drawRect(state.value)
+        drawContent()
+    }
+    val captureModifier = if (enabled) Modifier.layerBackdrop(backdrop) else Modifier
     return backdrop to captureModifier
 }
 

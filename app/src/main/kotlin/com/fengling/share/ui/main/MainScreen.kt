@@ -2,9 +2,12 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -15,7 +18,6 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -50,7 +53,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -76,6 +81,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
@@ -83,10 +89,12 @@ import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PendingNav
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
+import com.fengling.share.ui.theme.isAppInDarkTheme
 import com.fengling.share.utils.NotifySound
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
@@ -100,8 +108,16 @@ import android.widget.Toast
 import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
-import com.fengling.share.ui.components.navigation.LiquidBottomBar
+import com.fengling.share.ui.components.navigation.MainBottomBar
+import com.fengling.share.ui.components.rememberGlassBackdrop
 import com.fengling.share.ui.components.rememberGlassBackdrop2
+import com.fengling.share.ui.components.rememberBlurBackdrop
+import com.fengling.share.ui.theme.LocalEnableBlur
+import com.fengling.share.ui.theme.LocalFloatingBottomBar
+import com.fengling.share.ui.theme.LocalGlassBottomBar
+import com.fengling.share.ui.theme.LocalPredictiveBack
+import top.yukonga.miuix.kmp.basic.NavigationItem
+import top.yukonga.miuix.kmp.basic.Scaffold
 import com.fengling.share.ui.main.explore.ExploreScreen
 import com.fengling.share.ui.main.home.HomeScreen
 import com.fengling.share.ui.main.my.AccountScreen
@@ -116,6 +132,7 @@ import com.fengling.share.ui.social.GroupInfoScreen
 import com.fengling.share.ui.social.GroupMemberListScreen
 import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -182,6 +199,42 @@ object Routes {
  */
 
 /**
+ * tab 内「返回 → 收回首页」的手势进度。
+ *
+ * 和 [com.fengling.share.ui.components.rememberPredictiveBackProgress] 的差别只有一点:
+ * 那个会顺手写 `BackReveal.progress`, 让 NavHost 把「上一级快照」铺在下面 —— tab 切换没有
+ * 上一级页面, 铺出来反而是一条假的半屏。所以这里单独一份, 只产出进度。
+ *
+ * 行为: 手势进行中进度 0→1 跟手 (画面轻微缩小); 松手 < 50% 系统取消 → 弹回 0;
+ * 松手 ≥ 50% → 补到 1 再执行 [onBack] (把 pager 滚回首页)。Android 13 以下或未开
+ * 系统可预测式返回的设备不会回传进度, 回调立刻完成, 行为等价于普通 BackHandler。
+ */
+@Composable
+private fun rememberTabBackProgress(
+    enabled: Boolean,
+    onBack: () -> Unit,
+): State<Float> {
+    val progress = remember { Animatable(0f) }
+    PredictiveBackHandler(enabled = enabled) { events ->
+        try {
+            events.collect { event ->
+                progress.snapTo(event.progress.coerceIn(0f, 1f))
+            }
+        } catch (e: CancellationException) {
+            progress.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
+            throw e
+        }
+        progress.animateTo(1f, tween(durationMillis = 200, easing = FastOutSlowInEasing))
+        onBack()
+        // 正常路径下本 composable 会把进度复位; pager 滚回首页需要一点时间,
+        // 复位放在动画之后, 免得缩小的画面在滚动途中「跳」回原尺寸。
+        kotlinx.coroutines.delay(400L)
+        progress.snapTo(0f)
+    }
+    return remember(progress) { derivedStateOf { progress.value } }
+}
+
+/**
  * 契约 B: NavHost 每个目的地统一补齐四段转场 (进入 / 退出 / 返回进入 / 返回退出)。
  *
  * 进入 = 右侧滑入 (与页面切换方向一致);
@@ -234,7 +287,19 @@ fun MainScreen(
     }
 
     // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊) — OShin 同款方案
+    // 只给 SocialScreen 的「群组/私聊」分段控件用。
     val (backdrop, captureModifier) = rememberGlassBackdrop2()
+
+    // 底栏改用参考项目的 FloatingBottomBar, 它只认 miuix-blur 的 Backdrop ——
+    // 两套 backdrop 类型不兼容, 所以这里平行建第二份 (同一块内容被两个层各录一次, 代价可忽略)。
+    val enableBlur = LocalEnableBlur.current
+    val floatingBar = LocalFloatingBottomBar.current
+    val glassBar = LocalGlassBottomBar.current
+    // 关掉模糊时返回 null: BlurredBar 收到 null 就不挂 textureBlur, 走不透明样式 (参考项目同款判断)
+    val blurBackdrop = rememberBlurBackdrop(enableBlur)
+    // 悬浮胶囊的透镜采样源: 只有「悬浮底栏 + 玻璃质感」都开才需要捕获层
+    val glassCaptureNeeded = floatingBar && glassBar && enableBlur
+    val (barBackdrop, barCaptureModifier) = rememberGlassBackdrop(enabled = glassCaptureNeeded)
 
     val tabs = remember {
         listOf(
@@ -246,6 +311,9 @@ fun MainScreen(
     }
 
     val pagerState = rememberPagerState(pageCount = { tabs.size })
+
+    // 底栏数据 (miuix 的 NavigationItem), tab 定义在 tabs 里, 这里只做类型转换
+    val navItems = remember(tabs) { tabs.map { NavigationItem(label = it.label, icon = it.icon) } }
 
     // 契约 A(强化): 「群组 / 私聊」分段的选中值提升到这里 (MainScreen 常驻组合) 持有。
     // 原来放在 SocialScreen 内部 —— 导航返回能靠 rememberSaveable 保住, 但切底部 Tab 时
@@ -416,7 +484,49 @@ fun MainScreen(
         popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
     ) {
         appScreen(Routes.MAIN) {
-            // OShin 式玻璃底栏: 内容捕获 + 底栏模糊覆盖 (kyant/backdrop, 不用 Scaffold bottomBar 槽位)
+            // tab 内的预测性返回 (参考项目用 NavigationBackHandler 把「非首个 tab 的返回」
+            // 收回到第一个 tab; 这里用本 App 统一的手势体系做同一件事 —— 手势跟手位移,
+            // 松手过半就把 pager 收回「首页」)。
+            // enabled 里同时判当前路由: 一旦栈里压上详情页, 就把手势整个交回 NavHost,
+            // 否则本回调注册得晚会把 NavHost 自带的预测性返回顶掉。
+            val currentEntry by navController.currentBackStackEntryAsState()
+            val onMainRoute = currentEntry?.destination?.route == Routes.MAIN
+            val tabBackProgress = rememberTabBackProgress(
+                enabled = LocalPredictiveBack.current && onMainRoute && pagerState.currentPage != 0,
+            ) {
+                scope.launch { pagerState.animateScrollToPage(0) }
+            }
+            // 底栏摆放照抄参考项目: 用 Scaffold 的 bottomBar 槽位, 不再把底栏叠在内容 Box 上。
+            // containerColor 透明 —— 底下那层 appGradientBackground 要能透出来。
+            // contentWindowInsets 归零 —— 内容区本来就是 edge-to-edge 全屏, 各页面自己处理状态栏,
+            // 交给 Scaffold 补 systemBars 只会多出一份顶部内边距。
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                containerColor = Color.Transparent,
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                bottomBar = {
+                    Box(Modifier.fillMaxWidth()) {
+                        // 底栏: 照抄参考项目的 BottomBarMiuix ——
+                        // 关悬浮 → BlurredBar + NavigationBar (原生);
+                        // 开悬浮 → FloatingBottomBar (液体玻璃胶囊, 可拖动切 tab)
+                        MainBottomBar(
+                            items = navItems,
+                            selectedIndex = { pagerState.currentPage },
+                            onSelect = { index ->
+                                if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
+                                    // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)
+                                    go(Routes.ACCOUNT)
+                                } else {
+                                    scope.launch { pagerState.animateScrollToPage(index) }
+                                }
+                            },
+                            blurBackdrop = blurBackdrop,
+                            backdrop = barBackdrop,
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
+                    }
+                },
+            ) { _ ->
             Box(
                 Modifier
                     .fillMaxSize()
@@ -424,11 +534,24 @@ fun MainScreen(
             ) {
                 // 内容区: 全屏 (无底部 padding) —— 列表必须能滚动到悬浮胶囊下方,
                 // 捕获层才能拿到真实内容做模糊; 底部留白由各页面 LazyColumn
-                // contentPadding bottom 自行处理 (OShin 同款布局)
+                // contentPadding bottom 自行处理 (OShin 同款布局)。
+                // 注意: 这里故意不消费 Scaffold 的 innerPadding, 否则会和页面自带的
+                // 100/110.dp 底部留白叠成双份。
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .then(captureModifier),
+                        .then(captureModifier)
+                        .then(barCaptureModifier)
+                        // 不做横向位移 (slideFraction = 0): 收回 tab 的真实运动是 pager
+                        // 自己横向滚回「首页」, 再叠一层右移就是两个方向重叠的运动, 看着会抖。
+                        // 跟手只做轻微缩小 —— 手指拖动时画面「被按住」, 松手过半就滚回首页,
+                        // 没过半就弹回原位, 与站内其它页面的跟手观感是同一套。
+                        .predictiveBackTransform(
+                            progress = tabBackProgress,
+                            slideFraction = 0f,
+                            scaleDown = 0.04f,
+                            fadeOut = 0f,
+                        ),
                 ) {
                     // HorizontalPager: tab 左右滑动切换
                     HorizontalPager(
@@ -492,22 +615,7 @@ fun MainScreen(
                         }
                     }
                 }
-
-                // OShin 完整版液态玻璃底栏 (拖动切 tab + lens + 高光 + 图标缩放)
-                LiquidBottomBar(
-                    tabs = tabs.map { it.label to it.icon },
-                    pagerState = pagerState,
-                    onTabSelected = { index ->
-                        if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
-                            // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)
-                            go(Routes.ACCOUNT)
-                        } else {
-                            scope.launch { pagerState.animateScrollToPage(index) }
-                        }
-                    },
-                    backdrop = backdrop,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
+            }
             }
         }
 
@@ -747,7 +855,7 @@ private fun NoticeDialog(
 ) {
     val content = info?.content ?: ""
     val context = LocalContext.current
-    val isDark = isSystemInDarkTheme()
+    val isDark = isAppInDarkTheme()
     val scheme = MiuixTheme.colorScheme
 
     // 不做任何入场动画: Dialog 遮罩一出现, 卡片就是最终状态。

@@ -8,7 +8,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,6 +68,7 @@ import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.appGradientBackground
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.pressScaleEffect
+import com.fengling.share.ui.theme.isAppInDarkTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -196,7 +196,7 @@ fun HomeScreen(
         loadApps(effectiveCategoryId, query)
     }
 
-    val isDark = isSystemInDarkTheme()
+    val isDark = isAppInDarkTheme()
     Scaffold(
         topBar = {
             // 极简顶部占位: 只保留状态栏高度 + 6dp 间距

@@ -10,7 +10,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -58,6 +57,8 @@ import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
+import com.fengling.share.ui.theme.isAppInDarkTheme
+
 /**
  * 液体玻璃分段控件 (v1.1.5 · 真玻璃版)
  *
@@ -89,7 +90,7 @@ fun LiquidSegmentedBar(
 ) {
     if (tabs.isEmpty()) return
 
-    val dark = isSystemInDarkTheme()
+    val dark = isAppInDarkTheme()
     val scheme = MiuixTheme.colorScheme
     val trackShape = RoundedCornerShape(percent = 50)
     val thumbShape = RoundedCornerShape(percent = 50)

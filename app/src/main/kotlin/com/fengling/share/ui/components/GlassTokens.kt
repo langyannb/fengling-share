@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +32,8 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
+
+import com.fengling.share.ui.theme.isAppInDarkTheme
 
 /**
  * 全局观感 token (v1.1.5 UI 精修)
@@ -74,22 +75,22 @@ val SegmentBarHeight: Dp = 44.dp
 
 /** 玻璃描边 (细高光) */
 @Composable
-fun glassStroke(dark: Boolean = isSystemInDarkTheme()): Color =
+fun glassStroke(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.62f)
 
 /** 玻璃底色 (固定层用) */
 @Composable
-fun glassFill(dark: Boolean = isSystemInDarkTheme()): Color =
+fun glassFill(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.46f)
 
 /** 列表卡片玻璃底 (半透明, 不模糊) */
 @Composable
-fun cardGlassFill(dark: Boolean = isSystemInDarkTheme()): Color =
+fun cardGlassFill(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.66f)
 
 /** 列表卡片描边 */
 @Composable
-fun cardStroke(dark: Boolean = isSystemInDarkTheme()): Color =
+fun cardStroke(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.09f) else Color.White.copy(alpha = 0.55f)
 
 /** 半透明玻璃卡片修饰符 (列表 item 专用: 只有底色 + 描边, 不逐项模糊) */
@@ -197,7 +198,7 @@ fun Modifier.pressScaleEffect(
  */
 @Composable
 fun Modifier.appGradientBackground(glow: Color = MiuixTheme.colorScheme.primary): Modifier {
-    val dark = isSystemInDarkTheme()
+    val dark = isAppInDarkTheme()
     val base = MiuixTheme.colorScheme.background
     val a1 = if (dark) 0.20f else 0.11f
     val a2 = if (dark) 0.14f else 0.07f
@@ -234,7 +235,7 @@ fun AppGradientBackground(
     modifier: Modifier = Modifier,
     glow: Color = MiuixTheme.colorScheme.primary,
 ) {
-    val dark = isSystemInDarkTheme()
+    val dark = isAppInDarkTheme()
     val base = MiuixTheme.colorScheme.background
     val a1 = if (dark) 0.20f else 0.11f
     val a2 = if (dark) 0.14f else 0.07f

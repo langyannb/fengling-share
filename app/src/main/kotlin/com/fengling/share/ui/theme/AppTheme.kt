@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
 import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.theme.colorScheme.PaletteStyle
@@ -83,40 +84,140 @@ fun AppTheme(
         )
     }
 
-    // Miuix Colors (映射自 MD3 色板, 让 Miuix 组件同步换肤; Colors 参数是 Color)
+    // Miuix Colors: 53 个槽位全部映射自 MD3 色板。
+    // 之前只映射 8 个槽位 —— 其余 45 个会退回 miuix 的「浅色」默认值
+    // (onSurfaceContainerVariant=0xFF737373 / onSurfaceVariantSummary=0x80FFFFFF /
+    //  outline=0xFF404040 / dividerLine=0xFF393939 …), 深色背景上对比度严重不足,
+    // 这就是「深色模式下关于 / 群组 / 首页有些字看不清」的根因。
+    // 现在每个「文字 / 背景 / 描边」槽都对齐到 MD3 的语义槽, 对比度由 MD3 tonal 算法保证。
     val miuixColors: Colors = remember(darkTheme, colorScheme) {
-        val primary = colorScheme.primary
-        val onPrimary = colorScheme.onPrimary
-        val bg = colorScheme.background
-        val onBg = colorScheme.onBackground
-        val onBgVariant = colorScheme.onSurfaceVariant
-        val surface = colorScheme.surface
-        val surfaceVariant = colorScheme.surfaceVariant
+        val c = colorScheme
+        val disabledFill = c.onSurface.copy(alpha = 0.12f)
+        val disabledText = c.onSurface.copy(alpha = 0.38f)
+        val dimming = Color.Black.copy(alpha = if (darkTheme) 0.6f else 0.3f)
+        val secondaryFill = c.secondaryContainer
+        val onSecondaryFill = c.onSecondaryContainer
+        val tertiaryFill = c.tertiaryContainer
+        val onTertiaryFill = c.onTertiaryContainer
+        val tertiaryVariantFill = c.surfaceContainerHigh
+        val secondaryVariantFill = c.surfaceContainerHigh
+        val onSecondaryVariantFill = c.onSurfaceVariant
+        val keyPoint = c.primary.copy(alpha = 0.3f)
+        val sliderBg = c.onSurface.copy(alpha = 0.08f)
         if (darkTheme) {
             darkColorScheme(
-                primary = primary,
-                onPrimary = onPrimary,
-                background = bg,
-                onBackground = onBg,
-                onBackgroundVariant = onBgVariant,
-                surface = surface,
-                onSurface = onBg,
-                surfaceVariant = surfaceVariant,
+                primary = c.primary,
+                onPrimary = c.onPrimary,
+                primaryVariant = c.primary,
+                onPrimaryVariant = c.onPrimary.copy(alpha = 0.7f),
+                error = c.error,
+                onError = c.onError,
+                errorContainer = c.errorContainer,
+                onErrorContainer = c.onErrorContainer,
+                disabledPrimary = disabledFill,
+                disabledOnPrimary = disabledText,
+                disabledPrimaryButton = disabledFill,
+                disabledOnPrimaryButton = disabledText,
+                disabledPrimarySlider = disabledFill,
+                primaryContainer = c.primaryContainer,
+                onPrimaryContainer = c.onPrimaryContainer,
+                secondary = c.secondary,
+                onSecondary = c.onSecondary,
+                secondaryVariant = secondaryVariantFill,
+                onSecondaryVariant = onSecondaryVariantFill,
+                disabledSecondary = disabledFill,
+                disabledOnSecondary = disabledText,
+                disabledSecondaryVariant = disabledFill,
+                disabledOnSecondaryVariant = disabledText,
+                secondaryContainer = secondaryFill,
+                onSecondaryContainer = onSecondaryFill,
+                secondaryContainerVariant = secondaryVariantFill,
+                onSecondaryContainerVariant = c.onSurfaceVariant,
+                tertiaryContainer = tertiaryFill,
+                onTertiaryContainer = onTertiaryFill,
+                tertiaryContainerVariant = tertiaryVariantFill,
+                background = c.background,
+                onBackground = c.onBackground,
+                onBackgroundVariant = c.onSurfaceVariant,
+                surface = c.surface,
+                onSurface = c.onSurface,
+                surfaceVariant = c.surfaceVariant,
+                onSurfaceSecondary = c.onSurfaceVariant,
+                onSurfaceVariantSummary = c.onSurfaceVariant,
+                onSurfaceVariantActions = c.onSurfaceVariant,
+                disabledOnSurface = disabledText,
+                surfaceContainer = c.surfaceContainer,
+                onSurfaceContainer = c.onSurface,
+                onSurfaceContainerVariant = c.onSurfaceVariant,
+                surfaceContainerHigh = c.surfaceContainerHigh,
+                onSurfaceContainerHigh = c.onSurface,
+                surfaceContainerHighest = c.surfaceContainerHighest,
+                onSurfaceContainerHighest = c.onSurface,
+                outline = c.outline,
+                dividerLine = c.outlineVariant,
+                windowDimming = dimming,
+                sliderKeyPoint = keyPoint,
+                sliderKeyPointForeground = c.primary,
+                sliderBackground = sliderBg,
             )
         } else {
             lightColorScheme(
-                primary = primary,
-                onPrimary = onPrimary,
-                background = bg,
-                onBackground = onBg,
-                onBackgroundVariant = onBgVariant,
-                surface = surface,
-                onSurface = onBg,
-                surfaceVariant = surfaceVariant,
+                primary = c.primary,
+                onPrimary = c.onPrimary,
+                primaryVariant = c.primary,
+                onPrimaryVariant = c.onPrimary.copy(alpha = 0.7f),
+                error = c.error,
+                onError = c.onError,
+                errorContainer = c.errorContainer,
+                onErrorContainer = c.onErrorContainer,
+                disabledPrimary = disabledFill,
+                disabledOnPrimary = disabledText,
+                disabledPrimaryButton = disabledFill,
+                disabledOnPrimaryButton = disabledText,
+                disabledPrimarySlider = disabledFill,
+                primaryContainer = c.primaryContainer,
+                onPrimaryContainer = c.onPrimaryContainer,
+                secondary = c.secondary,
+                onSecondary = c.onSecondary,
+                secondaryVariant = secondaryVariantFill,
+                onSecondaryVariant = onSecondaryVariantFill,
+                disabledSecondary = disabledFill,
+                disabledOnSecondary = disabledText,
+                disabledSecondaryVariant = disabledFill,
+                disabledOnSecondaryVariant = disabledText,
+                secondaryContainer = secondaryFill,
+                onSecondaryContainer = onSecondaryFill,
+                secondaryContainerVariant = secondaryVariantFill,
+                onSecondaryContainerVariant = c.onSurfaceVariant,
+                tertiaryContainer = tertiaryFill,
+                onTertiaryContainer = onTertiaryFill,
+                tertiaryContainerVariant = tertiaryVariantFill,
+                background = c.background,
+                onBackground = c.onBackground,
+                onBackgroundVariant = c.onSurfaceVariant,
+                surface = c.surface,
+                onSurface = c.onSurface,
+                surfaceVariant = c.surfaceVariant,
+                onSurfaceSecondary = c.onSurfaceVariant,
+                onSurfaceVariantSummary = c.onSurfaceVariant,
+                onSurfaceVariantActions = c.onSurfaceVariant,
+                disabledOnSurface = disabledText,
+                surfaceContainer = c.surfaceContainer,
+                onSurfaceContainer = c.onSurface,
+                onSurfaceContainerVariant = c.onSurfaceVariant,
+                surfaceContainerHigh = c.surfaceContainerHigh,
+                onSurfaceContainerHigh = c.onSurface,
+                surfaceContainerHighest = c.surfaceContainerHighest,
+                onSurfaceContainerHighest = c.onSurface,
+                outline = c.outline,
+                dividerLine = c.outlineVariant,
+                windowDimming = dimming,
+                sliderKeyPoint = keyPoint,
+                sliderKeyPointForeground = c.primary,
+                sliderBackground = sliderBg,
             )
         }
     }
-
     CompositionLocalProvider(
         LocalDarkTheme provides darkTheme,
         LocalEnableBlur provides enableBlur,

@@ -23,6 +23,8 @@ class DampedDragAnimation(
     val visibilityThreshold: Float,
     val initialScale: Float,
     val pressedScale: Float,
+    /** 按下点是否允许起拖 (默认处处可拖)。悬浮底栏用它把拖动限制在滑块区域。 */
+    val canDrag: (Offset) -> Boolean = { true },
     val onDragStarted: DampedDragAnimation.(position: Offset) -> Unit,
     val onDragStopped: DampedDragAnimation.() -> Unit,
     val onDrag: DampedDragAnimation.(size: IntSize, dragAmount: Offset) -> Unit,
@@ -77,7 +79,15 @@ class DampedDragAnimation(
                 release()
             }
         ) { change, dragAmount ->
-            onDrag(size, dragAmount)
+            val position = change.position
+            val previousPosition = change.previousPosition
+
+            val isInside = canDrag(position)
+            val wasInside = canDrag(previousPosition)
+
+            if (isInside && wasInside) {
+                onDrag(size, dragAmount)
+            }
         }
     }
 

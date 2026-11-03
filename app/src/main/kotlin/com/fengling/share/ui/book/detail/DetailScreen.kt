@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,6 +72,7 @@ import com.fengling.share.ui.components.ScreenshotSaveDialog
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.main.home.formatCount
+import com.fengling.share.ui.theme.isAppInDarkTheme
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -770,7 +770,7 @@ private fun ScreenshotPreview(
                     .fillMaxSize()
                     .clip(RoundedCornerShape(20.dp))
                     .background(
-                        if (isSystemInDarkTheme()) Color.Black.copy(alpha = 0.75f)
+                        if (isAppInDarkTheme()) Color.Black.copy(alpha = 0.75f)
                         else Color(0xFF1A1A1E).copy(alpha = 0.88f)
                     ),
             )
