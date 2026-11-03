@@ -129,17 +129,23 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
                               var cs=b?getComputedStyle(b):null;
                               var rb=b?b.getBoundingClientRect():null;
                               var ra=app?app.getBoundingClientRect():null;
+                              var rde=de?de.getBoundingClientRect():null;
                               return JSON.stringify({
                                 tag: tag,
                                 href: (location&&location.href)||'',
                                 vh: window.innerHeight, vw: window.innerWidth,
                                 deH: de?de.offsetHeight:-1,
+                                deRectH: rde?Math.round(rde.height):-1,
+                                deScrollH: de?de.scrollHeight:-1,
                                 deCS: de?getComputedStyle(de).height:'',
                                 bodyH: b?b.offsetHeight:-1,
                                 bodyCS: cs?cs.height:'',
                                 bodyDisp: cs?cs.display:'',
                                 bodyTop: rb?Math.round(rb.top):-1,
                                 bodyW: rb?Math.round(rb.width):-1,
+                                bodyRectH: rb?Math.round(rb.height):-1,
+                                bodyScrollH: b?b.scrollHeight:-1,
+                                compat: document.compatMode,
                                 appH: app?app.offsetHeight:-1,
                                 appTop: ra?Math.round(ra.top):-1,
                                 appKids: app?app.children.length:-1,

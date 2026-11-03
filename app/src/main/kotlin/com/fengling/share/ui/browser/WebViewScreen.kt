@@ -332,15 +332,22 @@ fun WebViewScreen(
                                   var de=document.documentElement, b=document.body;
                                   if (!de || !b) return;
                                   var h=de.offsetHeight, bh=b.offsetHeight;
-                                  var hasContent=(b.innerText||'').length>0 ||
-                                                (document.getElementById('app')||{}).childElementCount>0;
+                                  var dcr=de.getBoundingClientRect(), bcr=b.getBoundingClientRect();
+                                  var textLen=(b.innerText||'').length;
+                                  var app=document.getElementById('app');
+                                  var hasContent=textLen>0 || (app&&app.childElementCount>0);
                                   console.log('[FLdom] '+tag+
                                     ' vh='+window.innerHeight+' vw='+window.innerWidth+
-                                    ' deH='+h+' deCS='+getComputedStyle(de).height+
-                                    ' bodyH='+bh+' bodyCS='+getComputedStyle(b).height+
+                                    ' deH='+h+' deRectH='+Math.round(dcr.height)+
+                                    ' deScrollH='+de.scrollHeight+
+                                    ' bodyH='+bh+' bodyRectH='+Math.round(bcr.height)+
+                                    ' bodyScrollH='+b.scrollHeight+
+                                    ' deCS='+getComputedStyle(de).height+
+                                    ' bodyCS='+getComputedStyle(b).height+
                                     ' compat='+document.compatMode+
-                                    ' hasContent='+(hasContent?'yes':'no'));
-                                  if (hasContent && (h<=0 || bh<=0)) {
+                                    ' textLen='+textLen+' hasContent='+(hasContent?'yes':'no'));
+                                  // 只在「页面确有内容」且「html 与 body 的可视高度都为 0」时接管
+                                  if (hasContent && dcr.height<=0 && bcr.height<=0) {
                                     de.style.height='100vh';
                                     b.style.height='100vh';
                                     b.style.minHeight='100vh';
