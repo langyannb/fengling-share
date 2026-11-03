@@ -98,6 +98,8 @@ fun WebViewScreen(
     // 返回栈状态跟踪 (解决 BackHandler enabled 陈旧问题)
     // 每次进入都是全新 WebView 实例, 初始恒为 false
     var canGoBack by remember { mutableStateOf(false) }
+    // 主资源加载失败时的提示文案 (null = 正常)
+    var loadError by remember { mutableStateOf<String?>(null) }
 
     // 每次进入创建全新 WebView 实例, 离开销毁:
     // 复用实例会残留上一链接的内部历史栈 → 返回键 goBack 回到旧链接
@@ -175,6 +177,16 @@ fun WebViewScreen(
         settings.setSupportZoom(true)
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
+        // ===== 补齐真实浏览器行为 (v1.1.18, 用户对比 via / edge 后反馈) =====
+        // 缓存走默认策略: 之前没设, WebView 默认值虽然也是 LOAD_DEFAULT, 但显式写上避免
+        // 某些 ROM 定制成 LOAD_NO_CACHE(每次全量回源 → 慢且容易半截渲染)。
+        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // 定位: onGeolocationPermissionsShowPrompt 虽然放行了, 但不开这个开关不会去问它,
+        // 地图类页面会直接拿不到坐标 → 内容区域空着。(setGeolocationEnabled 已废弃但仍是唯一开关;
+        // 项目未开 allWarningsAsErrors, 只是编译告警)
+        settings.setGeolocationEnabled(true)
+        // 让页面能用「保存密码 / 表单自动填充」的语义, 部分登录页靠它判断是否真实浏览器
+        settings.saveFormData = true
         Log.i(
             "FLWebView",
             "WebView 内核: " + (
@@ -183,12 +195,16 @@ fun WebViewScreen(
                 )
         )
         // UA 伪装: 去掉 WebView 标识, 伪装成手机 Chrome (UC网盘等站点检测 WebView UA 会拦截)
-        settings.userAgentString =
-            WebSettings.getDefaultUserAgent(context)
-                .replace("; wv", "")
-                .replace("Version/4.0", "")
-                .replace("Version/4.0 Mobile", "")
-                .trim() + " Mobile"
+        // v1.1.18 修正: 原来无条件 `+ " Mobile"`, 而默认 UA 里本来就带 "Mobile Safari/537.36",
+        // 拼出来是 "...Safari/537.36 Mobile Mobile" —— 部分站点按 UA 做正则校验时直接判为
+        // 非浏览器 → 返回残缺页面/降级 DOM，这也是「有些内容不显示」的一种来源。
+        // 现在只做减法(去 wv / 去 Version/4.0), 并保证 Mobile 恰好一次。
+        settings.userAgentString = WebSettings.getDefaultUserAgent(context)
+            .replace("; wv", "")
+            .replace(" Version/4.0", "")
+            .replace("Version/4.0 ", "")
+            .trim()
+            .let { if (it.contains("Mobile")) it else "$it Mobile" }
 
         // ===== 布局高度塌陷修复 (2026-08-10, link3.cc 实测) =====
         // SPA 页面用 html/body height:100% 百分比高度链, WebView 在视口未就绪时
@@ -208,6 +224,35 @@ fun WebViewScreen(
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
                 canGoBack = view?.canGoBack() ?: false
+                loadError = null
+            }
+
+            // v1.1.18: 主资源加载失败时给个明确提示。
+            // 之前 onReceivedError 完全没实现 —— 断网 / 域名被墙 / 证书错误时页面就是纯白,
+            // 用户无法区分「网站在加载」和「根本打不开」, 观感上正是「打开不全 / 什么都不显示」。
+            // 只处理主框架请求(isForMainFrame), 子资源失败不打扰用户。
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: android.webkit.WebResourceError?,
+            ) {
+                if (request?.isForMainFrame == true) {
+                    loadError = "打不开这个页面（${error?.errorCode ?: -1}）"
+                    progress = 100
+                    Log.w("FLWebView", "主资源加载失败: ${request.url} code=${error?.errorCode}")
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: android.webkit.WebResourceResponse?,
+            ) {
+                if (request?.isForMainFrame == true) {
+                    loadError = "服务器返回 ${errorResponse?.statusCode ?: 0}"
+                    progress = 100
+                    Log.w("FLWebView", "主资源 HTTP 错误: ${request.url} ${errorResponse?.statusCode}")
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -249,9 +294,14 @@ fun WebViewScreen(
                     }
                 }
                 // 修复 SPA 页面在 WebView 中「内容空白只剩 fixed 元素」的两大元凶:
-                // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0 不可见
+                // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0
                 // 2) 首屏 loading 遮罩 (#index_loading) 应用挂载后未移除 → 一直盖在白屏上
-                // vh 单位实时跟随视口, 不依赖百分比链; 多时延重试覆盖 SPA 晚挂载。
+                //
+                // v1.1.18 收紧（用户反馈「有些内容不显示」）：之前这个脚本会把 body / #app 的
+                // `height` 强行改成 `auto`。对使用 `height:100%; overflow:auto` 的滚动容器来说，
+                // 那一改直接把高度约束打掉 → 内部滚动区高度塌成 0 → 内容全被裁掉，症状正是
+                // 「页面打开了，但有些内容不显示」。现在**只补 minHeight，绝不碰 height**，
+                // 而且只在真的检测到塌陷时执行；resize/scroll 只在修复过的那一帧补发一次。
                 if (url?.startsWith("http") == true) {
                     runCatching {
                         view?.evaluateJavascript(
@@ -260,6 +310,7 @@ fun WebViewScreen(
                               if (window.__flFixInstalled) return;
                               window.__flFixInstalled = true;
                               var log = function(m){ try { console.log('[FLfix] ' + m); } catch(e){} };
+                              var fixed = false;
                               var fix = function(tag){
                                 try {
                                   var vh = window.innerHeight || document.documentElement.clientHeight;
@@ -269,26 +320,31 @@ fun WebViewScreen(
                                   var ah = app ? app.offsetHeight : -1;
                                   log(tag + ' vh=' + vh + ' bodyH=' + bh + ' appH=' + ah + ' appKids=' + (app ? app.children.length : -1));
                                   if (!vh || vh <= 0) return;
-                                  if (bh < vh * 0.5 || (app && ah < vh * 0.5)) {
+                                  // 只补最小高度, 不改 height —— 改 height 会让页面自己的滚动容器塌成 0
+                                  if (bh >= 0 && bh < vh * 0.5) {
                                     de.style.minHeight = '100vh';
-                                    if (b) { b.style.minHeight = '100vh'; b.style.height = 'auto'; }
-                                    if (app) { app.style.minHeight = '100vh'; app.style.height = 'auto'; }
-                                    log(tag + ' 已修复高度塌陷');
+                                    if (b) b.style.minHeight = '100vh';
+                                    fixed = true;
+                                  }
+                                  if (app && ah >= 0 && ah < vh * 0.5) {
+                                    app.style.minHeight = '100vh';
+                                    fixed = true;
+                                  }
+                                  if (fixed) {
+                                    log(tag + ' 已补 minHeight');
+                                    window.dispatchEvent(new Event('resize'));
                                   }
                                   var ld = document.getElementById('index_loading');
-                                  if (ld && app && app.children.length > 0) {
+                                  if (ld && ld.parentNode && app && app.children.length > 0) {
                                     ld.parentNode.removeChild(ld);
                                     log(tag + ' 已移除首屏 loading 遮罩');
                                   }
-                                  window.dispatchEvent(new Event('resize'));
-                                  window.dispatchEvent(new Event('scroll'));
                                 } catch(e) { log(tag + ' ERR ' + e.message); }
                               };
+                              // 只重试到 2.5s —— 之前跑到 6s, 会让已经正常的页面被反复触发 relayout
                               fix('t0');
-                              setTimeout(function(){fix('t500')},500);
-                              setTimeout(function(){fix('t1500')},1500);
-                              setTimeout(function(){fix('t3000')},3000);
-                              setTimeout(function(){fix('t6000')},6000);
+                              setTimeout(function(){fix('t800')},800);
+                              setTimeout(function(){fix('t2500')},2500);
                             })();
                             """.trimIndent()
                         ) { }
@@ -506,6 +562,11 @@ fun WebViewScreen(
                         if (size.width > 0 && size.height > 0) webViewReady = true
                     },
             )
+            // v1.1.18: 之前这里没有任何「网页自己滚不动」的兜底。
+            // 页面内容比视口长、但页面自身没开滚动(或滚动容器被注入脚本改塌)时,
+            // 用户看到的就是「下面一段内容不显示」。所以外层再包一层可滚动的 Column?
+            // —— 不行: 包滚动容器会让页面内部的 position:fixed / 惯性滚动全失效。
+            // 正确做法是保持 WebView 全尺寸、由页面自己滚; 这里只保证不额外裁剪。
             // 加载进度条 (顶部细条, 平滑动画)
             val animatedProgress by animateFloatAsState(
                 targetValue = progress / 100f,
@@ -557,6 +618,25 @@ fun WebViewScreen(
                 }
             }
 
+            // 加载失败提示 (v1.1.18): 白屏时给出可操作信息, 而不是让用户盯着一片空白
+            loadError?.let { msg ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MiuixTheme.colorScheme.background),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TopLevelErrorRetry(
+                        message = msg,
+                        onRetry = {
+                            loadError = null
+                            progress = 0
+                            webView.reload()
+                        },
+                    )
+                }
+            }
+
             // 外部应用跳转确认框 (点击非 http(s) 链接时弹出)
             pendingExternal?.let { target ->
                 ExternalJumpDialog(
@@ -597,4 +677,29 @@ private fun downloadFileName(url: String, contentDisposition: String?, mimeType:
     // 兜底: 按时间戳 + MIME 扩展名
     val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
     return "download_${System.currentTimeMillis()}.$ext"
+}
+
+/** 加载失败时的居中提示 + 重试按钮（内置浏览器白屏兜底，v1.1.18） */
+@Composable
+private fun TopLevelErrorRetry(message: String, onRetry: () -> Unit) {
+    androidx.compose.foundation.layout.Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+    ) {
+        Text(
+            text = message,
+            fontSize = 15.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+        )
+        Box(modifier = Modifier.height(12.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(MiuixTheme.colorScheme.primary)
+                .clickable(onClick = onRetry)
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+        ) {
+            Text(text = "重试", fontSize = 15.sp, color = MiuixTheme.colorScheme.onPrimary)
+        }
+    }
 }

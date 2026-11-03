@@ -435,7 +435,11 @@ fun MainScreen(
                         // 开悬浮 → FloatingBottomBar (液体玻璃胶囊, 可拖动切 tab)
                         MainBottomBar(
                             items = navItems,
-                            selectedIndex = { pagerState.currentPage },
+                            // 用 targetPage 而不是 currentPage:
+                            // currentPage 是「离视口中心最近的页」, 翻页动画途中会逐页跳变 →
+                            // 底栏高亮跟着闪, 配合 FloatingBottomBar 的联动就会互相抢动画。
+                            // targetPage 只在滑动/点击确定目标后才变, 点哪亮哪, 动画途中不抖。
+                            selectedIndex = { pagerState.targetPage },
                             onSelect = { index ->
                                 if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
                                     // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)

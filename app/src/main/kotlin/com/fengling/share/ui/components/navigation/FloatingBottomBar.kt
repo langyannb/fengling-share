@@ -26,7 +26,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -211,8 +210,6 @@ fun FloatingBottomBar(
         }
     }
 
-    var currentIndex by remember(selectedIndex) { mutableIntStateOf(selectedIndex()) }
-
     class DampedDragAnimationHolder {
         var instance: DampedDragAnimation? = null
     }
@@ -244,11 +241,17 @@ fun FloatingBottomBar(
             onDragStarted = {},
             onDragStopped = {
                 val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
-                currentIndex = targetIndex
                 animateToValue(targetIndex.toFloat())
                 animationScope.launch {
                     offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                 }
+                // 只有「用户拖动」这一条路径回传 onSelected。
+                // 之前这里是先 `currentIndex = targetIndex`, 再靠一个 snapshotFlow 监听 currentIndex
+                // 去回调 —— 而那个 flow 同时被外部 selectedIndex 驱动, 于是形成回环:
+                // 点「首页」→ pager 动画途经过「分类」→ selectedIndex() 变成 1 → 回写 currentIndex
+                // → onSelected(1) → animateScrollToPage(1) 抢掉去首页的动画, 最后停在「分类」。
+                // 用户报的「点首页到分类、点关于到群组」就是这条环。
+                if (targetIndex != selectedIndex()) onSelected(targetIndex)
             },
             onDrag = { _, dragAmount ->
                 if (tabWidthPx > 0) {
@@ -264,13 +267,13 @@ fun FloatingBottomBar(
         ).also { holder.instance = it }
     }
 
-    LaunchedEffect(selectedIndex) {
-        snapshotFlow { selectedIndex() }.collectLatest { currentIndex = it }
-    }
+    // 单向同步: 外部 selectedIndex（HorizontalPager 的当前页）变化 → 滑块动画跟过去。
+    // 这里**绝不**反向回调 onSelected, 否则和 pager 自己的滚动动画互相打断（见 onDragStopped 注释）。
+    // 用 key=Unit 而不是 key=selectedIndex: selectedIndex 是每次重组新建的 lambda, 当 key 会让
+    // 这个 effect 每次重组都被取消重启, snapshotFlow 还没发出第一帧就被扔掉。
     LaunchedEffect(dampedDragAnimation) {
-        snapshotFlow { currentIndex }.drop(1).collectLatest { index ->
+        snapshotFlow { selectedIndex() }.drop(1).collectLatest { index ->
             dampedDragAnimation.animateToValue(index.toFloat())
-            onSelected(index)
         }
     }
 
