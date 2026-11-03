@@ -10,7 +10,15 @@ enum class ThemeMode(val value: String, val label: String) {
     DARK("dark", "深色"),
 }
 
-/** 预置主题色板 */
+/**
+ * 预置主题色板。
+ *
+ * [seed] 只是「种子色」, 真正生效的色板由 MD3 tonal 算法从它推导
+ * (见 ui/theme/colorScheme/DynamicColorScheme.kt) —— 所以选红色不会得到纯红按钮,
+ * 而是得到一整套以红为基调、对比度达标的色板。
+ *
+ * 注意: [value] 是持久化键, **改名会让老用户的选择回落默认值**, 只允许新增。
+ */
 enum class ThemeColor(val value: String, val label: String, val seed: Long) {
     BLUE("blue", "经典蓝", 0xFF4C8DFF),
     GREEN("green", "清新绿", 0xFF00B96B),
@@ -19,7 +27,23 @@ enum class ThemeColor(val value: String, val label: String, val seed: Long) {
     PURPLE("purple", "高雅紫", 0xFF7C4DFF),
     TEAL("teal", "海洋青", 0xFF00B8D4),
     GOLD("gold", "奢华金", 0xFFFFB300),
+    RED("red", "热烈红", 0xFFF44336),
+    ROSE("rose", "玫瑰红", 0xFFE91E63),
+    INDIGO("indigo", "靛蓝", 0xFF3F51B5),
+    SKY("sky", "天青", 0xFF2196F3),
+    CYAN("cyan", "青碧", 0xFF00BCD4),
+    JADE("jade", "玉石绿", 0xFF009688),
+    LEMON("lemon", "柠檬黄", 0xFFFFEB3B),
+    AMBER("amber", "琥珀", 0xFFFFC107),
+    BROWN("brown", "咖啡棕", 0xFF795548),
+    SLATE("slate", "石板灰", 0xFF607D8F),
     CUSTOM("custom", "自定义", 0xFF4C8DFF),
+    ;
+
+    companion object {
+        /** 可选色列表 (不含 CUSTOM, 自定义色走独立的取色入口)。 */
+        val presets: List<ThemeColor> get() = entries.filter { it != CUSTOM }
+    }
 }
 
 /**
@@ -61,6 +85,59 @@ object Settings {
         val c = getThemeColor()
         return if (c == ThemeColor.CUSTOM) customColor else c.seed
     }
+
+    // ===== 主题设置 (v1.1.18: 独立主题设置页) =====
+
+    /**
+     * 色板风格 (key = palette_style)。存的是 PaletteStyle 的枚举名。
+     *
+     * 用 String 而不是枚举, 是为了让 data 层不依赖 ui 层 (PaletteStyle 在 ui.theme.colorScheme 里)。
+     */
+    var paletteStyle: String
+        get() = prefs.getString("palette_style", "TONAL_SPOT") ?: "TONAL_SPOT"
+        set(value) = prefs.edit().putString("palette_style", value).apply()
+
+    /** 色彩规范版本 (key = color_spec)。存的是 SpecVersionOption 的枚举名。 */
+    var colorSpec: String
+        get() = prefs.getString("color_spec", "V2021") ?: "V2021"
+        set(value) = prefs.edit().putString("color_spec", value).apply()
+
+    /**
+     * 是否开启界面模糊 (key = enable_blur)。
+     *
+     * 默认 **true**: 顶栏、悬浮底栏用真实 backdrop 模糊 (Android 12+ 才有 RenderEffect,
+     * 低版本自动降级成半透明纯色, 见 BlurExt.rememberBlurBackdrop 的守卫)。
+     */
+    var enableBlur: Boolean
+        get() = prefs.getBoolean("enable_blur", true)
+        set(value) = prefs.edit().putBoolean("enable_blur", value).apply()
+
+    /**
+     * 底部导航栏是否用「悬浮胶囊」样式 (key = floating_bottom_bar)。
+     *
+     * 默认 **true**: 圆角胶囊 + 悬浮 + 滑块跟随; 关掉退回贴边的传统底栏。
+     */
+    var floatingBottomBar: Boolean
+        get() = prefs.getBoolean("floating_bottom_bar", true)
+        set(value) = prefs.edit().putBoolean("floating_bottom_bar", value).apply()
+
+    /**
+     * 悬浮底栏是否带玻璃质感 (key = glass_bottom_bar)。仅在 [floatingBottomBar] 开启时生效。
+     *
+     * 默认 **true**: 底栏本体走 backdrop 模糊 + 折射; 关掉是半透明纯色 (更省电)。
+     */
+    var glassBottomBar: Boolean
+        get() = prefs.getBoolean("glass_bottom_bar", true)
+        set(value) = prefs.edit().putBoolean("glass_bottom_bar", value).apply()
+
+    /**
+     * 是否开启预测性返回动画 (key = predictive_back)。
+     *
+     * 默认 **true**: 侧滑返回时当前页跟随手指位移/缩放, 露出下层页面 (Android 13+ 手势导航)。
+     */
+    var predictiveBack: Boolean
+        get() = prefs.getBoolean("predictive_back", true)
+        set(value) = prefs.edit().putBoolean("predictive_back", value).apply()
 
     // ===== 版本检测 =====
     var latestVersion: String

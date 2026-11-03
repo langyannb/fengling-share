@@ -57,6 +57,7 @@ import com.fengling.share.ui.components.PermissionGuideHost
 import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.main.MainScreen
 import com.fengling.share.ui.theme.AppTheme
+import com.fengling.share.ui.theme.ThemeState
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -87,9 +88,10 @@ class MainActivity : ComponentActivity() {
         )
         window.isNavigationBarContrastEnforced = false
         setContent {
-            // 观察 themeMode + themeColor, 任一变化都触发重组换肤
-            var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
-            var themeColor by remember { mutableStateOf(Settings.getThemeColor()) }
+            // 观察整份主题快照 (明暗 / 主题色 / 色板风格 / 色彩规范 / 模糊 / 悬浮底栏 / 玻璃 / 预测性返回),
+            // 任一变化都触发重组换肤。设置页改完调用 refresh 生成新快照赋回来。
+            var themeState by remember { mutableStateOf(ThemeState.fromSettings()) }
+            val refreshTheme: () -> Unit = { themeState = ThemeState.fromSettings() }
 
             // 启动自动检查更新 (仅强制更新才自动弹窗)
             var forceUpdateInfo by remember { mutableStateOf<VersionInfo?>(null) }
@@ -107,16 +109,17 @@ class MainActivity : ComponentActivity() {
             }
 
             AppTheme(
-                themeMode = themeMode,
-                seedColor = themeColor.seed,
+                themeMode = themeState.mode,
+                seedColor = themeState.seedColor,
+                paletteStyle = themeState.paletteStyle,
+                specVersion = themeState.specVersion,
+                enableBlur = themeState.enableBlur,
+                floatingBottomBar = themeState.floatingBottomBar,
+                glassBottomBar = themeState.glassBottomBar,
+                predictiveBack = themeState.predictiveBack,
             ) {
                 ProvideNavigationEventDispatcher {
-                    MainScreen(
-                        onThemeChanged = { newMode ->
-                            themeMode = newMode
-                            themeColor = Settings.getThemeColor()
-                        },
-                    )
+                    MainScreen(onThemeChanged = refreshTheme)
                 }
                 // 启动自动权限引导 (v1.0.36): 通知系统框 -> 应用内一键允许 -> 厂商自启动提示
                 PermissionGuideHost()

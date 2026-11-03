@@ -12,6 +12,8 @@ miuixBlur = "0.9.3"
 okhttp = "4.12.0"
 coil = "2.7.0"
 media3 = "1.11.1"
+# MD3 动态取色 (tonal 色板计算, 纯 Java, 由 miuix-ui 传递进来; 这里显式声明以锁定版本)
+materialColorUtilities = "4.1.1"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -33,6 +35,10 @@ miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui", version.ref = "
 miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons", version.ref = "miuix" }
 # 液态玻璃 (miuix blur)
 miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur", version.ref = "miuixBlur" }
+# 设置项组件 (SwitchPreference / ArrowPreference / OverlayDropdownPreference)
+miuix-preference = { group = "top.yukonga.miuix.kmp", name = "miuix-preference", version.ref = "miuix" }
+# MD3 tonal 色板计算 (纯 Java, 无 Compose 层)
+material-color-utilities = { group = "com.materialkolor", name = "material-color-utilities", version.ref = "materialColorUtilities" }
 navigationevent-compose = { group = "androidx.navigationevent", name = "navigationevent-compose-android", version.ref = "navigationevent" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }

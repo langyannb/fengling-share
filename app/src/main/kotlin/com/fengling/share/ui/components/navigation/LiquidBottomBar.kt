@@ -5,7 +5,6 @@ import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -63,9 +62,14 @@ import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 
-
+import com.fengling.share.ui.theme.LocalEnableBlur
+import com.fengling.share.ui.theme.LocalFloatingBottomBar
+import com.fengling.share.ui.theme.LocalGlassBottomBar
+import com.fengling.share.ui.theme.isAppInDarkTheme
 import com.fengling.share.utils.DampedDragAnimation
 import com.fengling.share.utils.InteractiveHighlight
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -88,17 +92,23 @@ fun LiquidBottomBar(
     backdrop: Backdrop,
     modifier: Modifier = Modifier
 ) {
-    val isLightTheme = !isSystemInDarkTheme()
+    // 明暗要跟着「主题设置」走, 不能直接读系统 (用户可能手动选了深色而系统是浅色)
+    val isLightTheme = !isAppInDarkTheme()
     val contentColor = if (isLightTheme) Color.Black else Color.White
-    val accentColor = if (isLightTheme) Color(0xFF0088FF) else Color(0xFF0091FF)
-    val containerColor = if (isLightTheme) Color(0xFFFAFAFA).copy(0.4f) else Color(0xFF121212).copy(0.4f)
+    // 选中态与玻璃容器色都取自当前 MD3 色板 (tonal 推导), 不再写死亮蓝
+    val accentColor = MiuixTheme.colorScheme.primary
+    // 玻璃质感 = 玻璃开关 + 模糊开关同时打开; 关掉后是「半透明纯色 + 无折射」, 更省电
+    val glassEnabled = LocalGlassBottomBar.current && LocalEnableBlur.current
+    // 悬浮 = 左右留 40dp 内缩; 关掉后贴边留 16dp, 更接近系统底栏
+    val horizontalInset = if (LocalFloatingBottomBar.current) 40.dp else 16.dp
+    val containerColor = MiuixTheme.colorScheme.surfaceContainer.copy(alpha = if (glassEnabled) 0.4f else 0.88f)
     val iconColorFilter = ColorFilter.tint(contentColor)
     val tabsBackdrop = rememberLayerBackdrop()
 
     BoxWithConstraints(
         modifier = modifier
             .padding(bottom = 16.dp) // 保留原有 padding
-            .padding(horizontal = 40.dp) // 保留原有 padding
+            .padding(horizontal = horizontalInset)
             .layout { measurable, constraints -> // --- MIGRATION: 使用 layout 约束高度
                 val placeable = measurable.measure(constraints.copy(maxHeight = 64f.dp.roundToPx()))
                 layout(placeable.width, placeable.height) {
@@ -250,10 +260,12 @@ fun LiquidBottomBar(
                         InnerShadow(radius = 14f.dp, alpha = 0.10f + 0.26f * progress)
                     },
                     effects = {
-                        vibrancy()
-                        blur(8f.dp.toPx())
-                        // 常驻折射: 玻璃边缘始终在掰弯背后的内容 (液体玻璃核心观感)
-                        lens(28f.dp.toPx(), 30f.dp.toPx())
+                        if (glassEnabled) {
+                            vibrancy()
+                            blur(8f.dp.toPx())
+                            // 常驻折射: 玻璃边缘始终在掰弯背后的内容 (液体玻璃核心观感)
+                            lens(28f.dp.toPx(), 30f.dp.toPx())
+                        }
                     },
                     layerBlock = {
                         val progress = dampedDragAnimation.pressProgress
@@ -289,12 +301,14 @@ fun LiquidBottomBar(
                                 Highlight.Default.copy(alpha = 0.12f + 0.88f * progress)
                             },
                             effects = {
-                                val progress = dampedDragAnimation.pressProgress
-                                vibrancy()
-                                blur(8f.dp.toPx())
-                                // 静止态保留 35% 折射 → 选中胶囊里始终有被放大的标签 (放大镜常亮)
-                                val strength = 0.35f + 0.65f * progress
-                                lens(26f.dp.toPx() * strength, 26f.dp.toPx() * strength)
+                                if (glassEnabled) {
+                                    val progress = dampedDragAnimation.pressProgress
+                                    vibrancy()
+                                    blur(8f.dp.toPx())
+                                    // 静止态保留 35% 折射 → 选中胶囊里始终有被放大的标签 (放大镜常亮)
+                                    val strength = 0.35f + 0.65f * progress
+                                    lens(26f.dp.toPx() * strength, 26f.dp.toPx() * strength)
+                                }
                             },
                             onDrawSurface = { drawRect(containerColor) }
                         )
@@ -337,14 +351,16 @@ fun LiquidBottomBar(
                         InnerShadow(radius = 10f.dp, alpha = 0.12f + 0.28f * progress)
                     },
                     effects = {
-                        val progress = dampedDragAnimation.pressProgress
-                        // 静止态 45% 折射 + 色散 → 选中胶囊像一颗液态玻璃珠
-                        val strength = 0.45f + 0.55f * progress
-                        lens(
-                            12f.dp.toPx() * strength,
-                            18f.dp.toPx() * strength,
-                            chromaticAberration = true
-                        )
+                        if (glassEnabled) {
+                            val progress = dampedDragAnimation.pressProgress
+                            // 静止态 45% 折射 + 色散 → 选中胶囊像一颗液态玻璃珠
+                            val strength = 0.45f + 0.55f * progress
+                            lens(
+                                12f.dp.toPx() * strength,
+                                18f.dp.toPx() * strength,
+                                chromaticAberration = true
+                            )
+                        }
                     },
                     layerBlock = {
                         scaleX = dampedDragAnimation.scaleX

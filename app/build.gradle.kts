@@ -86,6 +86,10 @@ dependencies {
     implementation(libs.miuix.icons)
     // 液态玻璃 (miuix blur)
     implementation(libs.miuix.blur)
+    // 设置项组件 (SwitchPreference / ArrowPreference / OverlayDropdownPreference)
+    implementation(libs.miuix.preference)
+    // MD3 tonal 色板计算 (纯 Java, 无 Compose 层; 原本已由 miuix-ui 传递进来, 这里显式锁定版本)
+    implementation(libs.material.color.utilities)
     // Miuix SearchBar 需要 NavigationEventDispatcherOwner
     implementation(libs.navigationevent.compose)
     // 网络 + 图片

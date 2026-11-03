@@ -109,6 +109,7 @@ import com.fengling.share.ui.main.my.AccountScreen
 import com.fengling.share.ui.main.my.ContributorsScreen
 import com.fengling.share.ui.main.my.MessagesScreen
 import com.fengling.share.ui.main.my.NotifySettingsScreen
+import com.fengling.share.ui.main.my.ThemeSettingsScreen
 import com.fengling.share.ui.pm.PmChatScreen
 import com.fengling.share.ui.user.UserProfileScreen
 import com.fengling.share.ui.main.my.MyScreen
@@ -144,6 +145,8 @@ object Routes {
     const val MESSAGES = "messages"
     // 消息通知设置 (后台接收开关 + 通知/电池优化/自启动 权限引导)
     const val NOTIFY_SETTINGS = "settings/notify"
+    // 主题设置 (明暗 / 主题色 / 色板风格 / 模糊 / 悬浮底栏 / 预测性返回)
+    const val THEME_SETTINGS = "settings/theme"
     // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知 进入)
     const val PM_CHAT = "pm/chat?convId={convId}&userId={userId}&messageId={messageId}"
     // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
@@ -464,7 +467,9 @@ fun MainScreen(
                                 glassBackdrop = backdrop,
                             )
                             else -> MyScreen(
-                                onThemeChanged = onThemeChanged,
+                                onOpenThemeSettings = {
+                                    go(Routes.THEME_SETTINGS)
+                                },
                                 onOpenWeb = { url, title ->
                                     // 自定义协议先弹确认框, http(s) 内置浏览器
                                     openLink(url, title)
@@ -648,6 +653,14 @@ fun MainScreen(
         appScreen(Routes.NOTIFY_SETTINGS) {
             NotifySettingsScreen(
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        // 主题设置 (我的 -> 主题): 明暗 / 主题色 / 色板风格 / 模糊 / 悬浮底栏 / 预测性返回
+        appScreen(Routes.THEME_SETTINGS) {
+            ThemeSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onChanged = onThemeChanged,
             )
         }
 
