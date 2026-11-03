@@ -205,8 +205,8 @@ object Routes {
  */
 // ───────────────────────── 预测性返回：跟手层 ─────────────────────────
 // 参考项目（KernelSU-Style-UI-Kit）的「原生感」不是它自己画的，而是 miuix-nav 的
-// NavDisplayEffects 给的：进入/退出时被遮住的那一页整体压一层黑色 scrim（dimAmount = 0.5f，
-// 随跟手进度线性变化），同时当前页缩成带圆角的卡片。本仓库用不了 miuix-nav（只发 0.9.4，
+// NavDisplayEffects 给的：进入/退出时被遮住的那一页整体压一层黑色 scrim（dimAmount 随跟手
+// 进度线性变化），同时当前页缩成带圆角的卡片。本仓库用不了 miuix-nav（只发 0.9.4，
 // 依赖 compose 1.12 + kotlin 2.4.20，与本仓库 1.11.4 / 2.4.10 不同代），所以在这里等价实现。
 //
 // 进度来源必须是框架的 seek：navigation-compose 的 NavHost 在预测性返回进行中会把手势进度
@@ -216,10 +216,21 @@ object Routes {
 private const val PREDICTIVE_BACK_DURATION_MS = 400
 
 /**
- * 退出层最大压暗比例，对齐 miuix `NavDisplayEffects.dimAmount` 的默认值 0.5f ——
- * 参考项目那层「暗色阴影」就是它。
+ * 退出层最大压暗比例。参考项目那层「暗色阴影」来自 miuix `NavDisplayEffects.dimAmount`
+ * （默认 0.5f），但 0.5 在本 App 的浅色底上会把整页刷成灰黑（真机实测偏重），这里取 0.18
+ * —— 保留「下层被压暗」的层次感，又不至于盖掉页面内容。
  */
-private const val PREDICTIVE_BACK_DIM = 0.5f
+private const val PREDICTIVE_BACK_DIM = 0.18f
+
+/**
+ * 退出层最小缩放比例 —— Android 15 原生预测返回退回时当前页缩到约 0.92，四周露出下层。
+ */
+private const val PREDICTIVE_BACK_MIN_SCALE = 0.92f
+
+/**
+ * 退出层圆角，随进度 0 → 24dp 渐变（原生在 16~28dp 之间，取 24dp 与 App 卡片半径同族）。
+ */
+private const val PREDICTIVE_BACK_CORNER_DP = 24f
 
 /**
  * 预测性返回的「暗色阴影」层：正在退出的那一页整体压暗，压暗程度跟手指 1:1。
@@ -253,7 +264,24 @@ private fun AnimatedContentScope.PredictivePageLayer(page: @Composable () -> Uni
         label = "predictiveBackVisible",
     ) { state -> if (state == EnterExitState.Visible) 1f else 0f }
     val exiting = transition.targetState == EnterExitState.PostExit
-    Box(modifier = Modifier.fillMaxSize()) {
+    // 圆角卡片形状：随进度 0 → 24dp。稳定态不裁剪（clip=false），不影响任何正常页面。
+    val cardShape = RoundedCornerShape(PREDICTIVE_BACK_CORNER_DP.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                // d: 0 = 稳定可见, 1 = 完全退出。只在退出层非零。
+                val d = if (exiting) 1f - visible.value else 0f
+                if (d > 0f) {
+                    // Android 15 原生预测返回的做法：整页右移(由 popExit 的 slide 负责)的同时
+                    // 缩成卡片 —— 缩放与圆角都在这一层，位移仍交给转场，两者叠加才是「原生感」。
+                    scaleX = 1f - (1f - PREDICTIVE_BACK_MIN_SCALE) * d
+                    scaleY = scaleX
+                    shape = cardShape
+                    clip = true
+                }
+            }
+    ) {
         page()
         // 压暗层盖在页面内容之上：跟手时整页一起变暗，松手完成时匀速加深，取消时匀速退回。
         Box(
