@@ -88,7 +88,6 @@ import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
 import com.fengling.share.utils.NotifySound
-import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
@@ -220,7 +219,7 @@ private fun NavGraphBuilder.appScreen(
 
 @Composable
 fun MainScreen(
-    onThemeChanged: (ThemeMode) -> Unit = {},
+    onThemeChanged: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()

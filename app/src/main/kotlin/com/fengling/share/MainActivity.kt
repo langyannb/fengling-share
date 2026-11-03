@@ -46,7 +46,6 @@ import com.fengling.share.data.AppState
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.CrashReporter
 import com.fengling.share.data.Settings
-import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.PendingNav
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
