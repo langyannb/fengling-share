@@ -155,6 +155,7 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
                           setTimeout(function(){ console.log('[FLdom/act] '+probe('t5000')); }, 5000);
                           return probe('t0');
                         })();
+                        """
                     ) { r -> Log.i("FLWebView", "[FLdom/act] $r") }
                 }
             }
