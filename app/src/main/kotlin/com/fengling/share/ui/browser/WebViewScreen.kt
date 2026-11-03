@@ -150,7 +150,10 @@ fun WebViewScreen(
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         // 正常浏览器配置: 遵循页面 viewport meta
-        settings.loadWithOverviewMode = true
+        // via / Chrome 默认是 loadWithOverviewMode=false + useWideViewPort=true。
+        // 开着 overview 模式时 WebView 会「按整页宽度」缩放视口, 一旦页面宽度算成 0
+        // (SPA 首屏 #app 还没撑开时就是), 整页会被缩成一条线 → 表现为白屏。
+        settings.loadWithOverviewMode = false
         settings.useWideViewPort = true
         settings.databaseEnabled = true
         settings.javaScriptCanOpenWindowsAutomatically = true

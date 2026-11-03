@@ -53,7 +53,9 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
-        settings.loadWithOverviewMode = true
+        // 实验: via / Chrome 默认 loadWithOverviewMode=false, 只有 useWideViewPort=true。
+        // 开着 overview 模式时 WebView 会按「页面宽度」整体缩放, 页面宽度计算异常就直接白屏。
+        settings.loadWithOverviewMode = false
         settings.useWideViewPort = true
         settings.databaseEnabled = true
         settings.javaScriptCanOpenWindowsAutomatically = true
@@ -92,28 +94,67 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
                 Log.w("FLWebView", "HTTP ${r?.statusCode} ${if (request?.isForMainFrame == true) "主" else "子"}: ${request?.url}")
             }
 
+            override fun onPageStarted(view: WebView?, u: String?, f: android.graphics.Bitmap?) {
+                // 加载一开始就装错误收集器, 抓 mount 阶段抛出的 JS 异常 (onPageFinished 太晚)
+                view?.evaluateJavascript(
+                    """
+                    (function(){
+                      if (window.__flErrHook) return;
+                      window.__flErrHook = true; window.__flErrs = [];
+                      window.addEventListener('error', function(e){
+                        window.__flErrs.push((e&&e.message||'err')+' @'+(e&&e.filename||'').split('/').pop()+':'+(e&&e.lineno||0));
+                      }, true);
+                    })();
+                    """.trimIndent(), null
+                )
+            }
+
             override fun onPageFinished(view: WebView?, u: String?) {
                 super.onPageFinished(view, u)
                 runCatching {
                     view?.evaluateJavascript(
                         """
                         (function(){
-                          try {
-                            var b=document.body, app=document.getElementById('app');
-                            var ld=document.getElementById('index_loading');
-                            return JSON.stringify({
-                              href: (location&&location.href)||'',
-                              vh: window.innerHeight,
-                              bodyH: b?b.offsetHeight:-1,
-                              appKids: app?app.children.length:-1,
-                              textLen: b?b.innerText.length:-1,
-                              loading: ld?'yes':'no',
-                              uaWv: navigator.userAgent.indexOf(' wv')>=0?'yes':'no',
-                              scripts: document.scripts.length
-                            });
-                          } catch(e) { return 'ERR '+e.message; }
+                          if (window.__flAct) return 'skip';
+                          window.__flAct = true;
+                          window.__flErrs = [];
+                          window.addEventListener('error', function(e){
+                            window.__flErrs.push((e && e.message || 'err') + '@' + (e && e.filename || ''));
+                          });
+                          var probe = function(tag){
+                            try {
+                              var de=document.documentElement, b=document.body;
+                              var app=document.getElementById('app');
+                              var ld=document.getElementById('index_loading');
+                              var cs=b?getComputedStyle(b):null;
+                              var rb=b?b.getBoundingClientRect():null;
+                              var ra=app?app.getBoundingClientRect():null;
+                              return JSON.stringify({
+                                tag: tag,
+                                href: (location&&location.href)||'',
+                                vh: window.innerHeight, vw: window.innerWidth,
+                                deH: de?de.offsetHeight:-1,
+                                deCS: de?getComputedStyle(de).height:'',
+                                bodyH: b?b.offsetHeight:-1,
+                                bodyCS: cs?cs.height:'',
+                                bodyDisp: cs?cs.display:'',
+                                bodyTop: rb?Math.round(rb.top):-1,
+                                bodyW: rb?Math.round(rb.width):-1,
+                                appH: app?app.offsetHeight:-1,
+                                appTop: ra?Math.round(ra.top):-1,
+                                appKids: app?app.children.length:-1,
+                                appTxt: app?(app.innerText||'').length:-1,
+                                textLen: b?(b.innerText||'').length:-1,
+                                loading: ld?('yes h='+ld.offsetHeight+' disp='+getComputedStyle(ld).display):'no',
+                                scripts: document.scripts.length,
+                                errs: (window.__flErrs||[]).slice(0,3)
+                              });
+                            } catch(e) { return 'ERR '+e.message; }
+                          };
+                          setTimeout(function(){ console.log('[FLdom/act] '+probe('t1500')); }, 1500);
+                          setTimeout(function(){ console.log('[FLdom/act] '+probe('t5000')); }, 5000);
+                          return probe('t0');
                         })();
-                        """
                     ) { r -> Log.i("FLWebView", "[FLdom/act] $r") }
                 }
             }
