@@ -59,13 +59,10 @@ import com.fengling.share.data.Settings
 import com.fengling.share.data.ThemeColor
 import com.fengling.share.data.ThemeMode
 import com.fengling.share.ui.components.BlurredBar
-import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberBlurBackdrop
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.theme.LocalEnableBlur
 import com.fengling.share.ui.theme.LocalFloatingBottomBar
 import com.fengling.share.ui.theme.LocalGlassBottomBar
-import com.fengling.share.ui.theme.LocalPredictiveBack
 import com.fengling.share.ui.theme.colorScheme.PaletteStyle
 import com.fengling.share.ui.theme.colorScheme.SpecVersionOption
 import com.fengling.share.ui.theme.colorScheme.tonalScheme
@@ -102,11 +99,6 @@ fun ThemeSettingsScreen(
     val backdrop = rememberBlurBackdrop(enableBlur)
     val blurActive = backdrop != null
     val scrollBehavior = MiuixScrollBehavior()
-    val predictiveBack = LocalPredictiveBack.current
-
-    // 预测性返回: 侧滑时整页跟手右移 + 缩小淡出; 系统不支持时回调立刻结束, 行为不变
-    val backProgress = rememberPredictiveBackProgress(enabled = predictiveBack) { onBack() }
-
     var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
     var themeColor by remember { mutableStateOf(Settings.getThemeColor()) }
     var paletteStyle by remember { mutableStateOf(PaletteStyle.fromName(Settings.paletteStyle)) }
@@ -127,7 +119,10 @@ fun ThemeSettingsScreen(
     val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
 
     Scaffold(
-        modifier = modifier.predictiveBackTransform(backProgress),
+        // 预测性返回交给 NavHost: navigation-compose 用 SeekableTransitionState 让本页
+        // 跟随手势位移 (appScreen 的 popExit = slideOutHorizontally)。这里**不能**再叠
+        // 一层 predictiveBackTransform —— 两套位移同时生效就是用户看到的「两层预测返回」。
+        modifier = modifier,
         topBar = {
             BlurredBar(backdrop = backdrop, blurActive = blurActive) {
                 TopAppBar(

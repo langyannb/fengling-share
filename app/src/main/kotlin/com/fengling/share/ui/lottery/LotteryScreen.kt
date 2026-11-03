@@ -60,7 +60,6 @@ import com.fengling.share.data.LotteryResult
 import com.fengling.share.data.LotteryWindow
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppTopBar
-import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.LoadingBox
 import kotlinx.coroutines.delay

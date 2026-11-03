@@ -2,12 +2,10 @@ package com.fengling.share.ui.main
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.activity.compose.PredictiveBackHandler
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -53,9 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -89,7 +85,6 @@ import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PendingNav
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.appGradientBackground
-import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.data.NoticeInfo
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Settings
@@ -115,7 +110,6 @@ import com.fengling.share.ui.components.rememberBlurBackdrop
 import com.fengling.share.ui.theme.LocalEnableBlur
 import com.fengling.share.ui.theme.LocalFloatingBottomBar
 import com.fengling.share.ui.theme.LocalGlassBottomBar
-import com.fengling.share.ui.theme.LocalPredictiveBack
 import top.yukonga.miuix.kmp.basic.NavigationItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import com.fengling.share.ui.main.explore.ExploreScreen
@@ -132,7 +126,6 @@ import com.fengling.share.ui.social.GroupInfoScreen
 import com.fengling.share.ui.social.GroupMemberListScreen
 import com.fengling.share.ui.social.SocialScreen
 import com.fengling.share.ui.update.UpdateScreen
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -198,41 +191,6 @@ object Routes {
  * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
  */
 
-/**
- * tab 内「返回 → 收回首页」的手势进度。
- *
- * 和 [com.fengling.share.ui.components.rememberPredictiveBackProgress] 的差别只有一点:
- * 那个会顺手写 `BackReveal.progress`, 让 NavHost 把「上一级快照」铺在下面 —— tab 切换没有
- * 上一级页面, 铺出来反而是一条假的半屏。所以这里单独一份, 只产出进度。
- *
- * 行为: 手势进行中进度 0→1 跟手 (画面轻微缩小); 松手 < 50% 系统取消 → 弹回 0;
- * 松手 ≥ 50% → 补到 1 再执行 [onBack] (把 pager 滚回首页)。Android 13 以下或未开
- * 系统可预测式返回的设备不会回传进度, 回调立刻完成, 行为等价于普通 BackHandler。
- */
-@Composable
-private fun rememberTabBackProgress(
-    enabled: Boolean,
-    onBack: () -> Unit,
-): State<Float> {
-    val progress = remember { Animatable(0f) }
-    PredictiveBackHandler(enabled = enabled) { events ->
-        try {
-            events.collect { event ->
-                progress.snapTo(event.progress.coerceIn(0f, 1f))
-            }
-        } catch (e: CancellationException) {
-            progress.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
-            throw e
-        }
-        progress.animateTo(1f, tween(durationMillis = 200, easing = FastOutSlowInEasing))
-        onBack()
-        // 正常路径下本 composable 会把进度复位; pager 滚回首页需要一点时间,
-        // 复位放在动画之后, 免得缩小的画面在滚动途中「跳」回原尺寸。
-        kotlinx.coroutines.delay(400L)
-        progress.snapTo(0f)
-    }
-    return remember(progress) { derivedStateOf { progress.value } }
-}
 
 /**
  * 契约 B: NavHost 每个目的地统一补齐四段转场 (进入 / 退出 / 返回进入 / 返回退出)。
@@ -484,16 +442,14 @@ fun MainScreen(
         popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
     ) {
         appScreen(Routes.MAIN) {
-            // tab 内的预测性返回 (参考项目用 NavigationBackHandler 把「非首个 tab 的返回」
-            // 收回到第一个 tab; 这里用本 App 统一的手势体系做同一件事 —— 手势跟手位移,
-            // 松手过半就把 pager 收回「首页」)。
-            // enabled 里同时判当前路由: 一旦栈里压上详情页, 就把手势整个交回 NavHost,
-            // 否则本回调注册得晚会把 NavHost 自带的预测性返回顶掉。
+            // 非首个 tab 按返回 → 收回「首页」(参考项目用 NavigationBackHandler 做同一件事)。
+            // 这里故意用普通 BackHandler 而不是预测性返回: 参考项目本身也没有自绘跟手动画,
+            // 它把跟手整个交给系统/框架。本页在 NavHost 栈深 1 时 NavHost 的
+            // PredictiveBackHandler 是 disabled, 再挂一层自绘位移就变成「两层预测返回」。
+            // 另外 enabled 里判当前路由: 一旦栈里压上详情页, 就整个交回 NavHost。
             val currentEntry by navController.currentBackStackEntryAsState()
             val onMainRoute = currentEntry?.destination?.route == Routes.MAIN
-            val tabBackProgress = rememberTabBackProgress(
-                enabled = LocalPredictiveBack.current && onMainRoute && pagerState.currentPage != 0,
-            ) {
+            BackHandler(enabled = onMainRoute && pagerState.currentPage != 0) {
                 scope.launch { pagerState.animateScrollToPage(0) }
             }
             // 底栏摆放照抄参考项目: 用 Scaffold 的 bottomBar 槽位, 不再把底栏叠在内容 Box 上。
@@ -537,21 +493,13 @@ fun MainScreen(
                 // contentPadding bottom 自行处理 (OShin 同款布局)。
                 // 注意: 这里故意不消费 Scaffold 的 innerPadding, 否则会和页面自带的
                 // 100/110.dp 底部留白叠成双份。
+                // 这里不再挂任何 predictiveBackTransform: 主页面在 NavHost 栈深 1,
+                // 页面本身没有「上一层」可揭示, 自绘跟手只会和框架的预测返回叠成两层。
                 Box(
                     Modifier
                         .fillMaxSize()
                         .then(captureModifier)
-                        .then(barCaptureModifier)
-                        // 不做横向位移 (slideFraction = 0): 收回 tab 的真实运动是 pager
-                        // 自己横向滚回「首页」, 再叠一层右移就是两个方向重叠的运动, 看着会抖。
-                        // 跟手只做轻微缩小 —— 手指拖动时画面「被按住」, 松手过半就滚回首页,
-                        // 没过半就弹回原位, 与站内其它页面的跟手观感是同一套。
-                        .predictiveBackTransform(
-                            progress = tabBackProgress,
-                            slideFraction = 0f,
-                            scaleDown = 0.04f,
-                            fadeOut = 0f,
-                        ),
+                        .then(barCaptureModifier),
                 ) {
                     // HorizontalPager: tab 左右滑动切换
                     HorizontalPager(
