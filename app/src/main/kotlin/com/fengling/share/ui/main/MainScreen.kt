@@ -4,17 +4,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentScope
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,11 +52,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -195,65 +182,30 @@ object Routes {
 
 
 /**
- * 契约 B: NavHost 每个目的地统一补齐四段转场 (进入 / 退出 / 返回进入 / 返回退出)。
+ * 契约 B: NavHost 每个目的地**不写任何转场**, 全部走 Navigation 组件默认值。
  *
- * 进入 = 右侧滑入 (与页面切换方向一致);
- * 返回 = 上一级左视差跟入 + 当前页整屏右移 —— 手势进行中系统会把进度 seek 进这段转场
- * (navigation-compose 的 SeekableTransitionState), 所以不能有 fadeIn/scaleIn。
- * 规格统一写在这里, 新增目的地直接 appScreen(route) 即可, 不会再出现「有的页面有动画有的没有」。
+ * 为什么连「进入右滑、返回右移」这套都撤掉:
+ *   1. 用 Navigation 组件的应用自带预测性返回 (官方文档 predictive-back-gesture),
+ *      进度由 NavHost 的 SeekableTransitionState 直接 seek 进**当前转场**;
+ *      转场写得越自定义, 抬手收尾/取消回弹就越脱离框架自己的时长与曲线 ——
+ *      用户反馈的「抬手了还卡一下、不丝滑」就是自定义 400ms tween 造成的。
+ *   2. 之前还挂过一层自绘跟手层 (缩放/圆角/黑幕), 它与 NavHost 内置的
+ *      PredictiveBackHandler 抢同一个返回回调, 位移叠两次 = 「两层预测返回」。
+ *   3. 结论: 一个 transition 参数都不传, 四个方向全用 EnterTransition.Default /
+ *      ExitTransition.Default, 观感与系统级预测返回一致, 也不会有我们自己的掉帧点。
+ *
+ * 新增目的地直接 appScreen(route) 即可, 不必再关心转场。
  */
-
-// ───────────────────── 预测性返回：官方做法 ─────────────────────
-// 只用官方原语组合（scaleIn/scaleOut/fadeIn/fadeOut + NavHost 内置的 PredictiveBackHandler），
-// 不自绘跟手层、不自己挂 PredictiveBackHandler。理由见官方文档
-// developer.android.google.cn/guide/navigation/custom-back/predictive-back-gesture：
-//   · 用 Navigation 组件的应用自带预测性返回，进度由 NavHost 的 SeekableTransitionState
-//     直接 seek 进我们声明的 enter/exit 转场，所以转场本身就 1:1 跟手；
-//   · 再挂一层自己的 PredictiveBackHandler 会抢同一个返回回调，位移叠两次（此前用户报的
-//     「两层预测返回」就是这么来的）；
-//   · 官方没有提供「暗色 scrim」这类视觉 API，之前那层黑是我们照 miuix-nav 画的自绘层，
-//     现按用户要求整体撤掉。
-//
-// 观感按 Android 15 原生：返回时当前页原地缩成卡片（scaleOut），上一页静止露出（None）。
-
-/** 与页面切换同长同曲线：400ms 线性。 */
-private const val PREDICTIVE_BACK_DURATION_MS = 400
-
-/** 退出层的最小缩放 —— 原生退回时当前页约缩到 0.92，四周露出下一层。 */
-private const val PREDICTIVE_BACK_MIN_SCALE = 0.92f
 
 private fun NavGraphBuilder.appScreen(
     route: String,
     arguments: List<NamedNavArgument> = emptyList(),
     content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit,
 ) {
-    val slideSpec = spring<IntOffset>(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
+    // 四段转场全部不传 = 用 Navigation 的默认值（见上方说明）。
     composable(
         route = route,
         arguments = arguments,
-        // 进入: 新页从右滑入, 旧页向左让 1/4
-        enterTransition = { slideInHorizontally(slideSpec) { it } },
-        exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 返回: 只用官方原语 scaleOut。跟手进度由 NavHost 内置的 PredictiveBackHandler +
-        // SeekableTransitionState 直接 seek 进这段转场, 我们一个自绘跟手层都不挂 —— 既不会
-        // 出现「两层预测返回」, 也不会出现取消后卡在缩小状态。
-        //
-        // 为什么用 scale 而不是 slide: Android 15 原生预测返回的观感是「当前页原地缩成卡片、
-        // 上一页静止露出」, 不是整页横移。transformOrigin 用 Center, 缩到 0.92 后四周露出的
-        // 就是下面那一层的静止页面。
-        //
-        // 为什么上一页用 None: 它本来就该是不动的底; 给它 scaleIn 会让两层同时动, 观感发飘。
-        popEnterTransition = { EnterTransition.None },
-        popExitTransition = {
-            scaleOut(
-                animationSpec = tween(PREDICTIVE_BACK_DURATION_MS, easing = LinearEasing),
-                targetScale = PREDICTIVE_BACK_MIN_SCALE,
-                transformOrigin = TransformOrigin.Center,
-            )
-        },
     ) { entry ->
         content(entry)
     }
@@ -448,32 +400,14 @@ fun MainScreen(
         )
     }
 
-    // 进入 = 滑动切换 (点击应用右滑进入, 旧页左移 1/4 视差)
-    // 返回 = 预测性返回跟手 (同 appScreen, 见上面的说明)
-    val slideSpec = spring<IntOffset>(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
-    // v1.1.15 保底: NavHost 外层铺一层不透明的 App 渐变底。
-    // 预测性返回跟手时, 当前页整体右移、在左边让出一条缝; 只要这一层是活着且静止的背景,
-    // 那条缝就永远是 App 底色, 不可能再露出窗口底色 (用户报的「返回过程一片空白」)。
-    // 这里只是一个静态绘制的背景层, 不截图、不写状态, 不影响任何页面已验证正常的预测返回。
+    // v1.1.15 保底: NavHost 外层铺一层不透明的 App 渐变底, 转场期间露出的永远是 App 底色,
+    // 不会再露出窗口底色 (用户曾报的「返回过程一片空白」)。静态绘制, 不写状态。
     Box(modifier = Modifier.fillMaxSize().appGradientBackground()) {
     NavHost(
         navController = navController,
         startDestination = Routes.MAIN,
         modifier = Modifier.fillMaxSize(),
-        enterTransition = { slideInHorizontally(slideSpec) { it } },
-        exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 与 appScreen 内保持一致: 返回 = 官方 scaleOut（当前页原地缩成卡片），上一页静止。
-        popEnterTransition = { EnterTransition.None },
-        popExitTransition = {
-            scaleOut(
-                animationSpec = tween(PREDICTIVE_BACK_DURATION_MS, easing = LinearEasing),
-                targetScale = PREDICTIVE_BACK_MIN_SCALE,
-                transformOrigin = TransformOrigin.Center,
-            )
-        },
+        // 与 appScreen 一致: 不传任何转场 = Navigation 默认值。
     ) {
         appScreen(Routes.MAIN) {
             // 非首个 tab 按返回 → 收回「首页」(参考项目用 NavigationBackHandler 做同一件事)。
