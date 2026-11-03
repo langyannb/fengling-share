@@ -4,11 +4,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentScope
-import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -64,9 +61,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -205,123 +202,25 @@ object Routes {
  * (navigation-compose 的 SeekableTransitionState), 所以不能有 fadeIn/scaleIn。
  * 规格统一写在这里, 新增目的地直接 appScreen(route) 即可, 不会再出现「有的页面有动画有的没有」。
  */
-// ───────────────────────── 预测性返回：跟手层 ─────────────────────────
-// 参考项目（KernelSU-Style-UI-Kit）的「原生感」不是它自己画的，而是 miuix-nav 的
-// NavDisplayEffects 给的：进入/退出时被遮住的那一页整体压一层黑色 scrim（dimAmount 随跟手
-// 进度线性变化），同时当前页缩成带圆角的卡片。本仓库用不了 miuix-nav（只发 0.9.4，
-// 依赖 compose 1.12 + kotlin 2.4.20，与本仓库 1.11.4 / 2.4.10 不同代），所以在这里等价实现。
+
+// ───────────────────── 预测性返回：官方做法 ─────────────────────
+// 只用官方原语组合（scaleIn/scaleOut/fadeIn/fadeOut + NavHost 内置的 PredictiveBackHandler），
+// 不自绘跟手层、不自己挂 PredictiveBackHandler。理由见官方文档
+// developer.android.google.cn/guide/navigation/custom-back/predictive-back-gesture：
+//   · 用 Navigation 组件的应用自带预测性返回，进度由 NavHost 的 SeekableTransitionState
+//     直接 seek 进我们声明的 enter/exit 转场，所以转场本身就 1:1 跟手；
+//   · 再挂一层自己的 PredictiveBackHandler 会抢同一个返回回调，位移叠两次（此前用户报的
+//     「两层预测返回」就是这么来的）；
+//   · 官方没有提供「暗色 scrim」这类视觉 API，之前那层黑是我们照 miuix-nav 画的自绘层，
+//     现按用户要求整体撤掉。
 //
-// 进度来源必须是框架的 seek：navigation-compose 的 NavHost 在预测性返回进行中会把手势进度
-// seek 进转场（SeekableTransitionState.seekTo），所以这里只读 AnimatedVisibilityScope.transition
-// 上由 Transition.animateFloat 产出的值 —— 它会被 seek 驱动，与手指 1:1，不需要（也不允许）
-// 再挂一个 PredictiveBackHandler（那就会变成用户报的「两层预测返回」）。
+// 观感按 Android 15 原生：返回时当前页原地缩成卡片（scaleOut），上一页静止露出（None）。
+
+/** 与页面切换同长同曲线：400ms 线性。 */
 private const val PREDICTIVE_BACK_DURATION_MS = 400
 
-/**
- * 退出时四周露出的「暗色阴影」最大不透明度。参考项目那层暗色来自 miuix
- * `NavDisplayEffects.dimAmount`（默认 0.5f），这里取同一个值。
- *
- * 注意它压暗的**不是当前页**：压暗层画在退出页之下，只有退出页缩小后露出的四周才会看到它，
- * 它把后一层页面压暗。当前页自己保持原亮度 —— 这才是原生观感（早期版本把压暗层画在页面
- * 之上，整页被刷灰、内容发闷，真机截图核对后推翻）。
- */
-private const val PREDICTIVE_BACK_DIM = 0.5f
-
-/**
- * 退出层最小缩放比例 —— Android 15 原生预测返回退回时当前页缩到约 0.92，四周露出下层。
- */
-private const val PREDICTIVE_BACK_MIN_SCALE = 0.88f
-
-/**
- * 退出页的右移量（占屏宽比例）。原生预测返回是「边缩边右移」，但位移必须很小：
- * 一旦接近整屏，观感就退回普通横移。0.10 屏宽 ≈ 124px，足够看出方向、又不抢缩放的戏。
- *
- * 为什么自己算而不用 popExitTransition 的 slide：转场位移作用在**整层**上，
- * 连暗色层一起被推走，左侧会漏出一条没被压暗的亮边（真机帧已证实）。
- * 位移只加在 page 上、暗色层保持铺满全屏，才对。
- */
-private const val PREDICTIVE_BACK_SHIFT_FRACTION = 0.10f
-
-/**
- * 退出层圆角，随进度 0 → 24dp 渐变（原生在 16~28dp 之间，取 24dp 与 App 卡片半径同族）。
- */
-private const val PREDICTIVE_BACK_CORNER_DP = 24f
-
-/**
- * 预测性返回的「暗色阴影」层：正在退出的那一页整体压暗，压暗程度跟手指 1:1。
- *
- * 为什么必须自己画：EnterTransition / ExitTransition 都是 sealed class（Compose 1.11.4
- * EnterExitTransition.kt:101 / :193，实现类 private），只能组合 fadeIn/fadeOut/scaleIn/
- * scaleOut、slideIn 系列、slideOut 系列，**没有任何办法在转场里叠一层颜色**。参考项目
- * KernelSU-Style-UI-Kit 的那层暗色来自 miuix-nav 的 NavDisplayEffects.dimAmount（默认 0.5f），
- * 而 miuix-nav 只在 0.9.4 发布（依赖 compose 1.12 + kotlin 2.4.20，与本仓库 1.11.4 / 2.4.10
- * 不同代，引不进来），所以在这里等价实现。
- *
- * 进度来源必须是框架的 seek：预测性返回进行中，navigation-compose 的 NavHost 会把手势进度
- * seek 进转场（SeekableTransitionState.seekTo → Transition.setPlaytimeAfterInitialAndTargetState
- * Established → 递归 _transitions + _animations.seekTo）。这里读的
- * AnimatedVisibilityScope.transition 是那条 Transition 的 child transition（
- * createChildTransitionInternal 在父 isSeeking 时把 lastSeekedTimeNanos 一并传下来），
- * 所以 animateFloat 出来的值就是手指进度 —— 1:1 跟手。
- * **不需要也不允许**再挂一个 PredictiveBackHandler：那一层会和 NavHost 自己抢
- * OnBackPressedDispatcher 的回调，位移叠两次 —— 就是用户此前报的「两层预测返回」。
- *
- * 只对退出层生效（targetState == PostExit）：进入层保持原样，否则 push 时新页一进来就是黑的。
- * 稳定态 targetState == Visible，压暗恒为 0，本层完全不参与绘制（alpha 0 的 Box 不产生视觉）。
- *
- * 性能：alpha 只在 graphicsLayer 的 block 里读（deferred read），逐帧只重绘、不触发重组。
- */
-@Composable
-private fun AnimatedContentScope.PredictivePageLayer(page: @Composable () -> Unit) {
-    // 与 pop 转场同长同曲线（400ms + LinearEasing），框架 seek 进来的 playTime 1:1 映射到这里。
-    val visible = transition.animateFloat(
-        transitionSpec = { tween(PREDICTIVE_BACK_DURATION_MS, easing = LinearEasing) },
-        label = "predictiveBackVisible",
-    ) { state -> if (state == EnterExitState.Visible) 1f else 0f }
-    val exiting = transition.targetState == EnterExitState.PostExit
-    // 圆角卡片形状：随进度 0 → 24dp。稳定态不裁剪（clip=false），不影响任何正常页面。
-    val cardShape = RoundedCornerShape(PREDICTIVE_BACK_CORNER_DP.dp)
-    // 两个 Box 是**兄弟**不是嵌套：卡片层单独缩放，暗色层铺满全屏、不跟着缩。
-    //
-    // 为什么这样画就对了（关键，别再改回去）：
-    // NavHost 的 transitionSpec 在 pop/预测性返回时把目标页压到 `initialZIndex - 1`
-    // （navc 的 NavHost.kt:671），也就是「退出中的当前页在上，上一页在下」。本层是退出页的
-    // 内层，所以：暗色层铺满全屏 → 透过它看到被压暗的上一页；卡片层画在暗色层之上 →
-    // 卡片自己保持原亮度。这正是原生那圈「四周暗、卡片亮」的观感。
-    // push 时方向相反（旧页在下），暗色层被它自己的 page 完全遮住 → 零副作用，
-    // 所以这里不需要判断 pop / push 方向。
-    Box(modifier = Modifier.fillMaxSize()) {
-        // ① 暗色层：铺满全屏、不缩放，压在 page() 之下（兄弟顺序：先声明者在下面）。
-        // 退出页缩小后四周露出的部分被它压暗；卡片本身在它之上，不受影响。
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .graphicsLayer {
-                    alpha = if (exiting) PREDICTIVE_BACK_DIM * (1f - visible.value) else 0f
-                }
-                .background(Color.Black)
-        )
-        // ② 退出页本体：跟手缩小 + 圆角裁剪。位移交给 popExit 的小位移 slide，两者叠加即原生卡片感。
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    // d: 0 = 稳定可见, 1 = 完全退出。只在退出层非零。
-                    val d = if (exiting) 1f - visible.value else 0f
-                    // **必须无条件赋值**：预测性返回取消时 d 会从 1 回到 0，条件赋值的写法
-                    // 会把 scale 停在上一次的 0.88，页面就卡在缩小状态（graphicsLayer 的
-                    // block 不会重置未赋值的属性）。
-                    scaleX = 1f - (1f - PREDICTIVE_BACK_MIN_SCALE) * d
-                    scaleY = scaleX
-                    translationX = size.width * PREDICTIVE_BACK_SHIFT_FRACTION * d
-                    shape = cardShape
-                    clip = d > 0f
-                }
-        ) {
-            page()
-        }
-    }
-}
+/** 退出层的最小缩放 —— 原生退回时当前页约缩到 0.92，四周露出下一层。 */
+private const val PREDICTIVE_BACK_MIN_SCALE = 0.92f
 
 private fun NavGraphBuilder.appScreen(
     route: String,
@@ -338,16 +237,25 @@ private fun NavGraphBuilder.appScreen(
         // 进入: 新页从右滑入, 旧页向左让 1/4
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 返回: 交给 PredictivePageLayer 自己做原生卡片式 —— 缩小 + 圆角 + 右移 + 全屏暗色层。
-        // 转场在这里必须留空: slide 作用在整层上, 会把暗色层一起推走、左侧漏亮边；
-        // 上一页也留空(静止露出), 它本来就该是不动的底。
-        // 跟手进度由框架 seek 进 transition, 本层 animateFloat 1:1 读到, 所以留空不影响跟手。
+        // 返回: 只用官方原语 scaleOut。跟手进度由 NavHost 内置的 PredictiveBackHandler +
+        // SeekableTransitionState 直接 seek 进这段转场, 我们一个自绘跟手层都不挂 —— 既不会
+        // 出现「两层预测返回」, 也不会出现取消后卡在缩小状态。
+        //
+        // 为什么用 scale 而不是 slide: Android 15 原生预测返回的观感是「当前页原地缩成卡片、
+        // 上一页静止露出」, 不是整页横移。transformOrigin 用 Center, 缩到 0.92 后四周露出的
+        // 就是下面那一层的静止页面。
+        //
+        // 为什么上一页用 None: 它本来就该是不动的底; 给它 scaleIn 会让两层同时动, 观感发飘。
         popEnterTransition = { EnterTransition.None },
-        popExitTransition = { ExitTransition.None },
+        popExitTransition = {
+            scaleOut(
+                animationSpec = tween(PREDICTIVE_BACK_DURATION_MS, easing = LinearEasing),
+                targetScale = PREDICTIVE_BACK_MIN_SCALE,
+                transformOrigin = TransformOrigin.Center,
+            )
+        },
     ) { entry ->
-        PredictivePageLayer {
-            content(entry)
-        }
+        content(entry)
     }
 }
 
@@ -557,9 +465,15 @@ fun MainScreen(
         modifier = Modifier.fillMaxSize(),
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 与 appScreen 内保持一致: 返回走原生卡片式, 转场留空(位移/缩放/暗色都在 PredictivePageLayer)。
+        // 与 appScreen 内保持一致: 返回 = 官方 scaleOut（当前页原地缩成卡片），上一页静止。
         popEnterTransition = { EnterTransition.None },
-        popExitTransition = { ExitTransition.None },
+        popExitTransition = {
+            scaleOut(
+                animationSpec = tween(PREDICTIVE_BACK_DURATION_MS, easing = LinearEasing),
+                targetScale = PREDICTIVE_BACK_MIN_SCALE,
+                transformOrigin = TransformOrigin.Center,
+            )
+        },
     ) {
         appScreen(Routes.MAIN) {
             // 非首个 tab 按返回 → 收回「首页」(参考项目用 NavigationBackHandler 做同一件事)。
