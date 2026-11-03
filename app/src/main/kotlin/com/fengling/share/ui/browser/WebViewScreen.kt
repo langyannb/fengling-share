@@ -317,8 +317,11 @@ fun WebViewScreen(
                 //
                 // 教训（v1.1.18 之前）：不要给 html/body/#app 无条件补 minHeight:100vh ——
                 // 那会把页面总高抬到 2 个视口以上，反而把 height:100% 的滚动容器推离视口。
-                // 现在只在**真的探测到塌陷**（deH<=0 或 bodyH<=0 且 body 有内容）时，
-                // 给 html/body 设 100vh 把高度链重新接上；正常站点完全不受影响。
+                // 现在只在**真的探测到塌陷**时（html 的 computed height 解析成 0px 且 body 的
+                // getBoundingClientRect().height 也是 0，同时页面确有内容）给 html/body 设 100vh，
+                // 把高度链重新接上；正常站点完全不受影响。
+                // 判据不能用 offsetHeight：本 App 实测正常页面(391fk.com)的
+                // documentElement.offsetHeight 也会返回 0，用它会把好页面也「修」坏。
                 if (url?.startsWith("http") == true) {
                     runCatching {
                         view?.evaluateJavascript(
@@ -326,39 +329,47 @@ fun WebViewScreen(
                             (function(){
                               if (window.__flDomCheck) return;
                               window.__flDomCheck = true;
-                              // 高度塌陷自愈: 只在 html/body 计算高度塌成 0 且页面确有内容时接管
+                              // 高度塌陷自愈: 只在 html 的 computed height 解析成 0, 且 body 可视高度也为 0,
+                              // 而页面确实有内容时接管。真机证据(build 141, link3.cc/aevum):
+                              //   deCS="0px" deRectH=0 bodyRectH=0 appTxt=87 loading="disp=none"
+                              //   → 流内内容全被压成 0 高, 只有 position:fixed 的页脚按钮还能画出来,
+                              //     也就是用户看到的那张「只有底部紫按钮」的白屏图。
+                              // 注意 offsetHeight 对 documentElement 不可靠(正常页面也可能给 0), 所以用
+                              // getComputedStyle 的 height + body 的 boundingRect 双重判据。
                               var fixCollapse = function(tag){
                                 try {
                                   var de=document.documentElement, b=document.body;
                                   if (!de || !b) return;
-                                  var h=de.offsetHeight, bh=b.offsetHeight;
-                                  var dcr=de.getBoundingClientRect(), bcr=b.getBoundingClientRect();
-                                  var textLen=(b.innerText||'').length;
                                   var app=document.getElementById('app');
+                                  var textLen=(b.innerText||'').length;
                                   var hasContent=textLen>0 || (app&&app.childElementCount>0);
+                                  var htmlH=parseFloat(getComputedStyle(de).height)||0;
+                                  var bodyH=parseFloat(getComputedStyle(b).height)||0;
+                                  var bodyRectH=b.getBoundingClientRect().height;
                                   console.log('[FLdom] '+tag+
                                     ' vh='+window.innerHeight+' vw='+window.innerWidth+
-                                    ' deH='+h+' deRectH='+Math.round(dcr.height)+
-                                    ' deScrollH='+de.scrollHeight+
-                                    ' bodyH='+bh+' bodyRectH='+Math.round(bcr.height)+
-                                    ' bodyScrollH='+b.scrollHeight+
-                                    ' deCS='+getComputedStyle(de).height+
-                                    ' bodyCS='+getComputedStyle(b).height+
+                                    ' htmlH='+htmlH+' htmlCS='+getComputedStyle(de).height+
+                                    ' bodyH='+bodyH+' bodyCS='+getComputedStyle(b).height+
+                                    ' bodyRectH='+Math.round(bodyRectH)+
                                     ' compat='+document.compatMode+
-                                    ' textLen='+textLen+' hasContent='+(hasContent?'yes':'no'));
-                                  // 只在「页面确有内容」且「html 与 body 的可视高度都为 0」时接管
-                                  if (hasContent && dcr.height<=0 && bcr.height<=0) {
+                                    ' textLen='+textLen+' hasContent='+(hasContent?'yes':'no')+
+                                    ' fixed='+(window.__flFixed?'yes':'no'));
+                                  if (hasContent && htmlH<=0.5 && bodyRectH<=0.5) {
                                     de.style.height='100vh';
                                     b.style.height='100vh';
                                     b.style.minHeight='100vh';
-                                    console.log('[FLdom] '+tag+' 检测到高度塌陷, 已把 html/body 设为 100vh');
+                                    window.__flFixed=true;
+                                    console.log('[FLdom] '+tag+' 高度塌陷, 已把 html/body 设为 100vh');
                                   }
                                 } catch(e) { console.log('[FLdom] ERR '+e.message); }
                               };
                               fixCollapse('t0');
+                              setTimeout(function(){fixCollapse('t300')},300);
                               setTimeout(function(){fixCollapse('t800')},800);
                               setTimeout(function(){fixCollapse('t2500')},2500);
                               setTimeout(function(){fixCollapse('t5000')},5000);
+                              // 视口变化(旋转/键盘/分屏)后重新判一次
+                              try { window.addEventListener('resize', function(){ setTimeout(function(){fixCollapse('resize')},200) }) } catch(e) {}
                             })();
                             """.trimIndent()
                         ) { }
