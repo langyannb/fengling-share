@@ -5,6 +5,8 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.Spring
@@ -231,6 +233,16 @@ private const val PREDICTIVE_BACK_DIM = 0.5f
 private const val PREDICTIVE_BACK_MIN_SCALE = 0.88f
 
 /**
+ * 退出页的右移量（占屏宽比例）。原生预测返回是「边缩边右移」，但位移必须很小：
+ * 一旦接近整屏，观感就退回普通横移。0.10 屏宽 ≈ 124px，足够看出方向、又不抢缩放的戏。
+ *
+ * 为什么自己算而不用 popExitTransition 的 slide：转场位移作用在**整层**上，
+ * 连暗色层一起被推走，左侧会漏出一条没被压暗的亮边（真机帧已证实）。
+ * 位移只加在 page 上、暗色层保持铺满全屏，才对。
+ */
+private const val PREDICTIVE_BACK_SHIFT_FRACTION = 0.10f
+
+/**
  * 退出层圆角，随进度 0 → 24dp 渐变（原生在 16~28dp 之间，取 24dp 与 App 卡片半径同族）。
  */
 private const val PREDICTIVE_BACK_CORNER_DP = 24f
@@ -301,6 +313,7 @@ private fun AnimatedContentScope.PredictivePageLayer(page: @Composable () -> Uni
                     // block 不会重置未赋值的属性）。
                     scaleX = 1f - (1f - PREDICTIVE_BACK_MIN_SCALE) * d
                     scaleY = scaleX
+                    translationX = size.width * PREDICTIVE_BACK_SHIFT_FRACTION * d
                     shape = cardShape
                     clip = d > 0f
                 }
@@ -319,22 +332,18 @@ private fun NavGraphBuilder.appScreen(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
-    // v1.1.11 返回跟手速度: 用 tween + LinearEasing。
-    // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
-    // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
-    val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
     composable(
         route = route,
         arguments = arguments,
         // 进入: 新页从右滑入, 旧页向左让 1/4
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 返回: 原生卡片式 —— 当前页只右移 1/8 屏宽(不再整屏横移), 缩小 + 圆角 + 压暗
-        // 由 PredictivePageLayer 负责; 下一层从 -1/24 轻微归位, 不做 1/4 视差。
-        // 位移必须小: 整屏 slide 会把缩放彻底盖掉, 观感就退回普通横移(真机实测过)。
-        // **不能 fadeIn**: 淡入会让跟手时被让出来的那半屏整片发白。
-        popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 24 } },
-        popExitTransition = { slideOutHorizontally(slideBackSpec) { it / 8 } },
+        // 返回: 交给 PredictivePageLayer 自己做原生卡片式 —— 缩小 + 圆角 + 右移 + 全屏暗色层。
+        // 转场在这里必须留空: slide 作用在整层上, 会把暗色层一起推走、左侧漏亮边；
+        // 上一页也留空(静止露出), 它本来就该是不动的底。
+        // 跟手进度由框架 seek 进 transition, 本层 animateFloat 1:1 读到, 所以留空不影响跟手。
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
     ) { entry ->
         PredictivePageLayer {
             content(entry)
@@ -537,10 +546,6 @@ fun MainScreen(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow,
     )
-    // v1.1.11 返回跟手速度: 用 tween + LinearEasing。
-    // spring 是「快起慢收」, 系统把手势进度 seek 进来时画面会跑在手指前面, 松手又瞬间弹到位 ——
-    // 用户反馈「可以用但太快了」。LinearEasing 让跟手进度与手指 1:1, 松手后匀速滑完剩余距离 (整屏 400ms)。
-    val slideBackSpec = tween<IntOffset>(durationMillis = 400, easing = LinearEasing)
     // v1.1.15 保底: NavHost 外层铺一层不透明的 App 渐变底。
     // 预测性返回跟手时, 当前页整体右移、在左边让出一条缝; 只要这一层是活着且静止的背景,
     // 那条缝就永远是 App 底色, 不可能再露出窗口底色 (用户报的「返回过程一片空白」)。
@@ -552,9 +557,9 @@ fun MainScreen(
         modifier = Modifier.fillMaxSize(),
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 与 appScreen 内保持一致: 返回走原生卡片式(小位移 + 缩放), 不整屏横移。
-        popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 24 } },
-        popExitTransition = { slideOutHorizontally(slideBackSpec) { it / 8 } },
+        // 与 appScreen 内保持一致: 返回走原生卡片式, 转场留空(位移/缩放/暗色都在 PredictivePageLayer)。
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
     ) {
         appScreen(Routes.MAIN) {
             // 非首个 tab 按返回 → 收回「首页」(参考项目用 NavigationBackHandler 做同一件事)。
