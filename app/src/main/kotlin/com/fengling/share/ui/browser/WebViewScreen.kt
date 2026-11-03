@@ -304,23 +304,21 @@ fun WebViewScreen(
                         }
                     }
                 }
-                // ===== SPA 空白问题：不再做任何布局注入 =====
-                // v1.1.18 结论（真机对比 via 后定位）：
-                // Link3 这类页面的首屏结构是
-                //     <div id="index_loading" style="width:100%;height:100%">…</div><div id="app"></div>
-                // #index_loading 是**占满视口高度的普通流元素**，排在 #app 前面。页面自己的 JS
-                // 在 Vue mount 之后会把它移除；只要它还在，#app 就被顶到视口以下 → 用户看到的是
-                // 一屏米白 + 一个居中小圆点，也就是「内容不显示」。
+                // ===== SPA 空白问题：只做「高度塌陷自愈」，不做任何其它注入 =====
+                // 真机实测（v1.1.18 / build 139，logcat -s FLWebView）：
+                //   [FLdom/act] vh=686 vw=354 deH=0 deCS="0px" bodyH=0 bodyCS="0px"
+                //               appTxt=87 loading="yes h=0 disp=none"
+                // 解读：页面 JS 跑完了、loading 遮罩已被隐藏（disp=none）、#app 里已经有 87 个字符
+                // 的内容 —— 但 html 与 body 的**计算高度是 0px**。这些站点（Link3 等）的样式是
+                //   html{height:100%} body{position:relative;height:100%} #app{height:100%}
+                // WebView 里 html 的百分比高度一旦解析成 0，整条高度链就全塌成 0，#app 的高度
+                // 也是 0，overflow 又把超出部分裁掉 → 屏幕上什么都看不到，但 DOM 是有内容的。
+                // via / Chrome 的初始包含块高度正常，所以它们不塌。
                 //
-                // 之前这里注入的「高度塌陷修复」恰恰在帮倒忙：
-                //  - 给 html/body/#app 补 minHeight:100vh → 页面总高度被抬到 2 个视口以上，
-                //    原本靠 height:100% 撑满的滚动容器被推离视口；
-                //  - 删 #index_loading 的条件写成 `app.children.length > 0`，Vue 挂载前不满足，
-                //    挂载后又因为脚本 2.5s 就停了而错过，遮罩于是常驻。
-                // via / Edge 不做任何注入，所以它们正常 —— 结论就是：注入本身就是 bug 源。
-                //
-                // 现在只保留一条纯只读的 DOM 自检（只 console.log，绝不改样式），
-                // 方便以后再用 `logcat -s FLWebView` 定位真实原因。
+                // 教训（v1.1.18 之前）：不要给 html/body/#app 无条件补 minHeight:100vh ——
+                // 那会把页面总高抬到 2 个视口以上，反而把 height:100% 的滚动容器推离视口。
+                // 现在只在**真的探测到塌陷**（deH<=0 或 bodyH<=0 且 body 有内容）时，
+                // 给 html/body 设 100vh 把高度链重新接上；正常站点完全不受影响。
                 if (url?.startsWith("http") == true) {
                     runCatching {
                         view?.evaluateJavascript(
@@ -328,22 +326,32 @@ fun WebViewScreen(
                             (function(){
                               if (window.__flDomCheck) return;
                               window.__flDomCheck = true;
-                              var probe = function(tag){
+                              // 高度塌陷自愈: 只在 html/body 计算高度塌成 0 且页面确有内容时接管
+                              var fixCollapse = function(tag){
                                 try {
-                                  var de=document.documentElement,b=document.body;
-                                  var app=document.getElementById('app');
-                                  var ld=document.getElementById('index_loading');
+                                  var de=document.documentElement, b=document.body;
+                                  if (!de || !b) return;
+                                  var h=de.offsetHeight, bh=b.offsetHeight;
+                                  var hasContent=(b.innerText||'').length>0 ||
+                                                (document.getElementById('app')||{}).childElementCount>0;
                                   console.log('[FLdom] '+tag+
-                                    ' vh='+window.innerHeight+
-                                    ' bodyH='+(b?b.offsetHeight:-1)+
-                                    ' appKids='+(app?app.children.length:-1)+
-                                    ' textLen='+(b?b.innerText.length:-1)+
-                                    ' loadingStillThere='+(ld?'yes':'no'));
+                                    ' vh='+window.innerHeight+' vw='+window.innerWidth+
+                                    ' deH='+h+' deCS='+getComputedStyle(de).height+
+                                    ' bodyH='+bh+' bodyCS='+getComputedStyle(b).height+
+                                    ' compat='+document.compatMode+
+                                    ' hasContent='+(hasContent?'yes':'no'));
+                                  if (hasContent && (h<=0 || bh<=0)) {
+                                    de.style.height='100vh';
+                                    b.style.height='100vh';
+                                    b.style.minHeight='100vh';
+                                    console.log('[FLdom] '+tag+' 检测到高度塌陷, 已把 html/body 设为 100vh');
+                                  }
                                 } catch(e) { console.log('[FLdom] ERR '+e.message); }
                               };
-                              probe('t0');
-                              setTimeout(function(){probe('t1500')},1500);
-                              setTimeout(function(){probe('t4000')},4000);
+                              fixCollapse('t0');
+                              setTimeout(function(){fixCollapse('t800')},800);
+                              setTimeout(function(){fixCollapse('t2500')},2500);
+                              setTimeout(function(){fixCollapse('t5000')},5000);
                             })();
                             """.trimIndent()
                         ) { }
