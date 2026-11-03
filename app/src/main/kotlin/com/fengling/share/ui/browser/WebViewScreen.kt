@@ -236,10 +236,14 @@ fun WebViewScreen(
                 request: WebResourceRequest?,
                 error: android.webkit.WebResourceError?,
             ) {
+                Log.w(
+                    "FLWebView",
+                    "加载失败 ${if (request?.isForMainFrame == true) "主资源" else "子资源"}: " +
+                        "${request?.url} code=${error?.errorCode} desc=${error?.description}",
+                )
                 if (request?.isForMainFrame == true) {
                     loadError = "打不开这个页面（${error?.errorCode ?: -1}）"
                     progress = 100
-                    Log.w("FLWebView", "主资源加载失败: ${request.url} code=${error?.errorCode}")
                 }
             }
 
@@ -248,10 +252,14 @@ fun WebViewScreen(
                 request: WebResourceRequest?,
                 errorResponse: android.webkit.WebResourceResponse?,
             ) {
+                Log.w(
+                    "FLWebView",
+                    "HTTP ${errorResponse?.statusCode} " +
+                        "${if (request?.isForMainFrame == true) "主资源" else "子资源"}: ${request?.url}",
+                )
                 if (request?.isForMainFrame == true) {
                     loadError = "服务器返回 ${errorResponse?.statusCode ?: 0}"
                     progress = 100
-                    Log.w("FLWebView", "主资源 HTTP 错误: ${request.url} ${errorResponse?.statusCode}")
                 }
             }
 
@@ -293,58 +301,46 @@ fun WebViewScreen(
                         }
                     }
                 }
-                // 修复 SPA 页面在 WebView 中「内容空白只剩 fixed 元素」的两大元凶:
-                // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0
-                // 2) 首屏 loading 遮罩 (#index_loading) 应用挂载后未移除 → 一直盖在白屏上
+                // ===== SPA 空白问题：不再做任何布局注入 =====
+                // v1.1.18 结论（真机对比 via 后定位）：
+                // Link3 这类页面的首屏结构是
+                //     <div id="index_loading" style="width:100%;height:100%">…</div><div id="app"></div>
+                // #index_loading 是**占满视口高度的普通流元素**，排在 #app 前面。页面自己的 JS
+                // 在 Vue mount 之后会把它移除；只要它还在，#app 就被顶到视口以下 → 用户看到的是
+                // 一屏米白 + 一个居中小圆点，也就是「内容不显示」。
                 //
-                // v1.1.18 收紧（用户反馈「有些内容不显示」）：之前这个脚本会把 body / #app 的
-                // `height` 强行改成 `auto`。对使用 `height:100%; overflow:auto` 的滚动容器来说，
-                // 那一改直接把高度约束打掉 → 内部滚动区高度塌成 0 → 内容全被裁掉，症状正是
-                // 「页面打开了，但有些内容不显示」。现在**只补 minHeight，绝不碰 height**，
-                // 而且只在真的检测到塌陷时执行；resize/scroll 只在修复过的那一帧补发一次。
+                // 之前这里注入的「高度塌陷修复」恰恰在帮倒忙：
+                //  - 给 html/body/#app 补 minHeight:100vh → 页面总高度被抬到 2 个视口以上，
+                //    原本靠 height:100% 撑满的滚动容器被推离视口；
+                //  - 删 #index_loading 的条件写成 `app.children.length > 0`，Vue 挂载前不满足，
+                //    挂载后又因为脚本 2.5s 就停了而错过，遮罩于是常驻。
+                // via / Edge 不做任何注入，所以它们正常 —— 结论就是：注入本身就是 bug 源。
+                //
+                // 现在只保留一条纯只读的 DOM 自检（只 console.log，绝不改样式），
+                // 方便以后再用 `logcat -s FLWebView` 定位真实原因。
                 if (url?.startsWith("http") == true) {
                     runCatching {
                         view?.evaluateJavascript(
                             """
                             (function(){
-                              if (window.__flFixInstalled) return;
-                              window.__flFixInstalled = true;
-                              var log = function(m){ try { console.log('[FLfix] ' + m); } catch(e){} };
-                              var fixed = false;
-                              var fix = function(tag){
+                              if (window.__flDomCheck) return;
+                              window.__flDomCheck = true;
+                              var probe = function(tag){
                                 try {
-                                  var vh = window.innerHeight || document.documentElement.clientHeight;
-                                  var de = document.documentElement, b = document.body;
-                                  var app = document.getElementById('app');
-                                  var bh = b ? b.offsetHeight : -1;
-                                  var ah = app ? app.offsetHeight : -1;
-                                  log(tag + ' vh=' + vh + ' bodyH=' + bh + ' appH=' + ah + ' appKids=' + (app ? app.children.length : -1));
-                                  if (!vh || vh <= 0) return;
-                                  // 只补最小高度, 不改 height —— 改 height 会让页面自己的滚动容器塌成 0
-                                  if (bh >= 0 && bh < vh * 0.5) {
-                                    de.style.minHeight = '100vh';
-                                    if (b) b.style.minHeight = '100vh';
-                                    fixed = true;
-                                  }
-                                  if (app && ah >= 0 && ah < vh * 0.5) {
-                                    app.style.minHeight = '100vh';
-                                    fixed = true;
-                                  }
-                                  if (fixed) {
-                                    log(tag + ' 已补 minHeight');
-                                    window.dispatchEvent(new Event('resize'));
-                                  }
-                                  var ld = document.getElementById('index_loading');
-                                  if (ld && ld.parentNode && app && app.children.length > 0) {
-                                    ld.parentNode.removeChild(ld);
-                                    log(tag + ' 已移除首屏 loading 遮罩');
-                                  }
-                                } catch(e) { log(tag + ' ERR ' + e.message); }
+                                  var de=document.documentElement,b=document.body;
+                                  var app=document.getElementById('app');
+                                  var ld=document.getElementById('index_loading');
+                                  console.log('[FLdom] '+tag+
+                                    ' vh='+window.innerHeight+
+                                    ' bodyH='+(b?b.offsetHeight:-1)+
+                                    ' appKids='+(app?app.children.length:-1)+
+                                    ' textLen='+(b?b.innerText.length:-1)+
+                                    ' loadingStillThere='+(ld?'yes':'no'));
+                                } catch(e) { console.log('[FLdom] ERR '+e.message); }
                               };
-                              // 只重试到 2.5s —— 之前跑到 6s, 会让已经正常的页面被反复触发 relayout
-                              fix('t0');
-                              setTimeout(function(){fix('t800')},800);
-                              setTimeout(function(){fix('t2500')},2500);
+                              probe('t0');
+                              setTimeout(function(){probe('t1500')},1500);
+                              setTimeout(function(){probe('t4000')},4000);
                             })();
                             """.trimIndent()
                         ) { }
