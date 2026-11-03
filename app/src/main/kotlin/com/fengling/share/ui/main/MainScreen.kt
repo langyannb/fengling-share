@@ -4,7 +4,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -60,6 +63,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -200,6 +204,70 @@ object Routes {
  * (navigation-compose 的 SeekableTransitionState), 所以不能有 fadeIn/scaleIn。
  * 规格统一写在这里, 新增目的地直接 appScreen(route) 即可, 不会再出现「有的页面有动画有的没有」。
  */
+// ───────────────────────── 预测性返回：跟手层 ─────────────────────────
+// 参考项目（KernelSU-Style-UI-Kit）的「原生感」不是它自己画的，而是 miuix-nav 的
+// NavDisplayEffects 给的：进入/退出时被遮住的那一页整体压一层黑色 scrim（dimAmount = 0.5f，
+// 随跟手进度线性变化），同时当前页缩成带圆角的卡片。本仓库用不了 miuix-nav（只发 0.9.4，
+// 依赖 compose 1.12 + kotlin 2.4.20，与本仓库 1.11.4 / 2.4.10 不同代），所以在这里等价实现。
+//
+// 进度来源必须是框架的 seek：navigation-compose 的 NavHost 在预测性返回进行中会把手势进度
+// seek 进转场（SeekableTransitionState.seekTo），所以这里只读 AnimatedVisibilityScope.transition
+// 上由 Transition.animateFloat 产出的值 —— 它会被 seek 驱动，与手指 1:1，不需要（也不允许）
+// 再挂一个 PredictiveBackHandler（那就会变成用户报的「两层预测返回」）。
+private const val PREDICTIVE_BACK_DURATION_MS = 400
+
+/**
+ * 退出层最大压暗比例，对齐 miuix `NavDisplayEffects.dimAmount` 的默认值 0.5f ——
+ * 参考项目那层「暗色阴影」就是它。
+ */
+private const val PREDICTIVE_BACK_DIM = 0.5f
+
+/**
+ * 预测性返回的「暗色阴影」层：正在退出的那一页整体压暗，压暗程度跟手指 1:1。
+ *
+ * 为什么必须自己画：EnterTransition / ExitTransition 都是 sealed class（Compose 1.11.4
+ * EnterExitTransition.kt:101 / :193，实现类 private），只能组合 fadeIn/fadeOut/scaleIn/
+ * scaleOut/slideIn*/slideOut*，**没有任何办法在转场里叠一层颜色**。参考项目
+ * KernelSU-Style-UI-Kit 的那层暗色来自 miuix-nav 的 NavDisplayEffects.dimAmount（默认 0.5f），
+ * 而 miuix-nav 只在 0.9.4 发布（依赖 compose 1.12 + kotlin 2.4.20，与本仓库 1.11.4 / 2.4.10
+ * 不同代，引不进来），所以在这里等价实现。
+ *
+ * 进度来源必须是框架的 seek：预测性返回进行中，navigation-compose 的 NavHost 会把手势进度
+ * seek 进转场（SeekableTransitionState.seekTo → Transition.setPlaytimeAfterInitialAndTargetState
+ * Established → 递归 _transitions + _animations.seekTo）。这里读的
+ * AnimatedVisibilityScope.transition 是那条 Transition 的 child transition（
+ * createChildTransitionInternal 在父 isSeeking 时把 lastSeekedTimeNanos 一并传下来），
+ * 所以 animateFloat 出来的值就是手指进度 —— 1:1 跟手。
+ * **不需要也不允许**再挂一个 PredictiveBackHandler：那一层会和 NavHost 自己抢
+ * OnBackPressedDispatcher 的回调，位移叠两次 —— 就是用户此前报的「两层预测返回」。
+ *
+ * 只对退出层生效（targetState == PostExit）：进入层保持原样，否则 push 时新页一进来就是黑的。
+ * 稳定态 targetState == Visible，压暗恒为 0，本层完全不参与绘制（alpha 0 的 Box 不产生视觉）。
+ *
+ * 性能：alpha 只在 graphicsLayer 的 block 里读（deferred read），逐帧只重绘、不触发重组。
+ */
+@Composable
+private fun AnimatedContentScope.PredictivePageLayer(page: @Composable () -> Unit) {
+    // 与 pop 转场同长同曲线（400ms + LinearEasing），框架 seek 进来的 playTime 1:1 映射到这里。
+    val visible = transition.animateFloat(
+        transitionSpec = { tween(PREDICTIVE_BACK_DURATION_MS, easing = LinearEasing) },
+        label = "predictiveBackVisible",
+    ) { state -> if (state == EnterExitState.Visible) 1f else 0f }
+    val exiting = transition.targetState == EnterExitState.PostExit
+    Box(modifier = Modifier.fillMaxSize()) {
+        page()
+        // 压暗层盖在页面内容之上：跟手时整页一起变暗，松手完成时匀速加深，取消时匀速退回。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .graphicsLayer {
+                    alpha = if (exiting) PREDICTIVE_BACK_DIM * (1f - visible.value) else 0f
+                }
+                .background(Color.Black)
+        )
+    }
+}
+
 private fun NavGraphBuilder.appScreen(
     route: String,
     arguments: List<NamedNavArgument> = emptyList(),
@@ -219,13 +287,17 @@ private fun NavGraphBuilder.appScreen(
         // 进入: 新页从右滑入, 旧页向左让 1/4
         enterTransition = { slideInHorizontally(slideSpec) { it } },
         exitTransition = { slideOutHorizontally(slideSpec) { -it / 4 } },
-        // 返回: 系统手势进度会被 NavHost seek 进这段 pop 转场 —— 上一级从左侧轻微跟入,
-        // 当前页整屏右移 (1:1 跟手, 从哪来回哪去)。
-        // **不能 fadeIn / scaleIn**: 淡入会让跟手时被让出来的那半屏整片发白。
+        // 返回: 上一级从左侧轻微跟入 1/4, 当前页整屏右移 (1:1 跟手, 从哪来回哪去)。
+        // **不能 fadeIn**: 淡入会让跟手时被让出来的那半屏整片发白。
+        // 「暗色阴影」不在这里做 —— EnterTransition/ExitTransition 都是 sealed class, 只能组合
+        // fade/scale/slide 这些内置动画, 叠不上颜色。压暗交给 PredictivePageLayer。
         popEnterTransition = { slideInHorizontally(slideBackSpec) { -it / 4 } },
         popExitTransition = { slideOutHorizontally(slideBackSpec) { it } },
-        content = content,
-    )
+    ) { entry ->
+        PredictivePageLayer {
+            content(entry)
+        }
+    }
 }
 
 @Composable
