@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -227,7 +226,7 @@ private const val PREDICTIVE_BACK_DIM = 0.5f
  *
  * 为什么必须自己画：EnterTransition / ExitTransition 都是 sealed class（Compose 1.11.4
  * EnterExitTransition.kt:101 / :193，实现类 private），只能组合 fadeIn/fadeOut/scaleIn/
- * scaleOut/slideIn*/slideOut*，**没有任何办法在转场里叠一层颜色**。参考项目
+ * scaleOut、slideIn 系列、slideOut 系列，**没有任何办法在转场里叠一层颜色**。参考项目
  * KernelSU-Style-UI-Kit 的那层暗色来自 miuix-nav 的 NavDisplayEffects.dimAmount（默认 0.5f），
  * 而 miuix-nav 只在 0.9.4 发布（依赖 compose 1.12 + kotlin 2.4.20，与本仓库 1.11.4 / 2.4.10
  * 不同代，引不进来），所以在这里等价实现。
