@@ -343,18 +343,28 @@ fun WebViewScreen(
                                   var app=document.getElementById('app');
                                   var textLen=(b.innerText||'').length;
                                   var hasContent=textLen>0 || (app&&app.childElementCount>0);
+                                  // 注意: html/body 的 computed height 与 boundingRect 在 Android WebView 里
+                                  // 对**正常页面**也可能一直返回 0(实测 391fk.com 显示正常但两项都是 0),
+                                  // 所以它们只能当日志, 不能当判据。判据改用 body.scrollHeight:
+                                  // 它反映真实内容高度, 内容塌成 0 时才是 0。
                                   var htmlH=parseFloat(getComputedStyle(de).height)||0;
                                   var bodyH=parseFloat(getComputedStyle(b).height)||0;
                                   var bodyRectH=b.getBoundingClientRect().height;
+                                  var bodyScrollH=b.scrollHeight||0;
+                                  var kid=app&&app.firstElementChild;
+                                  var kr=kid?kid.getBoundingClientRect():null;
                                   console.log('[FLdom] '+tag+
                                     ' vh='+window.innerHeight+' vw='+window.innerWidth+
-                                    ' htmlH='+htmlH+' htmlCS='+getComputedStyle(de).height+
-                                    ' bodyH='+bodyH+' bodyCS='+getComputedStyle(b).height+
-                                    ' bodyRectH='+Math.round(bodyRectH)+
+                                    ' htmlH='+htmlH+' bodyH='+bodyH+' bodyRectH='+Math.round(bodyRectH)+
+                                    ' bodyScrollH='+bodyScrollH+
                                     ' compat='+document.compatMode+
                                     ' textLen='+textLen+' hasContent='+(hasContent?'yes':'no')+
+                                    ' appSample='+JSON.stringify((app?(app.innerText||''):'').replace(/\s+/g,' ').slice(0,80))+
+                                    ' kid='+(kid?(kid.tagName+' disp='+getComputedStyle(kid).display+' h='+Math.round(kr.height)+' w='+Math.round(kr.width)):'none')+
+                                    ' hit='+(function(){ try { var e=document.elementFromPoint(Math.round(window.innerWidth/2), Math.round(window.innerHeight/2)); return e?(e.tagName+'#'+(e.id||'')+'.'+String(e.className||'').slice(0,30)):'null'; } catch(e){ return 'ERR'; } })()+
+                                    ' bodyBg='+(getComputedStyle(b).backgroundColor||'')+
                                     ' fixed='+(window.__flFixed?'yes':'no'));
-                                  if (hasContent && htmlH<=0.5 && bodyRectH<=0.5) {
+                                  if (hasContent && bodyScrollH===0) {
                                     de.style.height='100vh';
                                     b.style.height='100vh';
                                     b.style.minHeight='100vh';

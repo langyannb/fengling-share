@@ -152,12 +152,41 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
                                 appTxt: app?(app.innerText||'').length:-1,
                                 textLen: b?(b.innerText||'').length:-1,
                                 loading: ld?('yes h='+ld.offsetHeight+' disp='+getComputedStyle(ld).display):'no',
+                                bodyScrollH2: b?b.scrollHeight:-1,
+                                appSample: app?((app.innerText||'').replace(/\s+/g,' ').slice(0,120)):'',
+                                appChild0: (app&&app.firstElementChild)?(app.firstElementChild.tagName+' disp='+getComputedStyle(app.firstElementChild).display+' h='+Math.round(app.firstElementChild.getBoundingClientRect().height)+' w='+Math.round(app.firstElementChild.getBoundingClientRect().width)):'none',
+                                hitCenter: (function(){ try { var e=document.elementFromPoint(Math.round(window.innerWidth/2), Math.round(window.innerHeight/2)); return e?(e.tagName+'#'+(e.id||'')+'.'+(e.className||'').toString().slice(0,40)):'null'; } catch(e){ return 'ERR'; } })(),
+                                bodyBg: b?getComputedStyle(b).backgroundColor:'',
                                 scripts: document.scripts.length,
                                 errs: (window.__flErrs||[]).slice(0,3)
                               });
                             } catch(e) { return 'ERR '+e.message; }
                           };
-                          setTimeout(function(){ console.log('[FLdom/act] '+probe('t1500')); }, 1500);
+                          // 与内置浏览器(WebViewScreen)同一套高度塌陷自愈:
+                          // Link3 这类页面 html 的 height:100% 在 WebView 里会解析成 0px,
+                          // 于是 body/#app 全部零高, 流内内容被 overflow 裁掉 => 只剩 position:fixed 的元素可见。
+                          // 判据用 computed height + body 的 boundingRect, 不能用 offsetHeight(正常页也返回 0)。
+                          var fixCollapse = function(tag){
+                            try {
+                              var de=document.documentElement, b=document.body;
+                              if (!de || !b) return;
+                              var app=document.getElementById('app');
+                              var textLen=(b.innerText||'').length;
+                              var hasContent=textLen>0 || (app&&app.childElementCount>0);
+                              // 注意: html/body 的 computed height 与 boundingRect 在 Android WebView 里
+                              // 对正常页面也可能一直返回 0(实测 391fk.com 正常显示但两项都是 0),
+                              // 所以不能用它们判断塌陷。这里改用 body.scrollHeight —— 它反映真实内容高度。
+                              var bodyScrollH=b.scrollHeight||0;
+                              if (hasContent && bodyScrollH===0) {
+                                de.style.height='100vh';
+                                b.style.height='100vh';
+                                b.style.minHeight='100vh';
+                                console.log('[FLdom/act] '+tag+' 高度塌陷, 已设为 100vh');
+                              }
+                            } catch(e) {}
+                          };
+                          setTimeout(function(){ fixCollapse('t800'); console.log('[FLdom/act] '+probe('t1500')); }, 1500);
+                          setTimeout(function(){ fixCollapse('t4000'); }, 4000);
                           setTimeout(function(){ console.log('[FLdom/act] '+probe('t5000')); }, 5000);
                           return probe('t0');
                         })();
