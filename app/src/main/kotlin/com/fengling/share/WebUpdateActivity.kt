@@ -2,6 +2,7 @@ package com.fengling.share
 
 import android.annotation.SuppressLint
 import android.os.Bundle
+import android.util.Log
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -62,9 +63,61 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
         settings.userAgentString =
             android.webkit.WebSettings.getDefaultUserAgent(context)
                 .replace("; wv", "")
-                .replace("Version/4.0", "")
-                .trim() + " Mobile"
-        webView.webViewClient = WebViewClient()
+                .replace(" Version/4.0", "")
+                .replace("Version/4.0 ", "")
+                .trim()
+                // 默认 UA 本就含 "Mobile Safari/537.36", 再拼一次会得到 "Mobile Mobile",
+                // 站点用 UA 正则校验时会判成非标准浏览器 → 下发残缺页面
+                .let { if (it.contains("Mobile")) it else "$it Mobile" }
+        // 诊断: console / 资源失败全部转发到 logcat (tag: FLWebView), 用于定位 Link3 白屏
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
+                Log.i("FLWebView", "console: ${m.message()} @${m.sourceId()}:${m.lineNumber()}")
+                return true
+            }
+        }
+        // DOM 自检: 与主内置浏览器同款探针, 只在 logcat (tag: FLWebView) 里看
+        webView.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(
+                v: WebView?, request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?,
+            ) {
+                Log.w("FLWebView", "ERR ${if (request?.isForMainFrame == true) "主" else "子"}: ${request?.url} code=${error?.errorCode} desc=${error?.description}")
+            }
+
+            override fun onReceivedHttpError(
+                v: WebView?, request: android.webkit.WebResourceRequest?,
+                r: android.webkit.WebResourceResponse?,
+            ) {
+                Log.w("FLWebView", "HTTP ${r?.statusCode} ${if (request?.isForMainFrame == true) "主" else "子"}: ${request?.url}")
+            }
+
+            override fun onPageFinished(view: WebView?, u: String?) {
+                super.onPageFinished(view, u)
+                runCatching {
+                    view?.evaluateJavascript(
+                        """
+                        (function(){
+                          try {
+                            var b=document.body, app=document.getElementById('app');
+                            var ld=document.getElementById('index_loading');
+                            return JSON.stringify({
+                              href: (location&&location.href)||'',
+                              vh: window.innerHeight,
+                              bodyH: b?b.offsetHeight:-1,
+                              appKids: app?app.children.length:-1,
+                              textLen: b?b.innerText.length:-1,
+                              loading: ld?'yes':'no',
+                              uaWv: navigator.userAgent.indexOf(' wv')>=0?'yes':'no',
+                              scripts: document.scripts.length
+                            });
+                          } catch(e) { return 'ERR '+e.message; }
+                        })();
+                        """
+                    ) { r -> Log.i("FLWebView", "[FLdom/act] $r") }
+                }
+            }
+        }
         webView.loadUrl(url)
     }
 
