@@ -2640,13 +2640,12 @@ private fun ChatView(
                 // 契约 C: 输入栏玻璃化 —— 固定层, 允许 backdrop 模糊, 拿不到就退化为半透明底
                 .fillMaxWidth()
                 .glassSurface(
-                    // 采样消息区的局部层 (v1.1.20): 输入栏是消息区的兄弟节点, 采样它不构成自引用
-                    backdrop = msgBackdrop,
+                    // 捕获层只框消息区, 输入栏整条落在层下方 —— 采样全是越界内容,
+                    // 模糊后会在右侧糊出一道深灰(真机截图可见, 高不透明度也压不住)。
+                    // 所以这里不接 backdrop: 用玻璃高光 + 内阴影做质感, 保证干净。
+                    backdrop = null,
                     shape = RoundedCornerShape(topStart = GlassRadius.panel, topEnd = GlassRadius.panel),
-                    // 输入栏本身在捕获层**下方**, 采样点会越过层的下边界。越界部分是透明的,
-                    // 模糊 + 锐化作用在透明上会算出脏灰色块 (真机截图里输入框右侧那块深灰)。
-                    // 提高一点不透明度压住它: 上面滚上来的消息仍能被糊出层次, 但不会露脏。
-                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.86f),
+                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.90f),
                 )
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2860,8 +2859,6 @@ private fun ChatView(
             visible = panelOpen,
             items = panelItems,
             onClose = { panelOpen = false },
-            // 采样消息区的局部层 —— 面板是消息区的兄弟节点, 不构成自引用
-            backdrop = msgBackdrop,
         )
         ChatEmojiPanel(
             visible = emojiOpen,
@@ -2874,7 +2871,6 @@ private fun ChatView(
                 }
             },
             onClose = { emojiOpen = false },
-            backdrop = msgBackdrop,
         )
         }
     }
@@ -3214,7 +3210,8 @@ private fun ChatView(
             ),
             actions = sheetActions,
             onDismiss = { actionTarget = null },
-            backdrop = msgBackdrop,
+            // 菜单从底部弹起, 下沿整段落在捕获层之外 → 采样到透明, 会糊出脏色。不接。
+            backdrop = null,
         )
     }
 

@@ -1308,13 +1308,15 @@ fun PmChatScreen(
                     .fillMaxWidth()
                     // v1.1.20: 接上真模糊, 采样消息区那一层
                     .glassSurface(
-                        backdrop = pmBackdrop,
+                        // 捕获层只框消息区, 输入栏整条落在层下方 —— 采样全是越界内容,
+                        // 模糊后会在右侧糊出一道深灰(真机截图可见, 高不透明度也压不住)。
+                        // 所以这里不接 backdrop: 用玻璃高光 + 内阴影做质感, 保证干净。
+                        backdrop = null,
                         shape = RoundedCornerShape(
                             topStart = GlassRadius.panel,
                             topEnd = GlassRadius.panel,
                         ),
-                        // 输入栏在捕获层下方, 采样点越界到透明区, 模糊后会算出脏灰色 → 提高不透明度压住
-                        fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.86f),
+                        fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.90f),
                     )
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1473,7 +1475,6 @@ fun PmChatScreen(
                 visible = panelOpen,
                 items = panelItems,
                 onClose = { panelOpen = false },
-                backdrop = pmBackdrop,
             )
             ChatEmojiPanel(
                 visible = emojiOpen,
@@ -1486,7 +1487,6 @@ fun PmChatScreen(
                     }
                 },
                 onClose = { emojiOpen = false },
-                backdrop = pmBackdrop,
             )
         }
     }
@@ -1559,7 +1559,8 @@ fun PmChatScreen(
             ),
             actions = sheetActions,
             onDismiss = { actionTarget = null },
-            backdrop = pmBackdrop,
+            // 菜单从底部弹起, 下沿整段落在捕获层之外 → 采样到透明, 会糊出脏色。不接。
+            backdrop = null,
         )
     }
 
