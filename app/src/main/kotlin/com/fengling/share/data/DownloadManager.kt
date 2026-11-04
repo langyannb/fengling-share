@@ -355,8 +355,18 @@ object Downloads {
         pump()
     }
 
-    /** 只清已完成/失败的记录, 保留文件 */
+    /**
+     * 清掉已完成/失败的记录, **连文件一起删**。
+     *
+     * 为什么不只删记录: 文件落在 App 私有外部目录 (getExternalFilesDir),
+     * 记录一没就再也没有入口能访问它 —— 用户的手机上只会多出一堆看不见的垃圾。
+     * 想留着文件的场景是「下完就去打开/安装」, 那属于当下动作, 不是事后翻列表。
+     */
     fun clearFinished() {
+        val gone = _tasks.value.filter {
+            it.state == DownloadState.DONE || it.state == DownloadState.FAILED
+        }
+        gone.forEach { runCatching { targetFile(it).delete() } }
         update { list -> list.filter { it.isActive || it.state == DownloadState.PAUSED } }
     }
 

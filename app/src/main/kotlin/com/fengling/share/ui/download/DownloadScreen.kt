@@ -154,7 +154,8 @@ fun DownloadScreen(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 TextButton(
-                                    text = "清除已完成",
+                                    // 会连文件一起删: 文件在 App 私有目录, 记录删掉就再也访问不到了
+                                    text = "清除已完成(含文件)",
                                     onClick = { Downloads.clearFinished() },
                                 )
                             }
