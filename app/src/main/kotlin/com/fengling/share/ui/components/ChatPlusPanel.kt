@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -167,45 +165,7 @@ fun ChatPlusPanel(
                 fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
             ),
     ) {
-        Spacer(Modifier.height(10.dp))
-        // ===== 顶部一行图标 (与截图排布一致: 图标在上、小字在下, 最右是关闭) =====
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            items.forEach { item ->
-                TopIconButton(item)
-            }
-            Spacer(Modifier.width(6.dp))
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
-                    .border(1.dp, glassStroke(), CircleShape)
-                    .clickable { onClose() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = "关闭面板",
-                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
         Spacer(Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp)
-                .height(1.dp)
-                .background(MiuixTheme.colorScheme.onBackground.copy(alpha = 0.06f)),
-        )
-        Spacer(Modifier.height(6.dp))
         // ===== 4 列网格 + 分页 (每页最多 8 个 = 2 行) =====
         val perPage = 8
         val pages = if (items.isEmpty()) 1 else (items.size + perPage - 1) / perPage
@@ -269,44 +229,6 @@ fun ChatPlusPanel(
         } else {
             Spacer(Modifier.height(10.dp))
         }
-    }
-}
-
-/** 顶部一行里的小图标 + 文字 */
-@Composable
-private fun TopIconButton(item: ChatPanelItem) {
-    Column(
-        modifier = Modifier
-            .padding(horizontal = 4.dp)
-            .width(56.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .clickable { item.onClick() }
-            .padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
-                .border(1.dp, glassStroke(), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = item.icon,
-                contentDescription = item.label,
-                tint = MiuixTheme.colorScheme.primary,
-                modifier = Modifier.size(21.dp),
-            )
-        }
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = item.label,
-            fontSize = 10.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            color = MiuixTheme.colorScheme.onBackgroundVariant,
-        )
     }
 }
 
