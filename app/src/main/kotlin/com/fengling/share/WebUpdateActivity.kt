@@ -42,7 +42,17 @@ class WebUpdateActivity : ComponentActivity() {
 @Composable
 private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val webView = remember { WebView(context) }
+    // layoutParams 必须显式设: Compose 的 AndroidView 不替子 View 设 LayoutParams,
+    // 拿到 0 高的容器时 WebView 会把页面 CSS 的百分比高度链全解析成 0 → 整页空白,
+    // 只有 position:fixed 的元素还能画出来。这是内置浏览器白屏的总根因, 三个 WebView 都要设。
+    val webView = remember {
+        WebView(context).apply {
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+    }
     // 契约 B: 预测性返回(跟手) —— 有网页历史先跟手回退网页, 没有历史整页退回上一页
     val backProgress = rememberPredictiveBackProgress(enabled = true) {
         if (webView.canGoBack()) webView.goBack() else onBack()
@@ -162,31 +172,10 @@ private fun WebUpdateScreen(url: String, onBack: () -> Unit) {
                               });
                             } catch(e) { return 'ERR '+e.message; }
                           };
-                          // 与内置浏览器(WebViewScreen)同一套高度塌陷自愈:
-                          // Link3 这类页面 html 的 height:100% 在 WebView 里会解析成 0px,
-                          // 于是 body/#app 全部零高, 流内内容被 overflow 裁掉 => 只剩 position:fixed 的元素可见。
-                          // 判据用 computed height + body 的 boundingRect, 不能用 offsetHeight(正常页也返回 0)。
-                          var fixCollapse = function(tag){
-                            try {
-                              var de=document.documentElement, b=document.body;
-                              if (!de || !b) return;
-                              var app=document.getElementById('app');
-                              var textLen=(b.innerText||'').length;
-                              var hasContent=textLen>0 || (app&&app.childElementCount>0);
-                              // 注意: html/body 的 computed height 与 boundingRect 在 Android WebView 里
-                              // 对正常页面也可能一直返回 0(实测 391fk.com 正常显示但两项都是 0),
-                              // 所以不能用它们判断塌陷。这里改用 body.scrollHeight —— 它反映真实内容高度。
-                              var bodyScrollH=b.scrollHeight||0;
-                              if (hasContent && bodyScrollH===0) {
-                                de.style.height='100vh';
-                                b.style.height='100vh';
-                                b.style.minHeight='100vh';
-                                console.log('[FLdom/act] '+tag+' 高度塌陷, 已设为 100vh');
-                              }
-                            } catch(e) {}
-                          };
-                          setTimeout(function(){ fixCollapse('t800'); console.log('[FLdom/act] '+probe('t1500')); }, 1500);
-                          setTimeout(function(){ fixCollapse('t4000'); }, 4000);
+                          // 废掉「探测到塌陷就改 html/body 为 100vh」那套自愈 ——
+                          // 塌陷的根因是 WebView 没拿到有尺寸的容器(见 WebUpdateScreen 里 layoutParams 的注释),
+                          // 在外层修掉之后再改页面样式只会把正常页面弄坏。这里只留诊断日志。
+                          setTimeout(function(){ console.log('[FLdom/act] '+probe('t1500')); }, 1500);
                           setTimeout(function(){ console.log('[FLdom/act] '+probe('t5000')); }, 5000);
                           return probe('t0');
                         })();

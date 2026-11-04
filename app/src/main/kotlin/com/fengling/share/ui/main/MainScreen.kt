@@ -836,7 +836,16 @@ private fun NoticeDialog(
                 )
 
                 // ── 内容: WebView 直接铺在卡片上 (透明底, 不再套一层灰色容器) ──
-                val webView = remember { WebView(context) }
+                // layoutParams 必须显式设: Compose 的 AndroidView 不替子 View 设 LayoutParams,
+                // 拿到 0 高的容器时 WebView 会把 CSS 百分比高度全解析成 0 (与内置浏览器同一个坑)。
+                val webView = remember {
+                    WebView(context).apply {
+                        layoutParams = android.view.ViewGroup.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                    }
+                }
                 LaunchedEffect(content) {
                     webView.settings.javaScriptEnabled = true
                     webView.settings.domStorageEnabled = true

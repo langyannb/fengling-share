@@ -68,6 +68,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import android.webkit.MimeTypeMap
 import android.app.DownloadManager
 import android.os.Environment
+import android.view.ViewGroup
 import android.widget.Toast
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.ExternalJumpDialog
@@ -103,7 +104,28 @@ fun WebViewScreen(
 
     // 每次进入创建全新 WebView 实例, 离开销毁:
     // 复用实例会残留上一链接的内部历史栈 → 返回键 goBack 回到旧链接
-    val webView = remember { WebView(context) }
+    //
+    // ⚠️ 必须显式给 layoutParams (这是「DOM 有内容却整页空白」的总根因):
+    // Compose 的 AndroidView 只负责测量/放置, 不会替子 View 设 LayoutParams。
+    // WebView 内部的 AwLayoutSizer 在拿不到「有尺寸的容器」时, 会给渲染树一个高度为 0 的
+    // 初始包含块 —— 于是 CSS 里所有百分比高度链 (html{height:100%} body{height:100%}
+    // #app{height:100%}) 全部解析成 0px, position:fixed 的元素因为有视口做参照反而还能画出来。
+    // 这正好对上实测现象:
+    //   · link3.cc:     整页空白, 只剩底部那个固定定位的紫色按钮
+    //   · aceyun.cn:    页面能显示, 但 van-popup / van-overlay 是 fixed + 100% 高 → 弹窗看不见
+    //   · pd.qq.com:    频道头/标签正常, 内容列表整片空白
+    // 而且 window.innerHeight 一直是正确值(686), 只有 html/body 的
+    // getComputedStyle/getBoundingClientRect 高度是 0 —— 很容易误判成「站点自己的 CSS 有毛病」,
+    // 之前的 100vh 注入自愈脚本就是被这个假象带偏的 (logcat 里反复生效但页面仍然空白)。
+    // 参考: stackoverflow.com/questions/77867390 (同症状, 同一个解法)
+    val webView = remember {
+        WebView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+    }
 
     // 配置 WebView (同步执行, 确保先于 loadUrl; 不用 LaunchedEffect 避免时序竞争导致
     // WebViewClient 未设置 → 页面加载绕过 shouldOverrideUrlLoading 拦截)
@@ -304,82 +326,27 @@ fun WebViewScreen(
                         }
                     }
                 }
-                // ===== SPA 空白问题：只做「高度塌陷自愈」，不做任何其它注入 =====
-                // 真机实测（v1.1.18 / build 139，logcat -s FLWebView）：
-                //   [FLdom/act] vh=686 vw=354 deH=0 deCS="0px" bodyH=0 bodyCS="0px"
-                //               appTxt=87 loading="yes h=0 disp=none"
-                // 解读：页面 JS 跑完了、loading 遮罩已被隐藏（disp=none）、#app 里已经有 87 个字符
-                // 的内容 —— 但 html 与 body 的**计算高度是 0px**。这些站点（Link3 等）的样式是
-                //   html{height:100%} body{position:relative;height:100%} #app{height:100%}
-                // WebView 里 html 的百分比高度一旦解析成 0，整条高度链就全塌成 0，#app 的高度
-                // 也是 0，overflow 又把超出部分裁掉 → 屏幕上什么都看不到，但 DOM 是有内容的。
-                // via / Chrome 的初始包含块高度正常，所以它们不塌。
-                //
-                // 教训（v1.1.18 之前）：不要给 html/body/#app 无条件补 minHeight:100vh ——
-                // 那会把页面总高抬到 2 个视口以上，反而把 height:100% 的滚动容器推离视口。
-                // 现在只在**真的探测到塌陷**时（html 的 computed height 解析成 0px 且 body 的
-                // getBoundingClientRect().height 也是 0，同时页面确有内容）给 html/body 设 100vh，
-                // 把高度链重新接上；正常站点完全不受影响。
-                // 判据不能用 offsetHeight：本 App 实测正常页面(391fk.com)的
-                // documentElement.offsetHeight 也会返回 0，用它会把好页面也「修」坏。
+                // ===== 只留一条诊断日志，不再注入任何布局修复 =====
+                // 废掉了「探测到高度塌陷就改 html/body 为 100vh」那套自愈脚本。
+                // 真机上它每次都「生效」了（logcat 里 fixed=yes 一路打出来），页面却依然空白 ——
+                // 因为塌陷不是站点 CSS 的问题，是 WebView 自己没拿到有尺寸的容器
+                // （见文件上方 layoutParams 的注释）。根因在外层修掉之后，这里再改页面样式
+                // 只会把正常站点也弄坏，所以整段删掉，只在 logcat 留一行尺寸，方便下次对照。
                 if (url?.startsWith("http") == true) {
                     runCatching {
                         view?.evaluateJavascript(
                             """
                             (function(){
-                              if (window.__flDomCheck) return;
-                              window.__flDomCheck = true;
-                              // 高度塌陷自愈: 只在 html 的 computed height 解析成 0, 且 body 可视高度也为 0,
-                              // 而页面确实有内容时接管。真机证据(build 141, link3.cc/aevum):
-                              //   deCS="0px" deRectH=0 bodyRectH=0 appTxt=87 loading="disp=none"
-                              //   → 流内内容全被压成 0 高, 只有 position:fixed 的页脚按钮还能画出来,
-                              //     也就是用户看到的那张「只有底部紫按钮」的白屏图。
-                              // 注意 offsetHeight 对 documentElement 不可靠(正常页面也可能给 0), 所以用
-                              // getComputedStyle 的 height + body 的 boundingRect 双重判据。
-                              var fixCollapse = function(tag){
-                                try {
-                                  var de=document.documentElement, b=document.body;
-                                  if (!de || !b) return;
-                                  var app=document.getElementById('app');
-                                  var textLen=(b.innerText||'').length;
-                                  var hasContent=textLen>0 || (app&&app.childElementCount>0);
-                                  // 注意: html/body 的 computed height 与 boundingRect 在 Android WebView 里
-                                  // 对**正常页面**也可能一直返回 0(实测 391fk.com 显示正常但两项都是 0),
-                                  // 所以它们只能当日志, 不能当判据。判据改用 body.scrollHeight:
-                                  // 它反映真实内容高度, 内容塌成 0 时才是 0。
-                                  var htmlH=parseFloat(getComputedStyle(de).height)||0;
-                                  var bodyH=parseFloat(getComputedStyle(b).height)||0;
-                                  var bodyRectH=b.getBoundingClientRect().height;
-                                  var bodyScrollH=b.scrollHeight||0;
-                                  var kid=app&&app.firstElementChild;
-                                  var kr=kid?kid.getBoundingClientRect():null;
-                                  console.log('[FLdom] '+tag+
-                                    ' vh='+window.innerHeight+' vw='+window.innerWidth+
-                                    ' htmlH='+htmlH+' bodyH='+bodyH+' bodyRectH='+Math.round(bodyRectH)+
-                                    ' bodyScrollH='+bodyScrollH+
-                                    ' compat='+document.compatMode+
-                                    ' textLen='+textLen+' hasContent='+(hasContent?'yes':'no')+
-                                    ' appSample='+JSON.stringify((app?(app.innerText||''):'').replace(/\s+/g,' ').slice(0,80))+
-                                    ' kid='+(kid?(kid.tagName+' disp='+getComputedStyle(kid).display+' h='+Math.round(kr.height)+' w='+Math.round(kr.width)):'none')+
-                                    ' hit='+(function(){ try { var e=document.elementFromPoint(Math.round(window.innerWidth/2), Math.round(window.innerHeight/2)); return e?(e.tagName+'#'+(e.id||'')+'.'+String(e.className||'').slice(0,30)):'null'; } catch(e){ return 'ERR'; } })()+
-                                    ' bodyBg='+(getComputedStyle(b).backgroundColor||'')+
-                                    ' fixed='+(window.__flFixed?'yes':'no'));
-                                  if (hasContent && bodyScrollH===0) {
-                                    de.style.height='100vh';
-                                    b.style.height='100vh';
-                                    b.style.minHeight='100vh';
-                                    window.__flFixed=true;
-                                    console.log('[FLdom] '+tag+' 高度塌陷, 已把 html/body 设为 100vh');
-                                  }
-                                } catch(e) { console.log('[FLdom] ERR '+e.message); }
-                              };
-                              fixCollapse('t0');
-                              setTimeout(function(){fixCollapse('t300')},300);
-                              setTimeout(function(){fixCollapse('t800')},800);
-                              setTimeout(function(){fixCollapse('t2500')},2500);
-                              setTimeout(function(){fixCollapse('t5000')},5000);
-                              // 视口变化(旋转/键盘/分屏)后重新判一次
-                              try { window.addEventListener('resize', function(){ setTimeout(function(){fixCollapse('resize')},200) }) } catch(e) {}
+                              if (window.__flProbe) return;
+                              window.__flProbe = true;
+                              try {
+                                var de=document.documentElement, b=document.body;
+                                console.log('[FLdom] vh='+window.innerHeight+' vw='+window.innerWidth+
+                                  ' deH='+Math.round(de.getBoundingClientRect().height)+
+                                  ' bodyH='+Math.round(b.getBoundingClientRect().height)+
+                                  ' textLen='+(b.innerText||'').length+
+                                  ' dpr='+window.devicePixelRatio);
+                              } catch(e) {}
                             })();
                             """.trimIndent()
                         ) { }
