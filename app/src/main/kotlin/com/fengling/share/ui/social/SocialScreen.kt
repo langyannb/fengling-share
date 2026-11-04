@@ -13,6 +13,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -612,9 +617,29 @@ fun SocialScreen(
                         // 列表滚上来时自然变成真毛玻璃。
                         .appGradientBackground(),
                 ) {
-                    when {
+                    // v1.1.20: 群组/私聊切换加 Telegram 式的横向滑动 + 淡入淡出。
+                    // 用 AnimatedContent 而不是 when 直切: 直切是硬闪一下, 观感很廉价;
+                    // 这里切 tab 时旧列表淡出微缩, 新列表从对应方向滑进来。
+                    AnimatedContent(
+                        targetState = if (showTabs) tab else 0,
+                        transitionSpec = {
+                            val dir = if (targetState > initialState) 1 else -1
+                            (fadeIn(tween(220, delayMillis = 60)) +
+                                slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) {
+                                    it * dir / 12
+                                })
+                                .togetherWith(
+                                    fadeOut(tween(150)) +
+                                        slideOutHorizontally(tween(200, easing = FastOutSlowInEasing)) {
+                                            -it * dir / 24
+                                        },
+                                )
+                        },
+                        label = "social-tab",
+                        modifier = Modifier.fillMaxSize(),
+                    ) { tabIndex -> when {
                         // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
-                        showTabs && tab == 1 -> PmScreen(
+                        tabIndex == 1 -> PmScreen(
                             onOpenChat = { userId, convId -> onOpenPm?.invoke(userId, convId) },
                             // 私聊列表进来没有群上下文 → groupId = 0 (全站视角)
                             onOpenUser = { uid -> onOpenUser?.invoke(uid, 0) },
@@ -644,7 +669,7 @@ fun SocialScreen(
                                 }
                             },
                         )
-                    }
+                    } }
                 }
                 // 群聊层: 盖在列表之上, 由 predictiveBackTransform 跟手右移 —— 滑到一半就能
                 // 看见下面真实的群列表 (ColorOS 16 的跟手返回), 松手回弹/提交都自然衔接
@@ -768,10 +793,17 @@ private fun GroupList(
                 SmallActionButton(text = "重新加载", onClick = onRetry)
             }
         }
-        else -> LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
-        ) {
+        else -> Box(modifier = Modifier.fillMaxSize()) {
+            // v1.1.20: 静默刷新也给出一点可见反馈, 否则用户以为界面卡住了
+            ChatRefreshBar(
+                visible = refreshing,
+                text = "正在刷新…",
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+            )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
+            ) {
             item {
                 // 顺手汇总一下未读总数 (免打扰的群也算在里面)
                 val totalUnread = groups.sumOf { it.unread }
@@ -790,6 +822,7 @@ private fun GroupList(
                     onClick = { onOpen(g) },
                     onOpenAt = { mid -> onOpenAt(g, mid) },
                 )
+            }
             }
         }
     }
