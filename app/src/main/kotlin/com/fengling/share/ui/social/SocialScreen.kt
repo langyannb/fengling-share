@@ -605,7 +605,12 @@ fun SocialScreen(
                         .then(if (group != null) Modifier.listBehindTransform(backProgress) else Modifier)
                         // v1.1.10: 背景捕获层只框住「列表」这一层 —— 群聊层滑走时它采样到的
                         // 就是下面那份真实列表; 以前框住两层, 采到上一帧的群聊画面 = 重影/透明感
-                        .layerBackdrop(listBackdrop),
+                        .layerBackdrop(listBackdrop)
+                        // v1.1.20: 渐变底必须画进捕获层内部。分段控件浮在列表**内容上方**的
+                        // 空档里, 那里除了渐变什么都没有 —— 层里一片透明时模糊+锐化会算出脏灰色,
+                        // 玻璃就退化成灰板 (真机验收发现的)。让它有渐变可采样: 静止时是柔和玻璃,
+                        // 列表滚上来时自然变成真毛玻璃。
+                        .appGradientBackground(),
                 ) {
                     when {
                         // 私聊 tab: 会话列表 (点会话交给外部导航打开聊天页)
