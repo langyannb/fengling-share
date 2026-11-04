@@ -107,6 +107,9 @@ import com.fengling.share.data.VideoThumbCache
 import com.fengling.share.data.compressVideoForUpload
 import com.fengling.share.data.shouldCompressVideo
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.chat.ChatActionRow
+import com.fengling.share.ui.components.chat.ChatAvatar
+import com.fengling.share.ui.components.chat.ChatCenterHint
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassSpacing
@@ -1080,10 +1083,17 @@ fun PmChatScreen(
                 // 契约 C: 页面级柔和渐变底 (静态绘制, 零模糊开销), 给气泡/图片垫层次
                 AppGradientBackground()
                 when {
-                    loading && messages.isEmpty() -> PmCenterHint("加载中…")
-                    messages.isEmpty() -> PmCenterHint(
-                        if (loadError.isNotBlank()) loadError
+                    // 私聊原本没有 textAlign (多行靠左), 这里显式传 null 保持不变
+                    loading && messages.isEmpty() -> ChatCenterHint(
+                        text = "加载中…",
+                        horizontalPadding = 32.dp,
+                        textAlign = null,
+                    )
+                    messages.isEmpty() -> ChatCenterHint(
+                        text = if (loadError.isNotBlank()) loadError
                         else "还没有聊过, 发条消息打个招呼吧",
+                        horizontalPadding = 32.dp,
+                        textAlign = null,
                     )
 
                     else -> LazyColumn(
@@ -1483,36 +1493,66 @@ fun PmChatScreen(
                     if (VideoProbe.isVideoMessage(acting.msgType, acting.video) &&
                         !VideoProbe.isVideoCleaned(acting.video, acting.content)
                     ) {
-                        PmActionRow(text = "全屏播放", danger = false, onClick = {
-                            val url = acting.video
-                            actionTarget = null
-                            fullscreenVideo = url
-                        })
+                        ChatActionRow(
+                            text = "全屏播放",
+                            danger = false,
+                            fontSize = 14.sp,
+                            verticalPadding = 10.dp,
+                            onClick = {
+                                val url = acting.video
+                                actionTarget = null
+                                fullscreenVideo = url
+                            },
+                        )
                     }
                     // 图片消息才有: 全屏看大图 / 存进系统相册
                     if (acting.image.isNotBlank()) {
-                        PmActionRow(text = "放大查看", danger = false, onClick = {
-                            actionTarget = null
-                            previewImage = acting.image
-                        })
-                        PmActionRow(text = "保存到相册", danger = false, onClick = {
-                            val img = acting.image
-                            actionTarget = null
-                            saveImageToGallery(img)
-                        })
+                        ChatActionRow(
+                            text = "放大查看",
+                            danger = false,
+                            fontSize = 14.sp,
+                            verticalPadding = 10.dp,
+                            onClick = {
+                                actionTarget = null
+                                previewImage = acting.image
+                            },
+                        )
+                        ChatActionRow(
+                            text = "保存到相册",
+                            danger = false,
+                            fontSize = 14.sp,
+                            verticalPadding = 10.dp,
+                            onClick = {
+                                val img = acting.image
+                                actionTarget = null
+                                saveImageToGallery(img)
+                            },
+                        )
                     }
                     // 纯图片消息没有文字, 不显示「复制」
                     if (acting.content.isNotBlank()) {
-                        PmActionRow(text = "复制", danger = false, onClick = {
-                            actionTarget = null
-                            copyMessage(acting.content)
-                        })
+                        ChatActionRow(
+                            text = "复制",
+                            danger = false,
+                            fontSize = 14.sp,
+                            verticalPadding = 10.dp,
+                            onClick = {
+                                actionTarget = null
+                                copyMessage(acting.content)
+                            },
+                        )
                     }
                     if (!acting.isRecalled && acting.mine) {
-                        PmActionRow(text = "撤回", danger = true, onClick = {
-                            actionTarget = null
-                            recallTarget = acting
-                        })
+                        ChatActionRow(
+                            text = "撤回",
+                            danger = true,
+                            fontSize = 14.sp,
+                            verticalPadding = 10.dp,
+                            onClick = {
+                                actionTarget = null
+                                recallTarget = acting
+                            },
+                        )
                     }
                 }
             },
@@ -1701,7 +1741,13 @@ private fun PmMessageRow(
                         detectTapGestures(onTap = { onAvatarTap() })
                     },
                 ) {
-                    PmAvatar(name = peerName, url = peerAvatar)
+                    ChatAvatar(
+                        url = peerAvatar,
+                        name = peerName,
+                        placeholder = "铃",
+                        contentScale = ContentScale.Fit,
+                        contentDescription = "头像",
+                    )
                 }
                 Spacer(Modifier.width(8.dp))
             }
@@ -1815,7 +1861,13 @@ private fun PmMessageRow(
                         detectTapGestures(onTap = { onAvatarTap() })
                     },
                 ) {
-                    PmAvatar(name = myName, url = myAvatar)
+                    ChatAvatar(
+                        url = myAvatar,
+                        name = myName,
+                        placeholder = "铃",
+                        contentScale = ContentScale.Fit,
+                        contentDescription = "头像",
+                    )
                 }
             }
         }
@@ -1842,66 +1894,6 @@ private fun pmMessageTime(raw: String): String {
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
     } catch (_: Exception) {
         ""
-    }
-}
-
-/** 私聊头像 (圆形, 没图用首字, 再没有用「铃」) */
-@Composable
-private fun PmAvatar(name: String, url: String) {
-    val initial = name.take(1).ifBlank { "铃" }
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (url.isNotBlank()) {
-            AsyncImage(
-                model = url,
-                contentDescription = "头像",
-                modifier = Modifier.size(34.dp).clip(CircleShape),
-            )
-        } else {
-            Text(
-                text = initial,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MiuixTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-/** 长按菜单里的一行 */
-@Composable
-private fun PmActionRow(text: String, danger: Boolean = false, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 10.dp),
-    ) {
-        Text(
-            text = text,
-            fontSize = 14.sp,
-            color = if (danger) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackground,
-        )
-    }
-}
-
-/** 空态 / 加载态提示 */
-@Composable
-private fun PmCenterHint(text: String) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            fontSize = 14.sp,
-            color = MiuixTheme.colorScheme.onBackgroundVariant,
-        )
     }
 }
 

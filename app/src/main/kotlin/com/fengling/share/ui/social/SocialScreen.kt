@@ -151,6 +151,10 @@ import com.fengling.share.ui.components.listBehindTransform
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.LinkText
+import com.fengling.share.ui.components.chat.ChatActionRow
+import com.fengling.share.ui.components.chat.ChatAvatar
+import com.fengling.share.ui.components.chat.ChatCenterHint
+import com.fengling.share.ui.components.chat.SmallActionButton
 import com.fengling.share.ui.components.ChatEmojiPanel
 import com.fengling.share.ui.components.ChatPanelItem
 import com.fengling.share.ui.components.ChatPlusPanel
@@ -723,7 +727,7 @@ private fun GroupList(
     topPadding: Dp = 0.dp,
 ) {
     when {
-        loading && groups.isEmpty() -> CenterHint("加载中…")
+        loading && groups.isEmpty() -> ChatCenterHint("加载中…")
         groups.isEmpty() -> Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -2274,8 +2278,8 @@ private fun ChatView(
 
         Box(Modifier.weight(1f)) {
             when {
-                loading && messages.isEmpty() -> CenterHint("加载中…")
-                messages.isEmpty() -> CenterHint("还没有人说话, 来打个招呼吧")
+                loading && messages.isEmpty() -> ChatCenterHint("加载中…")
+                messages.isEmpty() -> ChatCenterHint("还没有人说话, 来打个招呼吧")
                 else -> LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -3070,24 +3074,24 @@ private fun ChatView(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(6.dp))
-                    MessageActionRow(text = "引用") {
+                    ChatActionRow(text = "引用") {
                         actionTarget = null
                         quoteMessage(acting)
                     }
                     // 图片消息才有: 全屏看大图 / 存进系统相册
                     if (isImage) {
-                        MessageActionRow(text = "放大查看") {
+                        ChatActionRow(text = "放大查看") {
                             actionTarget = null
                             previewImage = acting.image
                         }
-                        MessageActionRow(text = "保存到相册") {
+                        ChatActionRow(text = "保存到相册") {
                             actionTarget = null
                             saveImageToGallery(acting.image)
                         }
                     }
                     // 复制: 把这句原文放进系统剪贴板。纯图片消息没有文字, 不显示「复制」
                     if (acting.content.isNotBlank()) {
-                        MessageActionRow(text = "复制") {
+                        ChatActionRow(text = "复制") {
                             actionTarget = null
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
                             if (cm != null) {
@@ -3101,7 +3105,7 @@ private fun ChatView(
                     // 管理员: 从消息菜单也能进「成员操作」(禁言) 面板 ——
                     // 点头像现在是进个人主页 (主页里也能禁言), 这里保证老入口不丢
                     if (isAdmin) {
-                        MessageActionRow(text = "成员操作") {
+                        ChatActionRow(text = "成员操作") {
                             val t = acting
                             actionTarget = null
                             openMemberPanel(t)
@@ -3109,7 +3113,7 @@ private fun ChatView(
                     }
                     // 撤回权限: 自己的消息 or 管理员, 已撤回的不再给入口
                     if (canRecall) {
-                        MessageActionRow(text = if (isImage) "删除图片" else "撤回", danger = true) {
+                        ChatActionRow(text = if (isImage) "删除图片" else "撤回", danger = true) {
                             actionTarget = null
                             recallTarget = acting
                         }
@@ -3359,20 +3363,6 @@ private fun ChatView(
     }
 }
 
-/** 「消息操作」菜单里的一行 (整行可点, 左对齐; danger = 撤回这类删除性操作) */
-@Composable
-private fun MessageActionRow(text: String, danger: Boolean = false, onClick: () -> Unit) {
-    Text(
-        text = text,
-        fontSize = 15.sp,
-        color = if (danger) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackground,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 9.dp),
-    )
-}
-
 /**
  * 消息 item 进场动画 (契约 C)
  *
@@ -3448,7 +3438,7 @@ private fun MessageRow(
                     )
                 },
             ) {
-                MessageAvatar(url = msg.avatar, name = msg.nickname)
+                ChatAvatar(url = msg.avatar, name = msg.nickname)
             }
             Spacer(Modifier.width(8.dp))
         }
@@ -3667,78 +3657,13 @@ private fun MessageRow(
                     detectTapGestures(onTap = { onAvatarTap() })
                 },
             ) {
-                MessageAvatar(url = msg.avatar, name = msg.nickname)
+                ChatAvatar(url = msg.avatar, name = msg.nickname)
             }
         }
     }
 }
 
-@Composable
-private fun MessageAvatar(url: String, name: String) {
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (url.isNotBlank()) {
-            AsyncImage(
-                model = url,
-                contentDescription = null,
-                modifier = Modifier.size(34.dp),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Text(
-                text = name.take(1).ifBlank { "群" },
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MiuixTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
 // ===================== 小工具 =====================
-
-@Composable
-private fun CenterHint(text: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            fontSize = 14.sp,
-            color = MiuixTheme.colorScheme.onBackgroundVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-/** 轻量操作按钮 (不依赖 AccountScreen 的私有按钮组件) */
-
-@Composable
-private fun SmallActionButton(text: String, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier,
-        cornerRadius = 12.dp,
-    ) {
-        Box(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = text,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = MiuixTheme.colorScheme.primary,
-            )
-        }
-    }
-}
 
 /**
  * 页面是否处于前台 (ON_RESUME ~ ON_PAUSE)
