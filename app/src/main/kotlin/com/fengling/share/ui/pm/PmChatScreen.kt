@@ -1835,14 +1835,20 @@ private fun PmMessageRow(
                         MiuixTheme.colorScheme.onBackground
                     },
                     onTextLayout = { textLayout = it },
+                    // v1.1.20 修 bug: 这里原来只有 onTap, detectTapGestures 会把长按也吃掉,
+                    // 结果是「文字气泡长按没反应」(图片气泡能长按, 因为它的手势里写了 onLongPress)。
+                    // 群聊那边一直是两个都写, 私聊漏了。
                     modifier = Modifier.pointerInput(msg.id) {
-                        detectTapGestures(onTap = { pos ->
-                            val lr = textLayout ?: return@detectTapGestures
-                            val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
-                            shown.getStringAnnotations("URL", off, off).firstOrNull()?.let { ann ->
-                                onOpenLink(ann.item)
-                            }
-                        })
+                        detectTapGestures(
+                            onLongPress = { onLongPress() },
+                            onTap = { pos ->
+                                val lr = textLayout ?: return@detectTapGestures
+                                val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
+                                shown.getStringAnnotations("URL", off, off).firstOrNull()?.let { ann ->
+                                    onOpenLink(ann.item)
+                                }
+                            },
+                        )
                     },
                 )
             }
