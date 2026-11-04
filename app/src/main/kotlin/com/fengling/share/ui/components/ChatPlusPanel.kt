@@ -167,7 +167,8 @@ fun ChatPlusPanel(
                     topEnd = GlassRadius.panel,
                 ),
                 fill = MiuixTheme.colorScheme.surface.copy(
-                    alpha = if (backdrop != null) 0.72f else 0.95f,
+                    // 面板在捕获层下方, 采样会越界; 越界处透明, 模糊后算出脏灰色 → 提高不透明度压住
+                    alpha = if (backdrop != null) 0.90f else 0.96f,
                 ),
             ),
     ) {
@@ -395,7 +396,8 @@ fun ChatEmojiPanel(
                     topEnd = GlassRadius.panel,
                 ),
                 fill = MiuixTheme.colorScheme.surface.copy(
-                    alpha = if (backdrop != null) 0.72f else 0.95f,
+                    // 面板在捕获层下方, 采样会越界; 越界处透明, 模糊后算出脏灰色 → 提高不透明度压住
+                    alpha = if (backdrop != null) 0.90f else 0.96f,
                 ),
             ),
     ) {

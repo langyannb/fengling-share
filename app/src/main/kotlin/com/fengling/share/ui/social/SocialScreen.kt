@@ -2643,7 +2643,10 @@ private fun ChatView(
                     // 采样消息区的局部层 (v1.1.20): 输入栏是消息区的兄弟节点, 采样它不构成自引用
                     backdrop = msgBackdrop,
                     shape = RoundedCornerShape(topStart = GlassRadius.panel, topEnd = GlassRadius.panel),
-                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.62f),
+                    // 输入栏本身在捕获层**下方**, 采样点会越过层的下边界。越界部分是透明的,
+                    // 模糊 + 锐化作用在透明上会算出脏灰色块 (真机截图里输入框右侧那块深灰)。
+                    // 提高一点不透明度压住它: 上面滚上来的消息仍能被糊出层次, 但不会露脏。
+                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.86f),
                 )
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,

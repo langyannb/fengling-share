@@ -1313,7 +1313,8 @@ fun PmChatScreen(
                             topStart = GlassRadius.panel,
                             topEnd = GlassRadius.panel,
                         ),
-                        fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.62f),
+                        // 输入栏在捕获层下方, 采样点越界到透明区, 模糊后会算出脏灰色 → 提高不透明度压住
+                        fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.86f),
                     )
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
