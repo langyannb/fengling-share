@@ -58,7 +58,6 @@ import com.fengling.share.data.UserStore
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.CaptchaDialog
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay

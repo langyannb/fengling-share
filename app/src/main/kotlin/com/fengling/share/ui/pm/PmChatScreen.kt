@@ -128,7 +128,6 @@ import com.fengling.share.ui.components.bitmapToJpeg
 import com.fengling.share.ui.components.linkify
 import com.fengling.share.ui.components.normalizeUrl
 import com.fengling.share.ui.lottery.LotteryScreen
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

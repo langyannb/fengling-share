@@ -72,7 +72,6 @@ import com.fengling.share.ui.components.LinkText
 import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.normalizeUrl
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

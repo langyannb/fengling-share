@@ -69,7 +69,6 @@ import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.ScreenshotSaveDialog
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.main.home.formatCount
 import com.fengling.share.ui.theme.isAppInDarkTheme
 import kotlinx.coroutines.launch

@@ -1,9 +1,15 @@
 package com.fengling.share.ui.main.home
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -331,26 +338,43 @@ fun HomeScreen(
                 }
             }
 
-            // 列表区 (只做短淡入淡出, 不做左右滑动)
+            // 列表区: 只在「切换分类」时做一次短促的上浮淡入, 加载完成不再二次淡入。
+            //
+            // 旧实现把 loading/apps 一起塞进 targetState —— 于是切一次分类会连播两次转场
+            // (旧列表 → 转圈 → 新列表), 观感就是「卡一下再闪一下」。现在 targetState 只认
+            // 分类 id: 加载中只叠一层细进度条, 列表本身留在原位, 数据到了直接换内容不转场。
             AnimatedContent(
-                targetState = HomeListState(effectiveCategoryId, apps, loading, error),
+                targetState = effectiveCategoryId,
                 transitionSpec = {
-                    fadeIn(tween(160)) togetherWith fadeOut(tween(120))
+                    // 用位置判断方向: 往下切分类列表从下方浮上来, 往上切从上方向下压。
+                    val forward = targetState > initialState
+                    val enter = fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
+                        slideInVertically(
+                            animationSpec = tween(260, easing = FastOutSlowInEasing),
+                            initialOffsetY = { h -> if (forward) h / 14 else -h / 14 },
+                        )
+                    val exit = fadeOut(tween(130, easing = FastOutSlowInEasing)) +
+                        slideOutVertically(
+                            animationSpec = tween(130, easing = FastOutSlowInEasing),
+                            targetOffsetY = { h -> if (forward) -h / 20 else h / 20 },
+                        )
+                    enter togetherWith exit
                 },
                 label = "homeList",
-            ) { state ->
-                when {
-                    state.loading && state.apps.isEmpty() -> {
-                        LoadingBox(Modifier.fillMaxSize())
-                    }
-                    state.error.isNotEmpty() && state.apps.isEmpty() -> {
-                        EmptyMessage(text = state.error)
-                    }
-                    state.apps.isEmpty() -> {
-                        EmptyMessage(text = "暂无软件")
-                    }
-                    else -> {
-                        LazyColumn(
+            ) { catId ->
+                val state = HomeListState(catId, apps, loading, error)
+                Box(Modifier.fillMaxSize()) {
+                    when {
+                        state.apps.isEmpty() && state.error.isNotEmpty() ->
+                            EmptyMessage(text = state.error)
+
+                        state.apps.isEmpty() && state.loading ->
+                            LoadingBox(Modifier.fillMaxSize())
+
+                        state.apps.isEmpty() ->
+                            EmptyMessage(text = "暂无软件")
+
+                        else -> LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(
                                 start = GlassSpacing.page, end = GlassSpacing.page, top = 4.dp,
@@ -369,6 +393,17 @@ fun HomeScreen(
                             }
                         }
                     }
+                    // 已有内容时换分类: 顶部压一条 2dp 的线性进度, 不打断列表
+                    if (state.loading && state.apps.isNotEmpty()) {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .align(Alignment.TopCenter)
+                                .padding(horizontal = GlassSpacing.page),
+                            color = MiuixTheme.colorScheme.primary,
+                            trackColor = Color.Transparent,
+                        )
+                    }
                 }
             }
         }
@@ -383,13 +418,28 @@ private fun CategoryChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    // 选中态的颜色/字重/内边距都走动画: 原来三项全是硬切, 点一下就是「啪」地跳变。
+    val bg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.primary
+        else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "chipBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onBackgroundVariant,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "chipFg",
+    )
+    val emphasis by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 700f),
+        label = "chipEmphasis",
+    )
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(18.dp))
-            .background(
-                if (selected) MiuixTheme.colorScheme.primary
-                else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            )
+            .background(bg)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -405,9 +455,8 @@ private fun CategoryChip(
         Text(
             text = name,
             fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MiuixTheme.colorScheme.onPrimary
-            else MiuixTheme.colorScheme.onBackgroundVariant,
+            fontWeight = FontWeight(400 + (200 * emphasis).toInt()), // 400 → 600
+            color = fg,
             maxLines = 1,
         )
     }

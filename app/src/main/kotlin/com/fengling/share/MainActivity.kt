@@ -54,7 +54,6 @@ import com.fengling.share.data.isNewerVersion
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.KeepAliveGuideHost
 import com.fengling.share.ui.components.PermissionGuideHost
-import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.main.MainScreen
 import com.fengling.share.ui.theme.AppTheme
 import com.fengling.share.ui.theme.ThemeState
@@ -116,9 +115,13 @@ class MainActivity : ComponentActivity() {
                 glassBottomBar = themeState.glassBottomBar,
                 predictiveBack = themeState.predictiveBack,
             ) {
-                ProvideNavigationEventDispatcher {
-                    MainScreen(onThemeChanged = refreshTheme)
-                }
+                // 不再自建 root NavigationEventDispatcher: activity 1.13.0 的 ComponentActivity
+                // 本身就是 NavigationEventDispatcherOwner, 并把系统返回事件 (OnBackInvokedInput)
+                // 接进了 onBackPressedDispatcher.eventDispatcher。这里再 provide 一个无 parent 的
+                // root 会把它整个遮住 —— 预测返回手势收不到事件, 只有程序化返回能用。
+                // LocalNavigationEventDispatcherOwner 是 compositionLocalWithHostDefaultOf,
+                // 不 provide 时自动走 view tree 找到 Activity 的那个。
+                MainScreen(onThemeChanged = refreshTheme)
                 // 启动自动权限引导 (v1.0.36): 通知系统框 -> 应用内一键允许 -> 厂商自启动提示
                 PermissionGuideHost()
                 // 一次性保活提示 (v1.1.2): 教用户在最近任务里锁定本应用, 弹过一次永不再弹

@@ -3,7 +3,6 @@ package com.fengling.share.ui.main
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,16 +59,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.navigation.NavController
-import androidx.navigation.NamedNavArgument
-import androidx.navigation.NavBackStackEntry
-import androidx.navigation.NavGraphBuilder
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PendingNav
@@ -99,6 +89,12 @@ import com.fengling.share.ui.components.rememberBlurBackdrop
 import com.fengling.share.ui.theme.LocalEnableBlur
 import com.fengling.share.ui.theme.LocalFloatingBottomBar
 import com.fengling.share.ui.theme.LocalGlassBottomBar
+import top.yukonga.miuix.kmp.nav.core.NavDisplay
+import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
+import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
+import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
+import top.yukonga.miuix.kmp.nav.transition.NavTransitions
+import com.fengling.share.ui.theme.LocalPredictiveBack
 import top.yukonga.miuix.kmp.basic.NavigationItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import com.fengling.share.ui.main.explore.ExploreScreen
@@ -130,84 +126,54 @@ private data class NavTab(val label: String, val icon: ImageVector)
 /** 「群组」在底部 tab 里的下标 (未登录时会被拦到登录页) */
 private const val SOCIAL_TAB_PAGE = 2
 
-/** 导航路由 */
-object Routes {
-    const val MAIN = "main"
-    const val DETAIL = "detail/{appId}"
-    const val WEBVIEW = "webview?url={url}&title={title}&password={password}"
-    const val UPDATE = "update?version={version}&url={url}&log={log}&mode={mode}&size={size}&date={date}"
-    const val CONTRIBUTORS = "contributors"
-    const val ACCOUNT = "account"
-    // 社交群组: 独立底部 tab「群组」进列表, 点群组进入全屏聊天
-    const val SOCIAL_GROUP = "social/group/{groupId}?messageId={messageId}&notice={notice}"
-    const val MESSAGES = "messages"
-    // 消息通知设置 (后台接收开关 + 通知/电池优化/自启动 权限引导)
-    const val NOTIFY_SETTINGS = "settings/notify"
-    // 主题设置 (明暗 / 主题色 / 色板风格 / 模糊 / 悬浮底栏 / 预测性返回)
-    const val THEME_SETTINGS = "settings/theme"
-    // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知 进入)
-    const val PM_CHAT = "pm/chat?convId={convId}&userId={userId}&messageId={messageId}"
-    // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己)
-    // groupId: 从群聊进来带群 id (主页上的禁言只对本群生效), 其它入口 = 0 全站视角
-    const val USER_PROFILE = "user/profile/{userId}?groupId={groupId}"
-    // 群详情页 (群聊页右上角「☰」进入: 群公告 / 群相册 / 群成员 / 消息免打扰 / 退出群聊)
-    const val GROUP_INFO = "social/group/{groupId}/info"
-    // 群成员列表页 (群详情页「查看全部 N 人」进入: 搜索 + 分页)
-    const val GROUP_MEMBERS = "social/group/{groupId}/members?name={name}"
-
-    fun detail(appId: Int) = "detail/$appId"
-    fun socialGroup(groupId: Int, messageId: Int = 0, notice: Boolean = false) =
-        "social/group/$groupId?messageId=$messageId&notice=" + if (notice) 1 else 0
-    fun pmChat(convId: Int = 0, userId: Int = 0, messageId: Int = 0) =
-        "pm/chat?convId=$convId&userId=$userId&messageId=$messageId"
-    fun userProfile(userId: Int, groupId: Int = 0) = "user/profile/$userId?groupId=$groupId"
-    fun groupInfo(groupId: Int) = "social/group/$groupId/info"
-    fun groupMembers(groupId: Int, name: String = "") =
-        "social/group/$groupId/members?name=${android.net.Uri.encode(name)}"
-    fun webview(url: String, title: String, password: String = "") =
-        "webview?url=${android.net.Uri.encode(url)}&title=${android.net.Uri.encode(title)}&password=${android.net.Uri.encode(password)}"
-    fun update(info: com.fengling.share.data.VersionInfo) =
-        "update?version=${android.net.Uri.encode(info.version)}&url=${android.net.Uri.encode(info.url)}" +
-            "&log=${android.net.Uri.encode(info.updateLog)}&mode=${android.net.Uri.encode(info.updateMode)}" +
-            "&size=${info.sizeMb}&date=${android.net.Uri.encode(info.releaseDate)}"
-}
-
 /**
- * MainScreen - 主界面 (OShin 风格重构)
- * - HorizontalPager: tab 左右滑动切换 (平滑滑动动画)
- * - 液态玻璃: 页面级 backdrop 捕获 + 玻璃底栏 (OShin 同款 kyant/backdrop)
- * - Navigation 返回栈: main → detail → webview
- * - WebViewScreen 每次进入创建全新实例 (不复用, 避免历史栈残留)
- */
-
-
-/**
- * 契约 B: NavHost 每个目的地**不写任何转场**, 全部走 Navigation 组件默认值。
+ * 目的地注册。
  *
- * 为什么连「进入右滑、返回右移」这套都撤掉:
- *   1. 用 Navigation 组件的应用自带预测性返回 (官方文档 predictive-back-gesture),
- *      进度由 NavHost 的 SeekableTransitionState 直接 seek 进**当前转场**;
- *      转场写得越自定义, 抬手收尾/取消回弹就越脱离框架自己的时长与曲线 ——
- *      用户反馈的「抬手了还卡一下、不丝滑」就是自定义 400ms tween 造成的。
- *   2. 之前还挂过一层自绘跟手层 (缩放/圆角/黑幕), 它与 NavHost 内置的
- *      PredictiveBackHandler 抢同一个返回回调, 位移叠两次 = 「两层预测返回」。
- *   3. 结论: 一个 transition 参数都不传, 四个方向全用 EnterTransition.Default /
- *      ExitTransition.Default, 观感与系统级预测返回一致, 也不会有我们自己的掉帧点。
- *
- * 新增目的地直接 appScreen(route) 即可, 不必再关心转场。
+ * 转场策略 (契约 B 的替代版):
+ *   - 全局默认走 [NavTransitions.MiuixDefault]: 进入页从右侧整宽滑入, 被覆盖页 1/4 宽视差 + 轻微变暗。
+ *     这套映射同时被「程序化 push/pop」和「手势跟手」复用 —— 同一个 float 驱动深度,
+ *     所以抬手收尾不会有第二套曲线, 也就不存在旧实现里「两层预测返回 / 抬手卡一下」。
+ *   - 用户在主题设置里关掉「预测性返回」时, 全局换成 [NavTransitions.None]:
+ *     identity 变换 + dismissDirection = None —— 返回照常可用, 但没有任何跟手位移。
+ *     这是真正让开关生效的地方 (旧实现里 Settings.predictiveBack 只写进了 CompositionLocal,
+ *     全项目没有一处读它, 所以关了也照旧有动画)。
  */
-
-private fun NavGraphBuilder.appScreen(
-    route: String,
-    arguments: List<NamedNavArgument> = emptyList(),
-    content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit,
+@Composable
+private fun AppNavDisplay(
+    navigator: AppNavigator,
+    modifier: Modifier = Modifier,
+    content: @Composable (Route) -> Unit,
 ) {
-    // 四段转场全部不传 = 用 Navigation 的默认值（见上方说明）。
-    composable(
-        route = route,
-        arguments = arguments,
-    ) { entry ->
-        content(entry)
+    val predictiveBack = LocalPredictiveBack.current
+    val transition = if (predictiveBack) NavTransitions.MiuixDefault else NavTransitions.None
+    // 屏幕圆角跟随设备 (卡片式进场时四角裁切才对得上机身)
+    val cornerRadius = rememberNavSystemCornerRadius()
+    val effects = remember(cornerRadius) {
+        NavDisplayEffects(
+            enableCornerClip = true,
+            cornerClipRadius = cornerRadius,
+            dimAmount = 0.5f,
+        )
+    }
+    // NavDisplay 内部 remember(content) 缓存了入口注册块, 所以开关变化时必须整体重建,
+    // 否则 swipeDismiss / transition 改了也不生效。
+    key(predictiveBack) {
+        NavDisplay(
+            backStack = navigator.backStack,
+            modifier = modifier,
+            onBack = { navigator.pop() },
+            transition = transition,
+            effects = effects,
+        ) {
+            entry<Page>(
+                contentKey = { it },
+                // 侧滑返回只在栈深 >1 时由库自己门控; 关掉预测返回时整个手势禁用
+                swipeDismiss = if (predictiveBack) NavSwipeDirection.LeftToRight
+                else NavSwipeDirection.None,
+            ) { page ->
+                content(page.route)
+            }
+        }
     }
 }
 
@@ -215,16 +181,19 @@ private fun NavGraphBuilder.appScreen(
 fun MainScreen(
     onThemeChanged: () -> Unit = {},
 ) {
-    val navController = rememberNavController()
+    val navigator = rememberAppNavigator()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
     // 所有内部导航统一走这里。
-    // v1.1.10: 自研快照层整个撤掉 —— navigation-compose 的 NavHost 自带预测性返回:
-    // 手势进度会 seek 它内部的 SeekableTransitionState (pop 时上一级被放在下层 zIndex),
-    // 上一级是**活的**页面, 不需要截图, 也就没有空白/卡顿。
-    fun go(route: String) {
-        navController.navigate(route)
+    // 返回栈由 miuix-nav 的 NavDisplay 驱动: 手势进度直接喂给同一个深度 float,
+    // 上一级是**活的**页面 (不用截图), 所以既没有空白也没有「两层预测返回」。
+    fun go(route: Route) {
+        navigator.push(route)
+    }
+
+    fun back() {
+        navigator.pop()
     }
 
     // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊) — OShin 同款方案
@@ -278,12 +247,12 @@ fun MainScreen(
                 t.groupId > 0 -> {
                     // 群聊在「群组」tab 里
                     pagerState.scrollToPage(SOCIAL_TAB_PAGE)
-                    go(Routes.socialGroup(t.groupId))
+                    go(Route.SocialGroup(t.groupId))
                 }
                 t.pmConvId > 0 -> {
                     // 私聊会话列表也在「群组」tab 里, 先切过去再压栈, 返回时落点才自然
                     pagerState.scrollToPage(SOCIAL_TAB_PAGE)
-                    go(Routes.pmChat(convId = t.pmConvId))
+                    go(Route.PmChat(convId = t.pmConvId))
                 }
             }
         }
@@ -294,7 +263,7 @@ fun MainScreen(
     LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
         if (!pagerState.isScrollInProgress) {
             if (pagerState.currentPage == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
-                go(Routes.ACCOUNT)
+                go(Route.Account)
                 pagerState.animateScrollToPage(lastAllowedPage)
             } else {
                 lastAllowedPage = pagerState.currentPage
@@ -319,7 +288,7 @@ fun MainScreen(
         // 腾讯频道 / QQ群 一律保持在内置浏览器打开 (2026-10-03 用户明确要求)。
         // 之前「交 QQ 客户端打开」的方案已撤销; 页面完整渲染改由 WebView 侧保障
         // (CookieManager 放开第三方 cookie + 反爬挑战页等待 + 渲染能力补齐), 见 WebViewScreen.kt。
-        go(Routes.webview(url, title, password))
+        go(Route.WebView(url, title, password))
     }
 
     // ===== 公告 (首页弹窗: 每日一次 / 每次打开 + 今日不再提示) =====
@@ -385,7 +354,7 @@ fun MainScreen(
                 if (!opened) {
                     // 没有应用能接管 → http(s) 回退内置浏览器, 不让用户卡住 (2026-10-03)
                     if (target.url.startsWith("http")) {
-                        go(Routes.webview(target.url, target.appLabel))
+                        go(Route.WebView(target.url, target.appLabel))
                     } else {
                         Toast.makeText(
                             context,
@@ -400,23 +369,17 @@ fun MainScreen(
         )
     }
 
-    // v1.1.15 保底: NavHost 外层铺一层不透明的 App 渐变底, 转场期间露出的永远是 App 底色,
+    // 保底: 返回栈外层铺一层不透明的 App 渐变底, 转场期间露出的永远是 App 底色,
     // 不会再露出窗口底色 (用户曾报的「返回过程一片空白」)。静态绘制, 不写状态。
     Box(modifier = Modifier.fillMaxSize().appGradientBackground()) {
-    NavHost(
-        navController = navController,
-        startDestination = Routes.MAIN,
-        modifier = Modifier.fillMaxSize(),
-        // 与 appScreen 一致: 不传任何转场 = Navigation 默认值。
-    ) {
-        appScreen(Routes.MAIN) {
-            // 非首个 tab 按返回 → 收回「首页」(参考项目用 NavigationBackHandler 做同一件事)。
-            // 这里故意用普通 BackHandler 而不是预测性返回: 参考项目本身也没有自绘跟手动画,
-            // 它把跟手整个交给系统/框架。本页在 NavHost 栈深 1 时 NavHost 的
-            // PredictiveBackHandler 是 disabled, 再挂一层自绘位移就变成「两层预测返回」。
-            // 另外 enabled 里判当前路由: 一旦栈里压上详情页, 就整个交回 NavHost。
-            val currentEntry by navController.currentBackStackEntryAsState()
-            val onMainRoute = currentEntry?.destination?.route == Routes.MAIN
+    AppNavDisplay(navigator = navigator, modifier = Modifier.fillMaxSize()) { route ->
+        when (route) {
+        is Route.Main -> {
+            // 非首个 tab 按返回 → 收回「首页」。
+            // Main 在栈底, 即使被上层页面盖住也仍然在组合中, 所以必须显式判「是不是栈顶」:
+            // 一旦压上详情页, 这里 enabled = false, 返回整个交回 NavDisplay 的预测返回。
+            // (BackHandler 的优先级是后组合的赢, 上层页面的 handler 也会盖过这里, 双保险)
+            val onMainRoute = navigator.top == Route.Main
             BackHandler(enabled = onMainRoute && pagerState.currentPage != 0) {
                 scope.launch { pagerState.animateScrollToPage(0) }
             }
@@ -443,7 +406,7 @@ fun MainScreen(
                             onSelect = { index ->
                                 if (index == SOCIAL_TAB_PAGE && !UserStore.isLoggedIn()) {
                                     // 未登录点「群组」: 直接去登录页, 不切到这个 tab (用户 2026-10-04 要求)
-                                    go(Routes.ACCOUNT)
+                                    go(Route.Account)
                                 } else {
                                     scope.launch { pagerState.animateScrollToPage(index) }
                                 }
@@ -465,7 +428,7 @@ fun MainScreen(
                 // contentPadding bottom 自行处理 (OShin 同款布局)。
                 // 注意: 这里故意不消费 Scaffold 的 innerPadding, 否则会和页面自带的
                 // 100/110.dp 底部留白叠成双份。
-                // 这里不再挂任何 predictiveBackTransform: 主页面在 NavHost 栈深 1,
+                // 这里不挂任何 predictiveBackTransform: 主页面在返回栈栈底,
                 // 页面本身没有「上一层」可揭示, 自绘跟手只会和框架的预测返回叠成两层。
                 Box(
                     Modifier
@@ -481,55 +444,55 @@ fun MainScreen(
                     ) { page ->
                         when (page) {
                             0 -> HomeScreen(
-                                onAppClick = { go(Routes.detail(it)) },
+                                onAppClick = { go(Route.Detail(it)) },
                                 onOpenUrl = { url, title ->
                                     // 内置浏览器打开
-                                    go(Routes.webview(url, title))
+                                    go(Route.WebView(url, title))
                                 },
                             )
-                            1 -> ExploreScreen(onAppClick = { go(Routes.detail(it)) })
+                            1 -> ExploreScreen(onAppClick = { go(Route.Detail(it)) })
                             2 -> SocialScreen(
                                 // 「群组」tab: 常驻列表页, 无返回栏; 点群组进全屏聊天
                                 onBack = null,
                                 // 契约 A: 分段选中值由本层持有并回传 (受控), 页面重建也不丢
                                 initialTab = socialTab,
                                 onTabChange = { socialTab = it },
-                                onOpenGroup = { g -> go(Routes.socialGroup(g.id)) },
+                                onOpenGroup = { g -> go(Route.SocialGroup(g.id)) },
                                 // 群聊消息里的链接: 内置浏览器打开
                                 onOpenWeb = { url, title -> openLink(url, title) },
-                                onNeedLogin = { go(Routes.ACCOUNT) },
+                                onNeedLogin = { go(Route.Account) },
                                 // 点群聊里任何人的头像: 打开用户主页 (带上群 id, 主页里可直接禁言)
-                                onOpenUser = { uid, gid -> go(Routes.userProfile(uid, gid)) },
+                                onOpenUser = { uid, gid -> go(Route.UserProfile(uid, gid)) },
 
                                 // 私聊会话列表点一条: 进私聊会话页
-                                onOpenPm = { uid, cid -> go(Routes.pmChat(cid, uid)) },
+                                onOpenPm = { uid, cid -> go(Route.PmChat(convId = cid, userId = uid)) },
                                 // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
-                                onOpenGroupAt = { gid, mid -> go(Routes.socialGroup(gid, mid)) },
+                                onOpenGroupAt = { gid, mid -> go(Route.SocialGroup(gid, mid)) },
                                 // 页面级捕获层: 「群组 / 私聊」液体玻璃分段控件用它做真实 backdrop 模糊
                                 glassBackdrop = backdrop,
                             )
                             else -> MyScreen(
                                 onOpenThemeSettings = {
-                                    go(Routes.THEME_SETTINGS)
+                                    go(Route.ThemeSettings)
                                 },
                                 onOpenWeb = { url, title ->
                                     // 自定义协议先弹确认框, http(s) 内置浏览器
                                     openLink(url, title)
                                 },
                                 onOpenUpdate = { info ->
-                                    go(Routes.update(info))
+                                    go(Route.Update(info.version, info.url, info.updateLog, info.updateMode, info.sizeMb, info.releaseDate))
                                 },
                                 onOpenContributors = {
-                                    go(Routes.CONTRIBUTORS)
+                                    go(Route.Contributors)
                                 },
                                 onOpenAccount = {
-                                    go(Routes.ACCOUNT)
+                                    go(Route.Account)
                                 },
                                 onOpenMessages = {
-                                    go(Routes.MESSAGES)
+                                    go(Route.Messages)
                                 },
                                 onOpenNotifySettings = {
-                                    go(Routes.NOTIFY_SETTINGS)
+                                    go(Route.NotifySettings)
                                 },
                             )
                         }
@@ -540,221 +503,163 @@ fun MainScreen(
         }
 
         // 详情页
-        appScreen(
-            route = Routes.DETAIL,
-            arguments = listOf(navArgument("appId") { type = NavType.IntType }),
-        ) { backStackEntry ->
-            val appId = backStackEntry.arguments?.getInt("appId") ?: 0
+        is Route.Detail -> {
             DetailScreen(
-                appId = appId,
-                onBack = { navController.popBackStack() },
+                appId = route.appId,
+                onBack = { back() },
                 onOpenWeb = { url, title, password ->
                     // 自定义协议先弹确认框, http(s) 内置浏览器
                     openLink(url, title, password)
                 },
                 onOpenSubApp = { subId ->
-                    go(Routes.detail(subId))
+                    go(Route.Detail(subId))
                 },
             )
         }
 
         // 内置浏览器
-        appScreen(
-            route = Routes.WEBVIEW,
-            arguments = listOf(
-                navArgument("url") { type = NavType.StringType; defaultValue = "" },
-                navArgument("title") { type = NavType.StringType; defaultValue = "" },
-                navArgument("password") { type = NavType.StringType; defaultValue = "" },
-            ),
-        ) { backStackEntry ->
-            val url = backStackEntry.arguments?.getString("url") ?: ""
-            val title = backStackEntry.arguments?.getString("title") ?: ""
-            val password = backStackEntry.arguments?.getString("password") ?: ""
+        is Route.WebView -> {
             WebViewScreen(
-                url = url,
-                title = title,
-                password = password,
-                onBack = { navController.popBackStack() },
+                url = route.url,
+                title = route.title,
+                password = route.password,
+                onBack = { back() },
             )
         }
 
         // 投稿名单页
-        appScreen(Routes.CONTRIBUTORS) {
+        is Route.Contributors -> {
             ContributorsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { back() },
             )
         }
 
         // 账号页 (登录 / 注册 / 个人资料)
-        appScreen(Routes.ACCOUNT) {
+        is Route.Account -> {
             AccountScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { back() },
             )
         }
 
         // 群组聊天页 (从「群组」tab 点进来, 直接进入指定群)
-        appScreen(
-            route = Routes.SOCIAL_GROUP,
-            arguments = listOf(
-                navArgument("groupId") { type = NavType.IntType },
-                // 从「消息」里的 @我 通知点进来时, 直接定位到那条消息
-                navArgument("messageId") { type = NavType.IntType; defaultValue = 0 },
-                // 群公告通知点进来时, 直接弹公告
-                navArgument("notice") { type = NavType.IntType; defaultValue = 0 },
-            ),
-        ) { backStackEntry ->
+        is Route.SocialGroup -> {
             SocialScreen(
                 onBack = {
-                    // 返回时直接回到主界面(群组 tab 的列表页)。
-                    // 原来用 popBackStack() 会落到「我的-社交群组」那一页(现已移除), 用户反馈返回位置不对
-                    navController.popBackStack(Routes.MAIN, false)
+                    // 返回时直接回到主界面(群组 tab 的列表页), 不停在中间层
+                    navigator.popToRoot()
                 },
-                initialGroupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
-                onNeedLogin = { go(Routes.ACCOUNT) },
-                initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
-                openNotice = (backStackEntry.arguments?.getInt("notice") ?: 0) == 1,
+                initialGroupId = route.groupId,
+                onNeedLogin = { go(Route.Account) },
+                initialMessageId = route.messageId,
+                openNotice = route.notice,
                 // 群聊消息里的链接: 内置浏览器打开
                 onOpenWeb = { url, title -> openLink(url, title) },
                 // 群聊里点头像: 带上当前群 id → 主页里就能直接禁言 (只对本群生效)
-                onOpenUser = { uid, gid -> go(Routes.userProfile(uid, gid)) },
-                onOpenPm = { uid, cid -> go(Routes.pmChat(cid, uid)) },
-                onOpenGroupAt = { gid, mid -> go(Routes.socialGroup(gid, mid)) },
+                onOpenUser = { uid, gid -> go(Route.UserProfile(uid, gid)) },
+                onOpenPm = { uid, cid -> go(Route.PmChat(convId = cid, userId = uid)) },
+                onOpenGroupAt = { gid, mid -> go(Route.SocialGroup(gid, mid)) },
                 // 群聊右上角「☰」: 进群详情页 (群公告 / 群相册 / 群成员 / 退出群聊)
-                onOpenGroupInfo = { gid -> go(Routes.groupInfo(gid)) },
+                onOpenGroupInfo = { gid -> go(Route.GroupInfo(gid)) },
                 glassBackdrop = backdrop,
             )
         }
 
-        // 群详情页 (契约 B6): 群公告 / 群相册 / 群成员 / 消息免打扰 / 全员禁言 / 退出群聊
-        appScreen(
-            route = Routes.GROUP_INFO,
-            arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
-        ) { backStackEntry ->
+        // 群详情页: 群公告 / 群相册 / 群成员 / 消息免打扰 / 全员禁言 / 退出群聊
+        is Route.GroupInfo -> {
             GroupInfoScreen(
-                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
-                onBack = { navController.popBackStack() },
-                onOpenMembers = { id -> go(Routes.groupMembers(id)) },
-                onOpenUser = { uid, id -> go(Routes.userProfile(uid, id)) },
+                groupId = route.groupId,
+                onBack = { back() },
+                onOpenMembers = { id -> go(Route.GroupMembers(id)) },
+                onOpenUser = { uid, id -> go(Route.UserProfile(uid, id)) },
                 // 群公告里的链接: 走内置浏览器
                 onOpenWeb = { url, title -> openLink(url, title) },
                 // 退出群聊成功: 直接回群列表 (群详情页 + 群聊页一起弹掉)
-                onLeft = { navController.popBackStack(Routes.MAIN, false) },
+                onLeft = { navigator.popToRoot() },
             )
         }
 
-        // 群成员列表页 (契约 B6): 搜索昵称 / 用户名 + 分页 + 点成员进主页
-        appScreen(
-            route = Routes.GROUP_MEMBERS,
-            arguments = listOf(
-                navArgument("groupId") { type = NavType.IntType },
-                navArgument("name") { type = NavType.StringType; defaultValue = "" },
-            ),
-        ) { backStackEntry ->
+        // 群成员列表页: 搜索昵称 / 用户名 + 分页 + 点成员进主页
+        is Route.GroupMembers -> {
             GroupMemberListScreen(
-                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
-                onBack = { navController.popBackStack() },
-                groupName = backStackEntry.arguments?.getString("name") ?: "",
-                onOpenUser = { uid, gid -> go(Routes.userProfile(uid, gid)) },
+                groupId = route.groupId,
+                onBack = { back() },
+                groupName = route.name,
+                onOpenUser = { uid, gid -> go(Route.UserProfile(uid, gid)) },
             )
         }
 
         // 消息中心 (通知列表; link 走统一链接分流, http(s) 内置浏览器)
-        appScreen(Routes.MESSAGES) {
+        is Route.Messages -> {
             MessagesScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { back() },
                 onOpenWeb = { url, title ->
                     openLink(url, title)
                 },
                 // @我 / 群消息通知: 跳进对应群聊并定位到那条消息; 群公告通知: 进群并弹出公告
                 onOpenGroup = { groupId, messageId, showNotice ->
-                    go(Routes.socialGroup(groupId, messageId, showNotice))
+                    go(Route.SocialGroup(groupId, messageId, showNotice))
                 },
                 // 私聊通知 (link = pm:<conv_id>:<msg_id>): 进私聊会话并定位到那条消息
                 onOpenPm = { convId, messageId ->
-                    go(Routes.pmChat(convId = convId, messageId = messageId))
+                    go(Route.PmChat(convId = convId, messageId = messageId))
                 },
             )
         }
 
         // 消息通知设置 (我的 -> 消息通知): 后台接收开关 + 权限引导
-        appScreen(Routes.NOTIFY_SETTINGS) {
+        is Route.NotifySettings -> {
             NotifySettingsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { back() },
             )
         }
 
         // 主题设置 (我的 -> 主题): 明暗 / 主题色 / 色板风格 / 模糊 / 悬浮底栏 / 预测性返回
-        appScreen(Routes.THEME_SETTINGS) {
+        is Route.ThemeSettings -> {
             ThemeSettingsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { back() },
                 onChanged = onThemeChanged,
             )
         }
 
         // 用户主页 (群聊 / 私聊里点任何人的头像进入, 含自己; 自己看时没有「发消息」按钮)
-        appScreen(
-            route = Routes.USER_PROFILE,
-            arguments = listOf(
-                navArgument("userId") { type = NavType.IntType },
-                // 群聊进来的群 id (禁言只对本群生效); 私聊/消息中心进来 = 0 (全站视角)
-                navArgument("groupId") { type = NavType.IntType; defaultValue = 0 },
-            ),
-        ) { backStackEntry ->
+        is Route.UserProfile -> {
             UserProfileScreen(
-                userId = backStackEntry.arguments?.getInt("userId") ?: 0,
-                groupId = backStackEntry.arguments?.getInt("groupId") ?: 0,
-                onBack = { navController.popBackStack() },
-                onOpenPm = { uid, cid -> go(Routes.pmChat(convId = cid, userId = uid)) },
+                userId = route.userId,
+                groupId = route.groupId,
+                onBack = { back() },
+                onOpenPm = { uid, cid -> go(Route.PmChat(convId = cid, userId = uid)) },
                 // 用户简介里的链接: 走内置浏览器
                 onOpenWeb = { url, title -> openLink(url, title) },
             )
         }
 
         // 私聊会话页 (会话列表 / 用户主页「发消息」/ 私聊通知进入)
-        appScreen(
-            route = Routes.PM_CHAT,
-            arguments = listOf(
-                navArgument("convId") { type = NavType.IntType; defaultValue = 0 },
-                navArgument("userId") { type = NavType.IntType; defaultValue = 0 },
-                // 从私聊通知点进来时定位到那条消息
-                navArgument("messageId") { type = NavType.IntType; defaultValue = 0 },
-            ),
-        ) { backStackEntry ->
+        is Route.PmChat -> {
             PmChatScreen(
-                initialConvId = backStackEntry.arguments?.getInt("convId") ?: 0,
-                initialUserId = backStackEntry.arguments?.getInt("userId") ?: 0,
-                initialMessageId = backStackEntry.arguments?.getInt("messageId") ?: 0,
-                onBack = { navController.popBackStack() },
+                initialConvId = route.convId,
+                initialUserId = route.userId,
+                initialMessageId = route.messageId,
+                onBack = { back() },
                 onOpenWeb = { url, title -> openLink(url, title) },
                 // 私聊里点头像: 没有群上下文 → groupId = 0 (全站视角)
-                onOpenUser = { uid -> go(Routes.userProfile(uid)) },
+                onOpenUser = { uid -> go(Route.UserProfile(uid)) },
             )
         }
 
         // 软件更新页 (OShin 同款: 下载并安装)
-        appScreen(
-            route = Routes.UPDATE,
-            arguments = listOf(
-                navArgument("version") { type = NavType.StringType; defaultValue = "" },
-                navArgument("url") { type = NavType.StringType; defaultValue = "" },
-                navArgument("log") { type = NavType.StringType; defaultValue = "" },
-                navArgument("mode") { type = NavType.StringType; defaultValue = "internal" },
-                navArgument("size") { type = NavType.FloatType; defaultValue = 0f },
-                navArgument("date") { type = NavType.StringType; defaultValue = "" },
-            ),
-        ) { backStackEntry ->
-            val args = backStackEntry.arguments
+        is Route.Update -> {
             UpdateScreen(
                 info = VersionInfo(
-                    version = args?.getString("version") ?: "",
-                    url = args?.getString("url") ?: "",
-                    updateLog = args?.getString("log") ?: "",
-                    updateMode = args?.getString("mode") ?: "internal",
-                    sizeMb = args?.getFloat("size") ?: 0f,
-                    releaseDate = args?.getString("date") ?: "",
+                    version = route.version,
+                    url = route.url,
+                    updateLog = route.log,
+                    updateMode = route.mode,
+                    sizeMb = route.sizeMb,
+                    releaseDate = route.date,
                 ),
-                onBack = { navController.popBackStack() },
+                onBack = { back() },
             )
+        }
         }
     }
     }
