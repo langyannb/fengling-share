@@ -143,8 +143,10 @@ fun ChatActionSheet(
                         topStart = GlassRadius.panel,
                         topEnd = GlassRadius.panel,
                     ),
+                    // 菜单要读得清: 捕获层只框了消息区, 面板下沿会盖到输入栏 ——
+                    // 那块区域在层里是空的, 底子太透就会把输入框文字透上来 (真机验收发现的)。
                     fill = MiuixTheme.colorScheme.surface.copy(
-                        alpha = if (backdrop != null) 0.72f else 0.96f,
+                        alpha = if (backdrop != null) 0.92f else 0.97f,
                     ),
                 )
                 .padding(horizontal = 18.dp, vertical = 10.dp),
