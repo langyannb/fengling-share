@@ -62,7 +62,7 @@ import com.fengling.share.ui.theme.isAppInDarkTheme
 /**
  * 液体玻璃分段控件 (v1.1.5 · 真玻璃版)
  *
- * 和底部导航栏 (`ui/components/navigation/LiquidBottomBar.kt`) 用**同一套** kyant backdrop 做法:
+ * 和底部悬浮导航栏 (`ui/components/navigation/FloatingBottomBar.kt`) 用**同一套** kyant backdrop 做法:
  *  - 底板: 页面捕获层毛玻璃 (vibrancy + blur + lens 折射) + 高光描边 + 内阴影 + 外阴影
  *  - 滑块: 采样「页面层 + 文字幽灵层」的合并 backdrop, 用 lens + 色散把底下的文字放大折射出来
  *          —— 液体玻璃真正的「放大镜」观感, 而不是一块半透明色块
