@@ -65,8 +65,17 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        // miuix 0.9.4 的产物是按 JVM target 21 编译的; 这里低于 21 的话,
+        // 调用它的 inline 函数 (NavDisplay 的 entry<>, rememberNavController<>) 会直接编译失败:
+        // "Cannot inline bytecode built with JVM target 21 into bytecode that is being built with JVM target 17"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
     }
 }
 
