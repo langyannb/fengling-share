@@ -1,19 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   数据提取规则 (Android 12 / API 31 及以上，由 AndroidManifest 的
+   android:dataExtractionRules="@xml/data_extraction_rules" 引用才会生效)。
+   见 https://developer.android.com/about/versions/12/backup-restore#xml-changes
 -->
 <data-extraction-rules>
   <cloud-backup>
-    <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+    <!-- token / 账号保险箱以明文存在 SharedPreferences 里，禁止云备份上传。 -->
+    <exclude domain="sharedpref" path="." />
   </cloud-backup>
-  <!--
-    <device-transfer>
-        <include .../>
-        <exclude .../>
-    </device-transfer>
-    -->
+  <!-- 换机迁移 (device-transfer) 保持默认行为；如需同样排除，取消下面注释。
+  <device-transfer>
+    <exclude domain="sharedpref" path="." />
+  </device-transfer>
+  -->
 </data-extraction-rules>
