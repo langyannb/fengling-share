@@ -53,6 +53,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 原来收/开用的是 spring (先冲一下再停), 加上收起最后一帧高度突变 → 用户反馈「卡一下再收起」。
  */
 internal const val CHAT_PANEL_ANIM_MS = 220
+/** 「+」面板里一行功能格的高度 (图标 52dp + 文字 + 上下留白) */
+private val PANEL_ROW_HEIGHT = 84.dp
 
 /**
  * 面板「从下往上滑出 / 向下收起」的布局变换 (v1.1.14)。
@@ -131,8 +133,7 @@ data class ChatPanelItem(
 /**
  * 「+」面板: 从输入框下方 spring 弹出, 圆角上沿 + 液体玻璃底, 高度约屏高 45%。
  *
- * 布局照 QQ 截图:
- *  顶部一行图标 (横向可滑, 末尾固定「关闭」) + 下面 4 列网格 (每页最多 8 个) + 分页圆点。
+ * 布局: 4 列网格 (每页最多 8 个 = 2 行) + 分页圆点, 面板高按实际行数贴合内容。
  * 超过一页时才会出现圆点与左右滑动翻页; 只有一页就不画圆点 (避免多余的 UI)。
  */
 @Composable
@@ -143,7 +144,21 @@ fun ChatPlusPanel(
     modifier: Modifier = Modifier,
     heightFraction: Float = 0.45f,
 ) {
-    val panelHeight = LocalConfiguration.current.screenHeightDp.dp * heightFraction
+    // 高度按内容的实际行数算, 不再固定占屏高 45% —— 只有 7 个功能时固定高度会把
+    // 两行网格拉到各占一半面板高, 行间留出一大片空白 (真机 q3.png 那样)。
+    val perRow = 4
+    val maxRows = 2
+    // 每页 8 个 (2 行 x 4 列); 实际画几行由该页的功能数决定, 一页放得下就不留空行
+    val pages = if (items.isEmpty()) 1 else (items.size + perRow * maxRows - 1) / (perRow * maxRows)
+    fun rowsOf(page: Int): Int {
+        val count = (items.size - page * perRow * maxRows).coerceIn(0, perRow * maxRows)
+        return if (count == 0) 1 else (count + perRow - 1) / perRow
+    }
+    // 多页时高度按满页算, 保证翻页时面板不跳高; 只有一页就直接贴合内容
+    val heightRows = if (pages > 1) maxRows else rowsOf(0)
+    val panelHeight = (
+        8.dp + PANEL_ROW_HEIGHT * heightRows + (if (pages > 1) 18.dp else 0.dp) + 8.dp
+        ).coerceAtMost(LocalConfiguration.current.screenHeightDp.dp * heightFraction)
     // 先起「摘除时机」(收起动画播完才整块移除), 再起进度动画 —— 两个 effect 的执行顺序
     // 就是这里的书写顺序, 这样展开的首帧进度仍停在 0, 面板不会先闪一下再滑上来。
     val panelInTree = panelMounted(visible)
@@ -167,8 +182,7 @@ fun ChatPlusPanel(
     ) {
         Spacer(Modifier.height(8.dp))
         // ===== 4 列网格 + 分页 (每页最多 8 个 = 2 行) =====
-        val perPage = 8
-        val pages = if (items.isEmpty()) 1 else (items.size + perPage - 1) / perPage
+        val perPage = perRow * maxRows
         val pagerState = rememberPagerState(pageCount = { pages })
         HorizontalPager(
             state = pagerState,
@@ -181,14 +195,15 @@ fun ChatPlusPanel(
                     .fillMaxSize()
                     .padding(horizontal = 12.dp),
             ) {
-                for (row in 0 until 2) {
+                val pageRows = rowsOf(page)
+                for (row in 0 until pageRows) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f),
+                            .height(PANEL_ROW_HEIGHT),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        for (col in 0 until 4) {
+                        for (col in 0 until perRow) {
                             val index = page * perPage + row * 4 + col
                             val item = items.getOrNull(index)
                             Box(
