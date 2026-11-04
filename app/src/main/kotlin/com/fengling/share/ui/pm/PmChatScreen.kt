@@ -48,6 +48,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -107,11 +112,17 @@ import com.fengling.share.data.VideoThumbCache
 import com.fengling.share.data.compressVideoForUpload
 import com.fengling.share.data.shouldCompressVideo
 import com.fengling.share.data.userFriendlyMessage
-import com.fengling.share.ui.components.chat.ChatActionRow
+import com.fengling.share.ui.components.chat.ChatActionSheet
 import com.fengling.share.ui.components.chat.ChatAvatar
 import com.fengling.share.ui.components.chat.ChatCenterHint
+import com.fengling.share.ui.components.chat.ChatRefreshBar
+import com.fengling.share.ui.components.chat.ChatSheetAction
+import com.fengling.share.ui.components.chat.RECALL_SHATTER_MS
+import com.fengling.share.ui.components.chat.RecallShatter
+import com.fengling.share.ui.components.chat.chatMenuSummary
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.SendState
 import com.fengling.share.ui.components.SendStatusIndicator
@@ -121,6 +132,7 @@ import com.fengling.share.ui.components.VideoBubble
 import com.fengling.share.ui.components.VideoFullscreenDialog
 import com.fengling.share.ui.components.VideoSendingBubble
 import com.fengling.share.ui.components.glassStroke
+import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.ChatEmojiPanel
 import com.fengling.share.ui.components.ChatPanelItem
 import com.fengling.share.ui.components.ChatPlusPanel
@@ -135,6 +147,8 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -180,6 +194,11 @@ fun PmChatScreen(
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
+    // v1.1.20: 只录「消息区」这一层 —— 输入栏 / 面板 / 长按菜单都采样它做真模糊。
+    // 绝不能传包含这些控件自身的捕获层: hwui 的 RenderNode 树会自引用无限递归 (真机 SIGSEGV 过)。
+    val pmBackdrop = rememberLayerBackdrop()
+    /** 正在播撤回破碎动画的消息 id */
+    var shatteringId by remember { mutableStateOf(0) }
     var sending by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
     // v1.1.12 乐观发送: 本地临时消息 (发送中转圈 / 失败可点重发), 服务端返回后用真实消息替换
@@ -1078,9 +1097,21 @@ fun PmChatScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            Box(Modifier.weight(1f)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .layerBackdrop(pmBackdrop),
+            ) {
                 // 契约 C: 页面级柔和渐变底 (静态绘制, 零模糊开销), 给气泡/图片垫层次
                 AppGradientBackground()
+                // 刷新浮层: 以前 refreshing 只是置位/复位, 界面上一点变化都没有
+                ChatRefreshBar(
+                    visible = refreshing,
+                    backdrop = pmBackdrop,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp),
+                )
                 when {
                     // 私聊原本没有 textAlign (多行靠左), 这里显式传 null 保持不变
                     loading && messages.isEmpty() -> ChatCenterHint(
@@ -1128,6 +1159,8 @@ fun PmChatScreen(
                             PmMessageRow(
                                 modifier = pmMessageItemEnter(),
                                 compact = compact,
+                                // 撤回破碎: 正在碎的这条把气泡切块飞散, 碎完才改数据
+                                shattering = msg.id == shatteringId,
                                 msg = msg,
                                 mine = mine,
                                 peerName = peer?.displayName.orEmpty(),
@@ -1273,7 +1306,15 @@ fun PmChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.94f))
+                    // v1.1.20: 接上真模糊, 采样消息区那一层
+                    .glassSurface(
+                        backdrop = pmBackdrop,
+                        shape = RoundedCornerShape(
+                            topStart = GlassRadius.panel,
+                            topEnd = GlassRadius.panel,
+                        ),
+                        fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.62f),
+                    )
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1431,6 +1472,7 @@ fun PmChatScreen(
                 visible = panelOpen,
                 items = panelItems,
                 onClose = { panelOpen = false },
+                backdrop = pmBackdrop,
             )
             ChatEmojiPanel(
                 visible = emojiOpen,
@@ -1443,6 +1485,7 @@ fun PmChatScreen(
                     }
                 },
                 onClose = { emojiOpen = false },
+                backdrop = pmBackdrop,
             )
         }
     }
@@ -1463,104 +1506,59 @@ fun PmChatScreen(
     }
 
     // ===== 长按消息: 复制 / 撤回 =====
+    // 长按菜单 (v1.1.20): 从 material3 AlertDialog 换成底部 ChatActionSheet ——
+    // 液体玻璃 + 弹簧进场 + 每行错开淡入, 和群聊、输入栏同一条模糊管线
     val acting = actionTarget
-    if (acting != null) {
-        AlertDialog(
-            onDismissRequest = { actionTarget = null },
-            title = {
-                Text(
-                    text = "消息操作",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                )
-            },
-            text = {
-                Column {
-                    // 菜单顶部先展示这条消息的摘要, 免得点错
-                    Text(
-                        text = if (acting.image.isNotBlank()) "[图片]"
-                        else if (VideoProbe.isVideoMessage(acting.msgType, acting.video)) "[视频]"
-                        else acting.content.replace('\n', ' ').take(60),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    // Wave 2: 视频消息才有 —— 全屏播放 (撤回等操作对视频一样可用, 不受影响)
-                    if (VideoProbe.isVideoMessage(acting.msgType, acting.video) &&
-                        !VideoProbe.isVideoCleaned(acting.video, acting.content)
-                    ) {
-                        ChatActionRow(
-                            text = "全屏播放",
-                            danger = false,
-                            fontSize = 14.sp,
-                            verticalPadding = 10.dp,
-                            onClick = {
-                                val url = acting.video
-                                actionTarget = null
-                                fullscreenVideo = url
-                            },
-                        )
-                    }
-                    // 图片消息才有: 全屏看大图 / 存进系统相册
-                    if (acting.image.isNotBlank()) {
-                        ChatActionRow(
-                            text = "放大查看",
-                            danger = false,
-                            fontSize = 14.sp,
-                            verticalPadding = 10.dp,
-                            onClick = {
-                                actionTarget = null
-                                previewImage = acting.image
-                            },
-                        )
-                        ChatActionRow(
-                            text = "保存到相册",
-                            danger = false,
-                            fontSize = 14.sp,
-                            verticalPadding = 10.dp,
-                            onClick = {
-                                val img = acting.image
-                                actionTarget = null
-                                saveImageToGallery(img)
-                            },
-                        )
-                    }
-                    // 纯图片消息没有文字, 不显示「复制」
-                    if (acting.content.isNotBlank()) {
-                        ChatActionRow(
-                            text = "复制",
-                            danger = false,
-                            fontSize = 14.sp,
-                            verticalPadding = 10.dp,
-                            onClick = {
-                                actionTarget = null
-                                copyMessage(acting.content)
-                            },
-                        )
-                    }
-                    if (!acting.isRecalled && acting.mine) {
-                        ChatActionRow(
-                            text = "撤回",
-                            danger = true,
-                            fontSize = 14.sp,
-                            verticalPadding = 10.dp,
-                            onClick = {
-                                actionTarget = null
-                                recallTarget = acting
-                            },
-                        )
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                M3TextButton(onClick = { actionTarget = null }) {
-                    Text("取消")
-                }
-            },
+    var lastActing by remember { mutableStateOf<PmMessage?>(null) }
+    LaunchedEffect(acting) { if (acting != null) lastActing = acting }
+    val sheetMsg = acting ?: lastActing
+    if (sheetMsg != null) {
+        val isVideoMsg = VideoProbe.isVideoMessage(sheetMsg.msgType, sheetMsg.video) &&
+            !VideoProbe.isVideoCleaned(sheetMsg.video, sheetMsg.content)
+        val isImage = sheetMsg.image.isNotBlank()
+        val sheetActions = remember(sheetMsg, isVideoMsg, isImage) {
+            listOfNotNull(
+                ChatSheetAction("fullscreen", "全屏播放", Icons.Filled.PlayArrow) {
+                    val url = sheetMsg.video
+                    actionTarget = null
+                    fullscreenVideo = url
+                }.takeIf { isVideoMsg },
+                ChatSheetAction("copy", "复制文字", Icons.Filled.ContentCopy) {
+                    actionTarget = null
+                    copyMessage(sheetMsg.content)
+                }.takeIf { sheetMsg.content.isNotBlank() },
+                ChatSheetAction("view", "放大查看", Icons.Filled.Visibility) {
+                    actionTarget = null
+                    previewImage = sheetMsg.image
+                }.takeIf { isImage },
+                ChatSheetAction("save", "保存到相册", Icons.Filled.Download) {
+                    val img = sheetMsg.image
+                    actionTarget = null
+                    saveImageToGallery(img)
+                }.takeIf { isImage },
+                ChatSheetAction(
+                    key = "recall",
+                    label = "撤回",
+                    icon = Icons.Filled.Delete,
+                    danger = true,
+                ) {
+                    actionTarget = null
+                    recallTarget = sheetMsg
+                }.takeIf { !sheetMsg.isRecalled && sheetMsg.mine },
+            )
+        }
+        ChatActionSheet(
+            visible = acting != null,
+            title = "消息操作",
+            summary = chatMenuSummary(
+                nickname = if (sheetMsg.mine) "我" else "对方",
+                content = sheetMsg.content,
+                isImage = isImage,
+                isVideo = isVideoMsg,
+            ),
+            actions = sheetActions,
+            onDismiss = { actionTarget = null },
+            backdrop = pmBackdrop,
         )
     }
 
@@ -1588,8 +1586,13 @@ fun PmChatScreen(
                 M3TextButton(onClick = {
                     val target = recalling
                     recallTarget = null
+                    // 先播破碎动画 (520ms), 碎完再真正改数据 ——
+                    // 顺序反了的话消息会先变成「该消息已撤回」, 那就没东西可碎了
+                    shatteringId = target.id
                     scope.launch {
-                        ApiClient.pmRecall(target.id)
+                        val result = ApiClient.pmRecall(target.id)
+                        delay(RECALL_SHATTER_MS.toLong())
+                        result
                             .onSuccess {
                                 messages = messages.map {
                                     if (it.id == target.id) {
@@ -1601,6 +1604,7 @@ fun PmChatScreen(
                                 onToast("已撤回")
                             }
                             .onFailure { e -> onToast(e.userFriendlyMessage()) }
+                        shatteringId = 0
                     }
                 }) {
                     Text("撤回", color = Color(0xFFE5484D))
@@ -1679,6 +1683,8 @@ fun PmChatScreen(
 private fun PmMessageRow(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    /** 正在播撤回破碎动画: 气泡切块飞散, 播完才会被改成「该消息已撤回」 */
+    shattering: Boolean = false,
     msg: PmMessage,
     mine: Boolean,
     peerName: String,
@@ -1752,6 +1758,8 @@ private fun PmMessageRow(
             }
         }
 
+        // 撤回破碎: 只包纯 Compose 画的气泡 (不包 AndroidView / 视频硬件 surface), 安全
+        RecallShatter(playing = shattering) {
         Column(
             modifier = Modifier
                 .widthIn(max = 260.dp)
@@ -1848,6 +1856,7 @@ private fun PmMessageRow(
                     MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.88f)
                 },
             )
+        }
         }
 
         if (mine) {

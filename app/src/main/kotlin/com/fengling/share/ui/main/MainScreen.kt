@@ -85,7 +85,6 @@ import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
 import com.fengling.share.ui.components.navigation.MainBottomBar
 import com.fengling.share.ui.components.rememberGlassBackdrop
-import com.fengling.share.ui.components.rememberGlassBackdrop2
 import com.fengling.share.ui.components.rememberBlurBackdrop
 import com.fengling.share.ui.theme.LocalEnableBlur
 import com.fengling.share.ui.theme.LocalFloatingBottomBar
@@ -203,12 +202,11 @@ fun MainScreen(
         navigator.pop()
     }
 
-    // 液态玻璃 backdrop (kyant/backdrop, 内容捕获 + 底栏模糊) — OShin 同款方案
-    // 只给 SocialScreen 的「群组/私聊」分段控件用。
-    val (backdrop, captureModifier) = rememberGlassBackdrop2()
-
-    // 底栏改用参考项目的 FloatingBottomBar, 它只认 miuix-blur 的 Backdrop ——
-    // 两套 backdrop 类型不兼容, 所以这里平行建第二份 (同一块内容被两个层各录一次, 代价可忽略)。
+    // 玻璃 backdrop 现在全项目只有一套 (miuix-blur), 见 ui/components/GlassCard.kt 的说明。
+    // v1.1.20 起这里不再建「页面级捕获层」给 SocialScreen: 那个层每帧都会把整屏录一遍
+    // GraphicsLayer, 却只被分段控件采样一次; 而分段控件真正想模糊的是它下面的群列表,
+    // 那份内容 SocialScreen 自己用一个局部层就够 (而且页面级层套住分段控件自身会自引用,
+    // hwui 的 RenderNode 树无限递归 → 真机 SIGSEGV, 已经踩过一次)。
     val enableBlur = LocalEnableBlur.current
     val floatingBar = LocalFloatingBottomBar.current
     val glassBar = LocalGlassBottomBar.current
@@ -445,7 +443,6 @@ fun MainScreen(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .then(captureModifier)
                         .then(barCaptureModifier),
                 ) {
                     // HorizontalPager: tab 左右滑动切换
@@ -480,8 +477,6 @@ fun MainScreen(
                                 onOpenPm = { uid, cid -> go(Route.PmChat(convId = cid, userId = uid)) },
                                 // 群列表点「有人@你 / 有人@所有人」: 进群并定位到那条消息
                                 onOpenGroupAt = { gid, mid -> go(Route.SocialGroup(gid, mid)) },
-                                // 页面级捕获层: 「群组 / 私聊」液体玻璃分段控件用它做真实 backdrop 模糊
-                                glassBackdrop = backdrop,
                             )
                             else -> MyScreen(
                                 onOpenThemeSettings = {
@@ -581,7 +576,6 @@ fun MainScreen(
                 onOpenGroupAt = { gid, mid -> go(Route.SocialGroup(gid, mid)) },
                 // 群聊右上角「☰」: 进群详情页 (群公告 / 群相册 / 群成员 / 退出群聊)
                 onOpenGroupInfo = { gid -> go(Route.GroupInfo(gid)) },
-                glassBackdrop = backdrop,
             )
         }
 

@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import top.yukonga.miuix.kmp.blur.Backdrop
 
 private const val TAG = "FLS_BACK"
 
@@ -144,23 +145,31 @@ fun Modifier.listBehindTransform(progress: State<Float>): Modifier = this.graphi
  *
  * 判断放在绘制阶段 (在 drawBackdrop 里读 BackReveal.progress): 只触发重绘、不触发重组,
  * 所以不会在起手那一下引起掉帧。
+ *
+ * v1.1.19: 跟着玻璃层一起从 kyant/backdrop 换到 miuix-blur 的 [Backdrop] —— 两套库的
+ * Backdrop 接口签名不同 (miuix 多一个 downscaleFactor), 换库时必须一起换。
  */
 private class RevealMutedBackdrop(
-    private val inner: com.kyant.backdrop.Backdrop,
-) : com.kyant.backdrop.Backdrop {
+    private val inner: Backdrop,
+) : Backdrop {
     override val isCoordinatesDependent: Boolean
         get() = inner.isCoordinatesDependent
+
+    override val offsetResidualX: Float
+        get() = inner.offsetResidualX
+    override val offsetResidualY: Float
+        get() = inner.offsetResidualY
 
     override fun DrawScope.drawBackdrop(
         density: Density,
         coordinates: LayoutCoordinates?,
         layerBlock: (GraphicsLayerScope.() -> Unit)?,
+        downscaleFactor: Int,
     ) {
         if (BackReveal.progress > 0f) return
-        with(inner) { drawBackdrop(density, coordinates, layerBlock) }
+        with(inner) { drawBackdrop(density, coordinates, layerBlock, downscaleFactor) }
     }
 }
 
 /** 给 backdrop 套上「跟手期间不折射」的壳 (见 [RevealMutedBackdrop]) */
-fun com.kyant.backdrop.Backdrop.mutedDuringReveal(): com.kyant.backdrop.Backdrop =
-    RevealMutedBackdrop(this)
+fun Backdrop.mutedDuringReveal(): Backdrop = RevealMutedBackdrop(this)

@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -144,6 +145,9 @@ fun ChatPlusPanel(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     heightFraction: Float = 0.45f,
+    /** v1.1.20: 调用方传「只录消息区」的局部捕获层, 面板就能真糊到上面的聊天记录。
+     *  千万别传包含面板自身的捕获层 —— RenderNode 树自引用会无限递归 (SIGSEGV)。 */
+    backdrop: Backdrop? = null,
 ) {
     val panelHeight = LocalConfiguration.current.screenHeightDp.dp * heightFraction
     // 先起「摘除时机」(收起动画播完才整块移除), 再起进度动画 —— 两个 effect 的执行顺序
@@ -157,13 +161,14 @@ fun ChatPlusPanel(
             .chatPanelSlide(progress, with(LocalDensity.current) { panelHeight.roundToPx() })
             .height(panelHeight)
             .glassSurface(
-                // 面板在捕获层内部, 不能自引用 backdrop → 退化为半透明玻璃底
-                backdrop = null,
+                backdrop = backdrop,
                 shape = RoundedCornerShape(
                     topStart = GlassRadius.panel,
                     topEnd = GlassRadius.panel,
                 ),
-                fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.95f),
+                fill = MiuixTheme.colorScheme.surface.copy(
+                    alpha = if (backdrop != null) 0.72f else 0.95f,
+                ),
             ),
     ) {
         Spacer(Modifier.height(10.dp))
@@ -369,6 +374,8 @@ fun ChatEmojiPanel(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     heightFraction: Float = 0.30f,
+    /** 同 ChatPlusPanel.backdrop */
+    backdrop: Backdrop? = null,
 ) {
     val panelHeight = LocalConfiguration.current.screenHeightDp.dp * heightFraction
     // 先起「摘除时机」(收起动画播完才整块移除), 再起进度动画 —— 两个 effect 的执行顺序
@@ -382,12 +389,14 @@ fun ChatEmojiPanel(
             .chatPanelSlide(progress, with(LocalDensity.current) { panelHeight.roundToPx() })
             .height(panelHeight)
             .glassSurface(
-                backdrop = null,
+                backdrop = backdrop,
                 shape = RoundedCornerShape(
                     topStart = GlassRadius.panel,
                     topEnd = GlassRadius.panel,
                 ),
-                fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.95f),
+                fill = MiuixTheme.colorScheme.surface.copy(
+                    alpha = if (backdrop != null) 0.72f else 0.95f,
+                ),
             ),
     ) {
         Row(

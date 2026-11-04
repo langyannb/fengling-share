@@ -53,6 +53,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Reply
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEmotions
@@ -132,9 +138,9 @@ import com.fengling.share.data.shouldCompressVideo
 import com.fengling.share.data.User
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.isSystemMessage
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.BackReveal
 import com.fengling.share.ui.components.AppTopBar
@@ -151,10 +157,15 @@ import com.fengling.share.ui.components.listBehindTransform
 import com.fengling.share.ui.components.predictiveBackTransform
 import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.LinkText
-import com.fengling.share.ui.components.chat.ChatActionRow
+import com.fengling.share.ui.components.chat.ChatActionSheet
 import com.fengling.share.ui.components.chat.ChatAvatar
 import com.fengling.share.ui.components.chat.ChatCenterHint
+import com.fengling.share.ui.components.chat.ChatRefreshBar
+import com.fengling.share.ui.components.chat.ChatSheetAction
+import com.fengling.share.ui.components.chat.RECALL_SHATTER_MS
+import com.fengling.share.ui.components.chat.RecallShatter
 import com.fengling.share.ui.components.chat.SmallActionButton
+import com.fengling.share.ui.components.chat.chatMenuSummary
 import com.fengling.share.ui.components.ChatEmojiPanel
 import com.fengling.share.ui.components.ChatPanelItem
 import com.fengling.share.ui.components.ChatPlusPanel
@@ -293,7 +304,13 @@ fun SocialScreen(
     onOpenGroupAt: ((groupId: Int, messageId: Int) -> Unit)? = null,
     /** 点右上角「☰」: 打开群详情页 (群头像/成员/公告/相册/设置; 契约 B6) */
     onOpenGroupInfo: ((groupId: Int) -> Unit)? = null,
-    /** 页面级捕获层 (MainScreen 的 backdrop): 液体玻璃分段控件用它做真实 backdrop 模糊 */
+    /**
+     * 页面级捕获层 (v1.1.20 起已停用, 保留参数只为不打断既有调用点)。
+     *
+     * 现在玻璃层全部在页面内部自建: 群列表层用 [listBackdrop] 给分段控件采样,
+     * ChatView 用消息区的局部层给输入栏 / 面板 / 长按菜单采样。
+     * 不再从 MainScreen 传页面级层下来 —— 那个层只会录到「页面自己」, 套住控件会自引用。
+     */
     glassBackdrop: Backdrop? = null,
     /** 「群组 / 私聊」分段选中值 (0 群组 / 1 私聊), 由 MainScreen 常驻持有后传入 (契约 A) */
     initialTab: Int = 0,
@@ -1032,7 +1049,14 @@ private fun ChatView(
      * 所以把面板状态报给上层, 让上层把预测返回关掉, 这次返回交给 ChatView 自己的 BackHandler。
      */
     onPanelVisibilityChanged: (Boolean) -> Unit = {},
-    /** 页面级捕获层: 输入栏 / 顶栏做毛玻璃用, null 时自动退化为半透明底 (契约 C) */
+    /**
+     * 页面级捕获层 (v1.1.20 起不再使用, 保留参数只为不打断调用点)。
+     *
+     * 以前 MainScreen 建一个页面级 GraphicsLayer 传进来, 但这个参数从头到尾没被读过 ——
+     * 输入栏 / 面板只能拿到 null, 于是它们只能画成「90% 不透明的纯色」, 看着像玻璃其实没有模糊。
+     * 现在改为 ChatView 内部自建 [msgBackdrop]: 只录消息区 (不含输入栏和面板自身),
+     * 输入栏 / 面板 / 长按菜单都采样它, 真模糊且不会自引用递归。
+     */
     glassBackdrop: Backdrop? = null,
     /** 群聊层自己的 modifier: 群组页拿它做可预测式返回的跟手变换 (v1.1.8) */
     modifier: Modifier = Modifier,
@@ -1042,6 +1066,11 @@ private fun ChatView(
     val context = LocalContext.current
     val listState = rememberLazyListState()
     val foreground = rememberIsForeground()
+    // 消息区的局部捕获层: 输入栏 / 面板 / 长按菜单采样它就得到真实模糊。
+    // 只框消息区这一层, 绝不包含采样它的控件自身 —— 否则 hwui 的 RenderNode 树会无限递归。
+    val msgBackdrop = rememberLayerBackdrop()
+    // 撤回破碎动画: 正在播动画的那条消息 id (0 = 没有)
+    var shatteringId by remember { mutableStateOf(0) }
     // 契约 B3: 「加入群聊」请求进行中 (防重复点)
     var joining by remember(group.id) { mutableStateOf(false) }
 
@@ -2276,7 +2305,20 @@ private fun ChatView(
             }
         }
 
-        Box(Modifier.weight(1f)) {
+        // 消息区: 同时录进 msgBackdrop —— 下面的输入栏 / 面板 / 长按菜单都采样它做真模糊
+        Box(
+            Modifier
+                .weight(1f)
+                .layerBackdrop(msgBackdrop),
+        ) {
+            // 刷新浮层: 以前 refreshing 只是「置位/复位」没人看, 用户以为卡住了
+            ChatRefreshBar(
+                visible = refreshing,
+                backdrop = msgBackdrop,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 8.dp),
+            )
             when {
                 loading && messages.isEmpty() -> ChatCenterHint("加载中…")
                 messages.isEmpty() -> ChatCenterHint("还没有人说话, 来打个招呼吧")
@@ -2316,7 +2358,10 @@ private fun ChatView(
                             )
                         } else {
                         val mine = me != null && msg.userId == me.id
+                        // 撤回破碎: 正在碎的这条把气泡录进图层切块播动画, 碎完再真正改数据
+                        val shattering = msg.id == shatteringId
                         MessageRow(
+                            shattering = shattering,
                             msg = msg,
                             mine = mine,
                             canRecall = !msg.isRecalled && (mine || isAdmin),
@@ -2557,10 +2602,10 @@ private fun ChatView(
                 // 契约 C: 输入栏玻璃化 —— 固定层, 允许 backdrop 模糊, 拿不到就退化为半透明底
                 .fillMaxWidth()
                 .glassSurface(
-                    // 同上: 输入栏在捕获层内部, 不能自引用 backdrop
-                    backdrop = null,
+                    // 采样消息区的局部层 (v1.1.20): 输入栏是消息区的兄弟节点, 采样它不构成自引用
+                    backdrop = msgBackdrop,
                     shape = RoundedCornerShape(topStart = GlassRadius.panel, topEnd = GlassRadius.panel),
-                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.90f),
+                    fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.62f),
                 )
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2774,6 +2819,8 @@ private fun ChatView(
             visible = panelOpen,
             items = panelItems,
             onClose = { panelOpen = false },
+            // 采样消息区的局部层 —— 面板是消息区的兄弟节点, 不构成自引用
+            backdrop = msgBackdrop,
         )
         ChatEmojiPanel(
             visible = emojiOpen,
@@ -2786,6 +2833,7 @@ private fun ChatView(
                 }
             },
             onClose = { emojiOpen = false },
+            backdrop = msgBackdrop,
         )
         }
     }
@@ -3053,78 +3101,79 @@ private fun ChatView(
     }
 
     // ===== 长按消息: 引用 / 复制 / 放大 / 保存到相册 / 撤回 =====
-    // 竖排菜单 (原来横着塞在 dismissButton 里, 图片消息加了「放大」「保存」之后放不下)
+    // v1.1.20: 从 material3 AlertDialog 换成页面内的 ChatActionSheet (液体玻璃 + 弹簧进场,
+    // 每行错开淡入), 和底栏/输入栏同一条模糊管线, 底下能真的糊到消息列表。
     val acting = actionTarget
-    if (acting != null) {
-        val canRecall = !acting.isRecalled && (me != null && acting.userId == me.id || isAdmin)
-        val isImage = acting.image.isNotBlank()
-        AlertDialog(
-            onDismissRequest = { actionTarget = null },
-            title = {
-                Text(text = "消息操作", color = MiuixTheme.colorScheme.onBackground)
-            },
-            text = {
-                Column {
-                    Text(
-                        text = acting.nickname.ifBlank { "群成员" } + ": " +
-                            (acting.content.ifBlank { "[图片]" }).replace('\n', ' ').take(60),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    ChatActionRow(text = "引用") {
-                        actionTarget = null
-                        quoteMessage(acting)
+    // 收起动画要 180ms, 这段时间还得继续画那份内容 —— 所以记住最后一个非空目标,
+    // 用 acting 判「要不要露出」, 用 sheetMsg 判「画什么」。直接 if (acting != null) 的话
+    // 一置 null 整个节点就没了, 面板是「啪」地消失。
+    var lastActing by remember { mutableStateOf<SocialMessage?>(null) }
+    LaunchedEffect(acting) { if (acting != null) lastActing = acting }
+    val sheetMsg = acting ?: lastActing
+    if (sheetMsg != null) {
+        val canRecall = !sheetMsg.isRecalled &&
+            (me != null && sheetMsg.userId == me.id || isAdmin)
+        val isImage = sheetMsg.image.isNotBlank()
+        val isVideoMsg = VideoProbe.isVideoMessage(sheetMsg.msgType, sheetMsg.video) &&
+            !VideoProbe.isVideoCleaned(sheetMsg.video, sheetMsg.content)
+        // actions 用 remember 缓存: 每帧重组都新建一遍 list 会让 ChatActionSheet 里的
+        // forEachIndexed 反复重建, 错开入场动画看着会一顿一顿的
+        val sheetActions = remember(sheetMsg, canRecall, isImage, isVideoMsg, isAdmin) {
+            listOfNotNull(
+                // 顺序按「最常用的排最上面」: 引用 → 复制 → 看图 → 存图 → 管理 → 撤回
+                ChatSheetAction("quote", "引用回复", Icons.Filled.Reply) {
+                    actionTarget = null
+                    quoteMessage(sheetMsg)
+                },
+                ChatSheetAction("copy", "复制文字", Icons.Filled.ContentCopy) {
+                    actionTarget = null
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    if (cm != null) {
+                        cm.setPrimaryClip(
+                            android.content.ClipData.newPlainText("群消息", sheetMsg.content),
+                        )
+                        onToast("已复制")
+                    } else {
+                        onToast("复制失败")
                     }
-                    // 图片消息才有: 全屏看大图 / 存进系统相册
-                    if (isImage) {
-                        ChatActionRow(text = "放大查看") {
-                            actionTarget = null
-                            previewImage = acting.image
-                        }
-                        ChatActionRow(text = "保存到相册") {
-                            actionTarget = null
-                            saveImageToGallery(acting.image)
-                        }
-                    }
-                    // 复制: 把这句原文放进系统剪贴板。纯图片消息没有文字, 不显示「复制」
-                    if (acting.content.isNotBlank()) {
-                        ChatActionRow(text = "复制") {
-                            actionTarget = null
-                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                            if (cm != null) {
-                                cm.setPrimaryClip(android.content.ClipData.newPlainText("群消息", acting.content))
-                                onToast("已复制")
-                            } else {
-                                onToast("复制失败")
-                            }
-                        }
-                    }
-                    // 管理员: 从消息菜单也能进「成员操作」(禁言) 面板 ——
-                    // 点头像现在是进个人主页 (主页里也能禁言), 这里保证老入口不丢
-                    if (isAdmin) {
-                        ChatActionRow(text = "成员操作") {
-                            val t = acting
-                            actionTarget = null
-                            openMemberPanel(t)
-                        }
-                    }
-                    // 撤回权限: 自己的消息 or 管理员, 已撤回的不再给入口
-                    if (canRecall) {
-                        ChatActionRow(text = if (isImage) "删除图片" else "撤回", danger = true) {
-                            actionTarget = null
-                            recallTarget = acting
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                M3TextButton(onClick = { actionTarget = null }) {
-                    Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                }
-            },
+                }.takeIf { sheetMsg.content.isNotBlank() },
+                ChatSheetAction("view", "放大查看", Icons.Filled.Visibility) {
+                    actionTarget = null
+                    previewImage = sheetMsg.image
+                }.takeIf { isImage },
+                ChatSheetAction("save", "保存到相册", Icons.Filled.Download) {
+                    actionTarget = null
+                    saveImageToGallery(sheetMsg.image)
+                }.takeIf { isImage },
+                ChatSheetAction("member", "成员操作", Icons.Filled.ManageAccounts) {
+                    val t = sheetMsg
+                    actionTarget = null
+                    openMemberPanel(t)
+                }.takeIf { isAdmin },
+                ChatSheetAction(
+                    key = "recall",
+                    label = if (isImage) "删除图片" else "撤回",
+                    icon = Icons.Filled.Delete,
+                    danger = true,
+                ) {
+                    actionTarget = null
+                    recallTarget = sheetMsg
+                }.takeIf { canRecall },
+            )
+        }
+        ChatActionSheet(
+            visible = acting != null,
+            title = "消息操作",
+            summary = chatMenuSummary(
+                nickname = sheetMsg.nickname,
+                content = sheetMsg.content,
+                isImage = isImage,
+                isVideo = isVideoMsg,
+            ),
+            actions = sheetActions,
+            onDismiss = { actionTarget = null },
+            backdrop = msgBackdrop,
         )
     }
 
@@ -3258,19 +3307,26 @@ private fun ChatView(
             confirmButton = {
                 M3TextButton(onClick = {
                     recallTarget = null
+                    // 先播破碎动画, 把这一条真正撤掉要等碎块飞散之后 ——
+                    // 先改数据的话那条消息会瞬间变成「该消息已撤回」, 动画就没东西可碎了
+                    shatteringId = target.id
                     scope.launch {
-                        ApiClient.socialRecall(target.id)
-                            .onSuccess {
-                                onToast("已撤回")
-                                messages = messages.map {
-                                    if (it.id == target.id) {
-                                        it.copy(content = "", isRecalled = true)
-                                    } else {
-                                        it
-                                    }
+                        val ok = ApiClient.socialRecall(target.id).isSuccess
+                        // 动画 520ms: 网络快就等满, 网络慢就等接口回来 (两者取长)
+                        delay(RECALL_SHATTER_MS.toLong())
+                        if (ok) {
+                            messages = messages.map {
+                                if (it.id == target.id) {
+                                    it.copy(content = "", isRecalled = true)
+                                } else {
+                                    it
                                 }
                             }
-                            .onFailure { e -> onToast(e.message ?: "撤回失败") }
+                            onToast("已撤回")
+                        } else {
+                            onToast("撤回失败, 请重试")
+                        }
+                        shatteringId = 0
                     }
                 }) {
                     Text(text = "撤回", color = Color(0xFFE5484D))
@@ -3381,6 +3437,8 @@ private fun MessageRow(
     msg: SocialMessage,
     mine: Boolean,
     canRecall: Boolean,
+    /** 正在播撤回破碎动画: 气泡内容碎开飞散, 碎完才会被改成「该消息已撤回」 */
+    shattering: Boolean = false,
     onLongPress: () -> Unit,
     onAvatarLongPress: () -> Unit = {},
     onAvatarTap: () -> Unit = {},
@@ -3538,6 +3596,9 @@ private fun MessageRow(
             } else {
                 RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
             }
+            // 撤回破碎: shattering 期间气泡内容会被录进 GraphicsLayer 切成 4x4 块飞散。
+            // 只包纯 Compose 画出来的气泡 (不包 AndroidView / 视频硬件 surface), 安全。
+            RecallShatter(playing = shattering) {
             Box(
                 modifier = Modifier
                     .clip(bubbleShape)
@@ -3647,6 +3708,7 @@ private fun MessageRow(
                     )
                     }
                 }
+            }
             }
         }
         if (mine) {

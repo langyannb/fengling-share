@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -23,8 +22,6 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import com.kyant.backdrop.backdrops.layerBackdrop as kyantLayerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop as kyantRememberLayerBackdrop
 
 /**
  * 液态玻璃宿主: 创建 backdrop 并捕获背景内容
@@ -37,9 +34,9 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop as kyantRememberLayerB
 /**
  * 创建液态玻璃 backdrop (miuix-blur, 页面级, 调用一次)
  *
- * 和 [rememberGlassBackdrop2] 的区别: 这个走 miuix 的 `Backdrop`/`LayerBackdrop`,
- * 参考项目的 `FloatingBottomBar` 只认这套类型; kyant 那套给 [com.fengling.share.ui.social.SocialScreen]
- * 的分段控件用, 两者不能互换。
+ * v1.1.19: 全项目只剩这一套玻璃管线 (miuix-blur 的 `Backdrop`/`LayerBackdrop`)。
+ * 以前并存的 kyant/backdrop 那份 (rememberGlassBackdrop2) 已删 —— 两套库的 Backdrop
+ * 类型不兼容, 同一个组件只认其中一种, 混着用就是「看着都是玻璃却不是一套 UI」。
  *
  * @param enabled false 时不挂捕获层 (用户关掉模糊/设备不支持), backdrop 仍然返回, 但采到的是空内容
  * @param surfaceColor 捕获时先铺的不透明底色 —— 不铺的话纯透明区域模糊出来是黑的
@@ -57,16 +54,6 @@ fun rememberGlassBackdrop(
     }
     val captureModifier = if (enabled) Modifier.layerBackdrop(backdrop) else Modifier
     return backdrop to captureModifier
-}
-
-/** 创建 kyant/backdrop 液态玻璃 (OShin 同款: lens/vibrancy/highlight 全效果) */
-@Composable
-fun rememberGlassBackdrop2(): Pair<com.kyant.backdrop.Backdrop, Modifier> {
-    val graphicsLayer = rememberGraphicsLayer()
-    val backdrop = kyantRememberLayerBackdrop(graphicsLayer)
-    val captureModifier = Modifier.kyantLayerBackdrop(backdrop)
-    // 采样用的那份套上「跟手期间不折射」, 捕获用的仍是原始 backdrop (v1.1.10)
-    return remember(backdrop) { backdrop.mutedDuringReveal() } to captureModifier
 }
 
 /**
