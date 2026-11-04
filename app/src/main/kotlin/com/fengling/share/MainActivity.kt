@@ -45,6 +45,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppState
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.CrashReporter
+import com.fengling.share.data.Downloads
 import com.fengling.share.data.Settings
 import com.fengling.share.data.PendingNav
 import com.fengling.share.data.ThemeMode
@@ -62,6 +63,12 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /** 点「下载进度」通知进来: 直接打开下载管理 */
+        const val EXTRA_OPEN_DOWNLOADS = "open_downloads"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // 崩溃日志: 最先注册处理器, 再上传上次崩溃的日志
         CrashReporter.init(applicationContext)
@@ -70,6 +77,8 @@ class MainActivity : ComponentActivity() {
         Settings.init(applicationContext)
         // 账号系统: 初始化本地 token/user 存储 (未登录时为空, 不联网)
         UserStore.init(applicationContext)
+        // 下载中心: 还原上次的任务列表 (没下完的回落成暂停, 用户点一下续传)
+        Downloads.init(applicationContext)
         // 点通知冷启动进来的跳转请求 (open_pm_conv / open_group) -> PendingNav -> MainScreen 导航
         handleNavIntent(intent)
         // 后台常驻消息服务: 已登录 + 开关打开时拉起 (退到后台/桌面连接也不断, 才能秒收)
@@ -210,10 +219,16 @@ class MainActivity : ComponentActivity() {
         val i = intent ?: return
         val pmConvId = i.getIntExtra(MessageService.EXTRA_OPEN_PM_CONV, 0)
         val groupId = i.getIntExtra(MessageService.EXTRA_OPEN_GROUP, 0)
-        if (pmConvId > 0 || groupId > 0) {
-            PendingNav.request(pmConvId = pmConvId, groupId = groupId)
+        val openDownloads = i.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)
+        if (pmConvId > 0 || groupId > 0 || openDownloads) {
+            PendingNav.request(
+                pmConvId = pmConvId,
+                groupId = groupId,
+                openDownloads = openDownloads,
+            )
             i.removeExtra(MessageService.EXTRA_OPEN_PM_CONV)
             i.removeExtra(MessageService.EXTRA_OPEN_GROUP)
+            i.removeExtra(EXTRA_OPEN_DOWNLOADS)
         }
     }
 }

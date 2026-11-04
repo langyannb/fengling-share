@@ -13,9 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
 data class NavTarget(
     val pmConvId: Int = 0,
     val groupId: Int = 0,
+    /** 点「下载进度」通知进来: 直接打开下载管理 */
+    val openDownloads: Boolean = false,
 ) {
-    /** 是不是一个有效请求 (两个 id 都为 0 就当没这回事) */
-    val valid: Boolean get() = pmConvId > 0 || groupId > 0
+    /** 是不是一个有效请求 (全部为空就当没这回事) */
+    val valid: Boolean get() = pmConvId > 0 || groupId > 0 || openDownloads
 }
 
 /**
@@ -35,8 +37,8 @@ object PendingNav {
     val target: StateFlow<NavTarget?> = _target.asStateFlow()
 
     /** Activity 解析到通知 extra 时调用 */
-    fun request(pmConvId: Int, groupId: Int) {
-        val t = NavTarget(pmConvId = pmConvId, groupId = groupId)
+    fun request(pmConvId: Int = 0, groupId: Int = 0, openDownloads: Boolean = false) {
+        val t = NavTarget(pmConvId = pmConvId, groupId = groupId, openDownloads = openDownloads)
         if (t.valid) _target.value = t
     }
 

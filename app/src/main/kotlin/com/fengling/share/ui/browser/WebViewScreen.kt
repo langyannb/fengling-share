@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
@@ -66,10 +67,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.webkit.MimeTypeMap
-import android.app.DownloadManager
-import android.os.Environment
 import android.view.ViewGroup
 import android.widget.Toast
+import com.fengling.share.data.Downloads
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
@@ -91,6 +91,8 @@ fun WebViewScreen(
     title: String,
     password: String = "",
     onBack: () -> Unit,
+    /** 下载任务已收进下载中心: 跳过去让用户看到进度 */
+    onOpenDownloads: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var pageTitle by remember { mutableStateOf(title) }
@@ -421,27 +423,22 @@ fun WebViewScreen(
             }
         }
 
-        // 下载处理: 交给系统下载管理器 (不拦截, 完整浏览器行为)
+        // 下载处理: 收进 App 自己的下载中心 (Downloads), 不再甩给系统 DownloadManager。
+        // 为什么换: 系统那个把任务丢给别的进程 —— App 拿不到实时进度、没法在列表里暂停/续传,
+        // 而且带不上 Referer, 蓝奏云这类网盘会直接 403。自己下就能带全请求头 + 断点续传。
         webView.setDownloadListener(
-            DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-                try {
-                    val request = DownloadManager.Request(Uri.parse(url)).apply {
-                        setMimeType(mimetype ?: "application/octet-stream")
-                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                        setDestinationInExternalPublicDir(
-                            Environment.DIRECTORY_DOWNLOADS,
-                            downloadFileName(url, contentDisposition, mimetype),
-                        )
-                    }
-                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-                    dm?.enqueue(request)
-                    Toast.makeText(context, "开始下载", Toast.LENGTH_SHORT).show()
-                } catch (_: Exception) {
-                    // DownloadManager 失败时回退: 系统浏览器打开
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    } catch (_: Exception) { }
-                }
+            DownloadListener { url, _userAgent, contentDisposition, mimetype, _contentLength ->
+                val name = downloadFileName(url, contentDisposition, mimetype)
+                Downloads.enqueue(
+                    url = url,
+                    fileName = name,
+                    mimeType = mimetype ?: "application/octet-stream",
+                    pageTitle = pageTitle,
+                    // 网盘防盗链要 Referer, 用当前页面地址
+                    referer = webView.url ?: url,
+                )
+                Toast.makeText(context, "已加入下载管理", Toast.LENGTH_SHORT).show()
+                onOpenDownloads()
             }
         )
     }
@@ -540,6 +537,14 @@ fun WebViewScreen(
                                 onClick = {
                                     menuExpanded = false
                                     webView.reload()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("下载管理") },
+                                leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenDownloads()
                                 },
                             )
                         }
@@ -661,7 +666,7 @@ fun WebViewScreen(
     }
 }
 
-/** 从下载 URL / Content-Disposition / MIME 推断文件名 (DownloadManager 落盘用) */
+/** 从下载 URL / Content-Disposition / MIME 推断文件名 (下载中心落盘用) */
 private fun downloadFileName(url: String, contentDisposition: String?, mimeType: String?): String {
     // Content-Disposition 里的 filename 优先 (支持 RFC 5987 filename*)
     contentDisposition?.let { cd ->

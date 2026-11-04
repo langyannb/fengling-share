@@ -73,6 +73,7 @@ import com.fengling.share.utils.NotifySound
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.book.detail.DetailScreen
 import com.fengling.share.ui.browser.WebViewScreen
+import com.fengling.share.ui.download.DownloadScreen
 import com.fengling.share.ui.components.AppScaffold
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
@@ -242,6 +243,11 @@ fun MainScreen(
         PendingNav.target.collect { target ->
             val t = target ?: return@collect
             PendingNav.consume()
+            // 下载管理不需要登录, 先处理它
+            if (t.openDownloads) {
+                go(Route.Downloads)
+                return@collect
+            }
             if (!UserStore.isLoggedIn()) return@collect
             when {
                 t.groupId > 0 -> {
@@ -494,6 +500,9 @@ fun MainScreen(
                                 onOpenNotifySettings = {
                                     go(Route.NotifySettings)
                                 },
+                                onOpenDownloads = {
+                                    go(Route.Downloads)
+                                },
                             )
                         }
                     }
@@ -524,7 +533,13 @@ fun MainScreen(
                 title = route.title,
                 password = route.password,
                 onBack = { back() },
+                onOpenDownloads = { go(Route.Downloads) },
             )
+        }
+
+        // 下载管理
+        is Route.Downloads -> {
+            DownloadScreen(onBack = { back() })
         }
 
         // 投稿名单页

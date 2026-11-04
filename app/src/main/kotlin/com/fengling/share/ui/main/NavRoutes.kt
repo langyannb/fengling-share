@@ -55,6 +55,10 @@ sealed interface Route {
     @Serializable
     data object Messages : Route
 
+    /** 下载管理 */
+    @Serializable
+    data object Downloads : Route
+
     @Serializable
     data object NotifySettings : Route
 

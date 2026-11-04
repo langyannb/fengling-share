@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Language
@@ -40,6 +41,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton as M3TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +65,7 @@ import com.fengling.share.data.AboutConfig
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.Contributor
+import com.fengling.share.data.Downloads
 import com.fengling.share.data.Settings
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
@@ -98,6 +101,7 @@ fun MyScreen(
     onOpenAccount: () -> Unit = {},
     onOpenMessages: () -> Unit = {},
     onOpenNotifySettings: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -111,6 +115,9 @@ fun MyScreen(
     var forceUpdate by remember { mutableStateOf(false) }
     var updateSize by remember { mutableStateOf(0f) }
     var updateDate by remember { mutableStateOf("") }
+
+    // 下载管理入口的角标: 有任务在跑就显示数量
+    val downloads by Downloads.tasks.collectAsState()
 
     val currentVersion = AppVersion.CURRENT
 
@@ -385,6 +392,16 @@ fun MyScreen(
                     icon = Icons.Filled.Notifications,
                     value = if (Settings.msgServiceOn) "已开启" else "已关闭",
                     onClick = onOpenNotifySettings,
+                )
+                SettingRow(
+                    title = "下载管理",
+                    summary = "内置浏览器下载的文件, 可看进度 / 暂停 / 安装",
+                    icon = Icons.Filled.Download,
+                    value = run {
+                        val active = downloads.count { it.isActive }
+                        if (active > 0) "$active 个进行中" else null
+                    },
+                    onClick = onOpenDownloads,
                 )
             }
         }
