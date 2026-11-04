@@ -149,9 +149,15 @@ private fun AppNavDisplay(
     val transition = if (predictiveBack) NavTransitions.MiuixDefault else NavTransitions.None
     // 屏幕圆角跟随设备 (卡片式进场时四角裁切才对得上机身)
     val cornerRadius = rememberNavSystemCornerRadius()
+    // ⚠️ enableCornerClip 必须关掉, 否则内置浏览器返回时白闪。
+    // 圆角裁剪走 miuix-squircle: 节点尺寸 > 2048px 时是 contentLayer.record{ drawContent() }
+    // + drawLayer 的重放路径 (小尺寸则走 CompositingStrategy.Offscreen 离屏层), 而
+    // NavCornerClipMode.Leading 的裁剪区间是 -1 < d < 0 —— 正好覆盖整个返回/进场动画。
+    // AndroidView 承载的 WebView 是独立硬件 surface, 塞进离屏层重放后内容直接丢失,
+    // 用户看到的就是「网页闪一下白然后不见了」。圆角只是修饰, 不能拿它换白屏。
     val effects = remember(cornerRadius) {
         NavDisplayEffects(
-            enableCornerClip = true,
+            enableCornerClip = false,
             cornerClipRadius = cornerRadius,
             dimAmount = 0.5f,
         )
