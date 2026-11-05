@@ -24,10 +24,13 @@ android {
 
     defaultConfig {
         applicationId = "com.fengling.share"
-        minSdk = 33
+        // 29 = Android 10: 华为 SEA-AL00 (EMUI 13 / SDK 29) 这类设备要能装。
+        // 玻璃/模糊在 API 33 以下由 miuix-blur 的 isRuntimeShaderSupported() 自动降级成纯色,
+        // 只是 AndroidManifest 里那句 <uses-sdk tools:overrideLibrary> 放开了它硬写的 33。
+        minSdk = 29
         targetSdk = 34
-        versionCode = 157
-        versionName = "1.1.19"
+        versionCode = 158
+        versionName = "1.1.20"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

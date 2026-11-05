@@ -1,6 +1,7 @@
 package com.fengling.share.utils
 
 import android.graphics.RuntimeShader
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
@@ -37,8 +38,10 @@ class InteractiveHighlight(
     val pressProgress: Float get() = pressProgressAnimation.value
     val offset: Offset get() = positionAnimation.value - startPosition
 
-    private val shader =
-        RuntimeShader(
+    // RuntimeShader 是 API 33 才有的类。这里直接 new 会在老设备上抛 NoClassDefFoundError,
+    // 所以只在支持的版本上创建; shader 为 null 时 modifier 只画那层白色叠加, 不画光斑。
+    private val shader: RuntimeShader? =
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) null else RuntimeShader(
             """
 uniform float2 size;
 layout(color) uniform half4 color;
@@ -60,7 +63,7 @@ return color * intensity;
                     Color.White.copy(0.08f * progress),
                     blendMode = BlendMode.Plus
                 )
-                shader.apply {
+                shader?.apply {
                     val position = position(size, positionAnimation.value)
                     setFloatUniform("size", size.width, size.height)
                     setColorUniform("color", Color.White.copy(0.15f * progress).toArgb())
@@ -71,10 +74,12 @@ return color * intensity;
                         position.y.fastCoerceIn(0f, size.height)
                     )
                 }
-                drawRect(
-                    ShaderBrush(shader),
-                    blendMode = BlendMode.Plus
-                )
+                if (shader != null) {
+                    drawRect(
+                        ShaderBrush(shader),
+                        blendMode = BlendMode.Plus
+                    )
+                }
             }
 
             drawContent()
