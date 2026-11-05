@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!--
+        minSdk 29 (Android 10)。唯一硬卡 33 的依赖是 miuix-blur, 它的 AAR manifest 写死
+        minSdkVersion="33", 但那份代码里的 RenderEffect(API31)/RuntimeShader(API33) 全部
+        包在 isRuntimeShaderSupported() 判断里, 不支持时 draw() 直接 drawContent() 退化成
+        不模糊 —— 运行期安全, 只需要在合并 manifest 时按住它的 minSdk 声明。
+        37 个 action 里真正用到 API31+ 的只有动画背景 (BgEffectView, 已删) 与
+        InteractiveHighlight (已加 SDK_INT 守卫)。
+    -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission 

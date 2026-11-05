@@ -4,12 +4,6 @@
 # Miuix (液态玻璃/组件库) - 保留全部, 防反射/渲染问题
 -keep class top.yukonga.miuix.** { *; }
 
-# kyant/backdrop 液态玻璃 (RuntimeShader/RenderEffect)
--keep class com.kyant.** { *; }
-
-# BgEffectView 彩色动画背景 (RuntimeShader)
--keep class com.fengling.share.ui.theme.** { *; }
-
 # 数据模型 (org.json 手动解析, 无反射, 但保留字段名保险)
 -keep class com.fengling.share.data.** { *; }
 
