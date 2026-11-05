@@ -3,6 +3,12 @@ package com.fengling.share.ui.main
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,9 +22,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -397,12 +405,24 @@ fun MainScreen(
             // containerColor 透明 —— 底下那层 appGradientBackground 要能透出来。
             // contentWindowInsets 归零 —— 内容区本来就是 edge-to-edge 全屏, 各页面自己处理状态栏,
             // 交给 Scaffold 补 systemBars 只会多出一份顶部内边距。
+            // 键盘弹出时把底栏收起来。
+            // 不加这个的话, 系统 adjustResize 会先把窗口压矮, 底栏仍占着 ~80dp 底部空间,
+            // 输入栏被挤到键盘上方紧贴底栏的位置 —— 用户看到的「输入框会沉下去一点」就是它。
+            // 聊天页自己会随窗口收缩, 底栏在这里纯属多余, 收掉才是 Telegram 那种观感。
+            val density = LocalDensity.current
+            val imeVisible = WindowInsets.ime.getBottom(density) > 0
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = Color.Transparent,
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 bottomBar = {
-                    Box(Modifier.fillMaxWidth()) {
+                    // 键盘弹起时整条底栏收掉 (AnimatedVisibility 让收放跟着键盘一起滑, 不会硬跳)
+                    AnimatedVisibility(
+                        visible = !imeVisible,
+                        enter = fadeIn(tween(160)) + slideInVertically(tween(200)) { it / 2 },
+                        exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { it / 2 },
+                    ) {
+                        Box(Modifier.fillMaxWidth()) {
                         // 底栏: 照抄参考项目的 BottomBarMiuix ——
                         // 关悬浮 → BlurredBar + NavigationBar (原生);
                         // 开悬浮 → FloatingBottomBar (液体玻璃胶囊, 可拖动切 tab)
@@ -425,6 +445,7 @@ fun MainScreen(
                             backdrop = barBackdrop,
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
+                        }
                     }
                 },
             ) { _ ->

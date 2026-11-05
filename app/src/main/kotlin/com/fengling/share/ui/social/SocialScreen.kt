@@ -18,6 +18,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -69,6 +70,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
@@ -2277,18 +2279,31 @@ private fun ChatView(
     ) {
         // ===== 群公告 (管理员设置, 成员进群就能看到, 点击展开全文) =====
         if (noticeText.isNotBlank()) {
+            // v1.1.20 美化: 原来是一条 flat 的 primary 0.10f 色块, 用户说「感觉没变化」。
+            // 现在做成玻璃卡片 (圆角 + 描边 + 左侧强调竖条 + 公告图标), 展开/收起有高度动画。
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(GlassRadius.card))
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.09f))
+                    .border(1.dp, MiuixTheme.colorScheme.primary.copy(alpha = 0.18f), RoundedCornerShape(GlassRadius.card))
                     // 点公告条本身也顺手清一次选中 (和点空白处一致), 再展开/收起
                     .clickable {
                         selectionReset++
                         noticeExpanded = !noticeExpanded
                     }
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                    .animateContentSize(animationSpec = tween(240, easing = FastOutSlowInEasing))
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Campaign,
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         text = "群公告",
                         fontSize = 12.sp,
@@ -2300,21 +2315,28 @@ private fun ChatView(
                         Text(
                             text = "编辑",
                             fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
                             color = MiuixTheme.colorScheme.primary,
-                            modifier = Modifier.clickable {
-                                menu.draft = noticeText
-                                menu.showNoticeEditor = true
-                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(GlassRadius.chip))
+                                .clickable {
+                                    menu.draft = noticeText
+                                    menu.showNoticeEditor = true
+                                }
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
                         )
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(6.dp))
                     }
-                    Text(
-                        text = if (noticeExpanded) "收起" else "展开",
-                        fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.primary,
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = if (noticeExpanded) "收起" else "展开",
+                        tint = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .graphicsLayer { rotationZ = if (noticeExpanded) 180f else 0f },
                     )
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(5.dp))
                 // 公告里的链接也能点开 (走内置浏览器); 点空白处仍然是展开/收起
                 // SelectionContainer: 公告文字可以长按选中复制 (用户 2026-10-04 要求)
                 // key(selectionReset): 重建这段文本即可清掉长按选中状态, 见上面状态声明处的说明
