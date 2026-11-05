@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Message
 import android.util.Log
 import android.webkit.ConsoleMessage
@@ -189,7 +190,11 @@ fun WebViewScreen(
         settings.allowFileAccess = true
         // 禁用深色反色: ColorOS/系统深色模式会强制 WebView 反色页面 (algorithmic darkening),
         // 深色背景页面被反色后内容不可见 (link3.cc 空白实测); 正常浏览器不强制反色
-        settings.setAlgorithmicDarkeningAllowed(false)
+        // setAlgorithmicDarkeningAllowed 是 API 33 才有的方法, Android 10~12 上直接调会抛
+        // NoSuchMethodError 整页闪退 (华为 SEA-AL00 实测); 老系统本来没有这个反色机制, 跳过即可
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            settings.setAlgorithmicDarkeningAllowed(false)
+        }
         // ===== Cookie / 渲染能力补齐 (2026-10-03, 用户要求频道类页面必须完整显示) =====
         // pd.qq.com 的 TADs 反爬会先下发 PoW 挑战页, 靠 document.cookie 下发 EO-Bot-Js-Token
         // (domain=.qq.com, 跨站) 再重载; 若第三方 cookie 被禁 → 挑战过不了 → 后续 trpc 接口全空,

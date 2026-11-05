@@ -29,8 +29,8 @@ android {
         // 只是 AndroidManifest 里那句 <uses-sdk tools:overrideLibrary> 放开了它硬写的 33。
         minSdk = 29
         targetSdk = 34
-        versionCode = 158
-        versionName = "1.1.20"
+        versionCode = 159
+        versionName = "1.1.21"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
