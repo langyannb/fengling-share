@@ -211,8 +211,9 @@ fun Modifier.pressScaleEffect(
 fun Modifier.appGradientBackground(glow: Color = MiuixTheme.colorScheme.primary): Modifier {
     val dark = isAppInDarkTheme()
     val base = MiuixTheme.colorScheme.background
-    val a1 = if (dark) 0.20f else 0.11f
-    val a2 = if (dark) 0.14f else 0.07f
+    // 与 AppGradientBackground 保持同一套参数 (见那里的说明)
+    val a1 = if (dark) 0.30f else 0.18f
+    val a2 = if (dark) 0.22f else 0.13f
     val second = Color(0xFF4C6FFF)
     return this
         .background(base)
@@ -220,14 +221,14 @@ fun Modifier.appGradientBackground(glow: Color = MiuixTheme.colorScheme.primary)
             drawRect(
                 brush = Brush.radialGradient(
                     colors = listOf(glow.copy(alpha = a1), Color.Transparent),
-                    center = Offset(size.width * 0.10f, -size.height * 0.02f),
-                    radius = size.width * 0.95f,
+                    center = Offset(size.width * 0.15f, size.height * 0.04f),
+                    radius = size.width * 1.05f,
                 ),
             )
             drawRect(
                 brush = Brush.radialGradient(
                     colors = listOf(second.copy(alpha = a2), Color.Transparent),
-                    center = Offset(size.width * 1.02f, size.height * 0.30f),
+                    center = Offset(size.width * 0.95f, size.height * 0.26f),
                     radius = size.width * 0.85f,
                 ),
             )
@@ -248,8 +249,11 @@ fun AppGradientBackground(
 ) {
     val dark = isAppInDarkTheme()
     val base = MiuixTheme.colorScheme.background
-    val a1 = if (dark) 0.20f else 0.11f
-    val a2 = if (dark) 0.14f else 0.07f
+    // v1.1.20: 原来的 0.11/0.07 太淡, 而且第一个光斑中心落在屏幕上方外面 (-0.02h),
+    // 实际能看见的只有很淡的一角 —— 用户说「感觉没变化 / 背景界面等」就是它。
+    // 现在把两个光斑都挪进可视区并提高不透明度, 底色才有可辨认的层次。
+    val a1 = if (dark) 0.30f else 0.18f
+    val a2 = if (dark) 0.22f else 0.13f
     val second = Color(0xFF4C6FFF)
     Box(
         modifier = modifier
@@ -259,14 +263,14 @@ fun AppGradientBackground(
                 drawRect(
                     brush = Brush.radialGradient(
                         colors = listOf(glow.copy(alpha = a1), Color.Transparent),
-                        center = Offset(size.width * 0.10f, -size.height * 0.02f),
-                        radius = size.width * 0.95f,
+                        center = Offset(size.width * 0.15f, size.height * 0.04f),
+                        radius = size.width * 1.05f,
                     ),
                 )
                 drawRect(
                     brush = Brush.radialGradient(
                         colors = listOf(second.copy(alpha = a2), Color.Transparent),
-                        center = Offset(size.width * 1.02f, size.height * 0.30f),
+                        center = Offset(size.width * 0.95f, size.height * 0.26f),
                         radius = size.width * 0.85f,
                     ),
                 )
