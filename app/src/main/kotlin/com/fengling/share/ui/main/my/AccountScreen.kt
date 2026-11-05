@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -74,7 +75,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 private val DangerRed = Color(0xFFE5484D)
 
 /** 账号页视图 (未登录时在登录/注册之间切换) */
-private enum class AccountView { LOGIN, REGISTER }
+private enum class AccountView { LOGIN, REGISTER, FORGOT }
 
 /**
  * AccountScreen - 账号页 (登录 / 注册 / 个人资料)
@@ -106,6 +107,7 @@ fun AccountScreen(
                 title = when {
                     loggedIn -> "个人资料"
                     view == AccountView.REGISTER -> "注册账号"
+                    view == AccountView.FORGOT -> "找回密码"
                     else -> "登录"
                 },
                 onBack = onBack,
@@ -131,6 +133,16 @@ fun AccountScreen(
                 LoginView(
                     prefill = switchPrefill,
                     onSwitchToRegister = { view = AccountView.REGISTER },
+                    onForgotPassword = { view = AccountView.FORGOT },
+                )
+            } else if (view == AccountView.FORGOT) {
+                ForgotPasswordView(
+                    prefill = switchPrefill,
+                    onBackToLogin = { email ->
+                        // 重置成功后把邮箱带回登录框, 少输一次
+                        switchPrefill = email
+                        view = AccountView.LOGIN
+                    },
                 )
             } else {
                 RegisterView(onSwitchToLogin = { view = AccountView.LOGIN })
@@ -197,6 +209,7 @@ private fun switchAccountNoPassword(
 private fun LoginView(
     prefill: String = "",
     onSwitchToRegister: () -> Unit,
+    onForgotPassword: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -357,7 +370,249 @@ private fun LoginView(
                 modifier = Modifier.clickable { onSwitchToRegister() },
             )
         }
+        Spacer(Modifier.height(14.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = "忘记密码？",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onForgotPassword() },
+            )
+        }
         Spacer(Modifier.height(32.dp))
+    }
+}
+
+// ===================== 找回密码 =====================
+
+/**
+ * 忘记密码: 邮箱验证码重置。
+ * 流程与注册一致 (先图形验证码 -> send_code(purpose=reset) -> 邮件验证码 -> reset_password),
+ * 成功后服务端会作废该账号所有会话, 所以这里不自动登录, 把邮箱回填给登录框让用户重新登。
+ */
+@Composable
+private fun ForgotPasswordView(
+    prefill: String = "",
+    onBackToLogin: (String) -> Unit = {},
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // 用户名或邮箱都可能是 prefill, 邮箱才用得上
+    var email by remember(prefill) { mutableStateOf(if (prefill.contains('@')) prefill else "") }
+    var code by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var resetting by remember { mutableStateOf(false) }
+    var countdown by remember { mutableStateOf(0) }
+    var showCaptcha by remember { mutableStateOf(false) }
+    var captchaError by remember { mutableStateOf("") }
+    var captchaRefresh by remember { mutableStateOf(0) }
+    var done by remember { mutableStateOf(false) }
+    var doneName by remember { mutableStateOf("") }
+
+    LaunchedEffect(countdown) {
+        if (countdown > 0) {
+            delay(1000L)
+            countdown -= 1
+        }
+    }
+
+    fun doSendCode(captchaToken: String, captchaCode: String) {
+        sending = true
+        captchaError = ""
+        scope.launch {
+            ApiClient.sendCode(
+                email = email.trim(),
+                purpose = "reset",
+                captchaToken = captchaToken,
+                captchaCode = captchaCode,
+            )
+                .onSuccess {
+                    countdown = 60
+                    showCaptcha = false
+                    Toast.makeText(context, "验证码已发送，请查收邮件", Toast.LENGTH_SHORT).show()
+                }
+                .onFailure { e ->
+                    captchaError = e.message ?: "发送失败"
+                    captchaRefresh += 1
+                }
+            sending = false
+        }
+    }
+
+    fun doReset() {
+        val tip = when {
+            email.isBlank() -> "请填写注册邮箱"
+            !email.contains('@') -> "邮箱格式不正确"
+            code.isBlank() -> "请填写邮箱验证码"
+            password.length < 6 -> "密码至少 6 位"
+            password != confirm -> "两次输入的密码不一致"
+            else -> null
+        }
+        if (tip != null) {
+            Toast.makeText(context, tip, Toast.LENGTH_SHORT).show()
+            return
+        }
+        resetting = true
+        scope.launch {
+            ApiClient.resetPassword(
+                email = email.trim(),
+                code = code.trim(),
+                newPassword = password,
+            )
+                .onSuccess {
+                    doneName = email.trim()
+                    done = true
+                }
+                .onFailure { e ->
+                    Toast.makeText(context, e.message ?: "重置失败", Toast.LENGTH_SHORT).show()
+                }
+            resetting = false
+        }
+    }
+
+    if (done) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+        ) {
+            AccountHeader(
+                icon = Icons.Filled.Lock,
+                title = "密码已重置",
+                subtitle = "请用新密码重新登录",
+            )
+            Spacer(Modifier.height(20.dp))
+            Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 16.dp) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(
+                        text = doneName,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "该账号在其它设备上的登录已失效, 需要重新登录。",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    PrimaryButton(text = "去登录") { onBackToLogin(doneName) }
+                }
+            }
+            Spacer(Modifier.height(32.dp))
+        }
+        return
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp),
+    ) {
+        AccountHeader(
+            icon = Icons.Filled.Lock,
+            title = "找回密码",
+            subtitle = "用注册邮箱收验证码, 验证通过后可设置新密码",
+        )
+        Spacer(Modifier.height(20.dp))
+        Card(modifier = Modifier.fillMaxWidth(), cornerRadius = 16.dp) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+            ) {
+                AppTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = "注册邮箱",
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        AppTextField(value = code, onValueChange = { code = it }, label = "邮箱验证码")
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    SmallButton(
+                        text = when {
+                            sending -> "发送中"
+                            countdown > 0 -> "${countdown}s"
+                            else -> "获取验证码"
+                        },
+                        enabled = !sending && countdown == 0 && email.isNotBlank(),
+                    ) {
+                        if (email.isBlank()) {
+                            Toast.makeText(context, "请先填写邮箱", Toast.LENGTH_SHORT).show()
+                        } else {
+                            captchaError = ""
+                            showCaptcha = true
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                AppTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = "新密码 (至少 6 位)",
+                    isPassword = true,
+                )
+                Spacer(Modifier.height(12.dp))
+                AppTextField(
+                    value = confirm,
+                    onValueChange = { confirm = it },
+                    label = "再次输入新密码",
+                    isPassword = true,
+                )
+                Spacer(Modifier.height(20.dp))
+                PrimaryButton(
+                    text = if (resetting) "提交中…" else "重置密码",
+                    enabled = !resetting,
+                ) { doReset() }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = "想起密码了？",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+            Text(
+                text = "去登录",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onBackToLogin(email.trim()) },
+            )
+        }
+        Spacer(Modifier.height(32.dp))
+    }
+
+    if (showCaptcha) {
+        CaptchaDialog(
+            title = "图形验证码",
+            subtitle = "发送重置验证码前需要完成安全验证",
+            errorMessage = captchaError,
+            confirming = sending,
+            refreshKey = captchaRefresh,
+            onConfirm = { token, captchaCode -> doSendCode(token, captchaCode) },
+            onDismiss = { if (!sending) showCaptcha = false },
+        )
     }
 }
 

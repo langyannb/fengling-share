@@ -88,6 +88,16 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
+ * 首页列表缓存有效期。
+ * 太短 → 每次切分类都打接口; 太长 → 后台改了软件信息, 首页迟迟看不到。
+ * 30 秒足够滤掉「来回点分类」的重复请求, 又不会让用户觉得数据卡住。
+ */
+private const val APPS_CACHE_TTL_MS = 30_000L
+
+/** 首页静默保活间隔: 每 25 秒悄悄拉一次轮播 + 当前分类, 最多滞后这么久 */
+private const val HOME_REFRESH_INTERVAL_MS = 25_000L
+
+/**
  * HomeScreen - 首页
  * 搜索 + 轮播 + 分类胶囊 + 软件列表
  * 设计取向: Miuix 原生(设置页式) —— 无渐变装饰、无弹跳缩放、色板只用 MiuixTheme,
@@ -104,7 +114,10 @@ fun HomeScreen(
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var banners by remember { mutableStateOf<List<Banner>>(emptyList()) }
     // 分类缓存: 每个分类的 apps 缓存, 切换不重新加载
+    // v1.1.20: 加了 TTL。原来是永久缓存 + 回到首页直接 return, 于是「后台改了软件信息,
+    // 首页死活不刷新, 必须杀掉 App 重进」—— 用户反馈的正是这个。
     val appsCache = remember { mutableStateMapOf<Int, List<AppItem>>() }
+    val appsCacheAt = remember { mutableStateMapOf<Int, Long>() }
     // ⚠️ rememberSaveable: 进入详情页时 HomeScreen 离开组合, 返回后要恢复
     // 所选分类/子分类/搜索词, 否则会重置回"全部" (用户反馈 bug)
     var selectedCategory by rememberSaveable { mutableStateOf(0) }
@@ -125,11 +138,12 @@ fun HomeScreen(
     val effectiveCategoryId = if (selectedSubCategory > 0) selectedSubCategory else selectedCategory
 
     fun loadApps(catId: Int, kw: String) {
-        // 命中缓存直接返回 (不重新加载)
-        val cacheKey = "$catId|$kw"
+        // 命中缓存直接返回 (不重新加载); 但超过 APPS_CACHE_TTL_MS 就当作过期
         if (kw.isEmpty()) {
-            appsCache[catId]?.let {
-                apps = it
+            val hit = appsCache[catId]
+            val at = appsCacheAt[catId] ?: 0L
+            if (hit != null && System.currentTimeMillis() - at < APPS_CACHE_TTL_MS) {
+                apps = hit
                 return
             }
         }
@@ -139,7 +153,10 @@ fun HomeScreen(
             try {
                 val result = ApiClient.getApps(catId, kw)
                 apps = result
-                if (kw.isEmpty()) appsCache[catId] = result
+                if (kw.isEmpty()) {
+                    appsCache[catId] = result
+                    appsCacheAt[catId] = System.currentTimeMillis()
+                }
             } catch (e: Exception) {
                 error = e.userFriendlyMessage()
             }
@@ -171,8 +188,12 @@ fun HomeScreen(
             try {
                 categories = ApiClient.getCategories()
                 appsCache.clear() // 下拉刷新: 清缓存强制重新加载
+                appsCacheAt.clear()
                 apps = ApiClient.getApps(effectiveCategoryId, query)
-                if (query.isEmpty()) appsCache[effectiveCategoryId] = apps
+                if (query.isEmpty()) {
+                    appsCache[effectiveCategoryId] = apps
+                    appsCacheAt[effectiveCategoryId] = System.currentTimeMillis()
+                }
             } catch (_: Exception) { }
             refreshing = false
         }
@@ -193,14 +214,39 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         // 首次进入: 加载分类 + 轮播; 应用列表按当前选中分类加载
         // (rememberSaveable 恢复后 selectedCategory 可能是非 0, 不能硬编码 0)
-        if (appsCache[effectiveCategoryId]?.isNotEmpty() == true || banners.isNotEmpty()) {
-            return@LaunchedEffect
-        }
         try {
             categories = ApiClient.getCategories()
             banners = ApiClient.getBanners()
         } catch (_: Exception) { }
         loadApps(effectiveCategoryId, query)
+    }
+
+    // 静默保活刷新。
+    // 首页常驻在 HorizontalPager 里 (beyondViewportPageCount = 2), 进详情页再返回不会重建,
+    // 上面那个 LaunchedEffect(Unit) 也就只跑一次 —— 于是后台改了软件信息, 首页一直显示旧数据,
+    // 必须杀掉 App 重进才刷新 (用户反馈的正是这个)。
+    // 这里每 25 秒悄悄拉一次轮播 + 当前分类, 用户没有感知, 数据最多滞后 25 秒。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(HOME_REFRESH_INTERVAL_MS)
+            if (refreshing || loading) continue
+            // 用实时值, 不能用合成时捕获的 effectiveCategoryId (那是个固定 val)
+            val catNow = if (selectedSubCategory > 0) selectedSubCategory else selectedCategory
+            val kwNow = query
+            runCatching { ApiClient.getBanners() }
+                .onSuccess { if (kwNow.isEmpty()) banners = it }
+            runCatching { ApiClient.getApps(catNow, kwNow) }
+                .onSuccess { fresh ->
+                    if (kwNow.isEmpty()) {
+                        appsCache[catNow] = fresh
+                        appsCacheAt[catNow] = System.currentTimeMillis()
+                    }
+                    // 只在用户还停在同一个分类/搜索词时套用, 免得把别的分类内容盖上来
+                    val stillHere = (if (selectedSubCategory > 0) selectedSubCategory else selectedCategory) == catNow &&
+                        query == kwNow
+                    if (stillHere) apps = fresh
+                }
+        }
     }
 
     val isDark = isAppInDarkTheme()

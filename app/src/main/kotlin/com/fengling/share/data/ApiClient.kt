@@ -516,6 +516,28 @@ object ApiClient {
         }
     }
 
+    /**
+     * 找回密码: 用邮箱验证码重置密码
+     * 成功后服务端会作废旧 token / 清空会话, 客户端需要重新登录
+     */
+    suspend fun resetPassword(
+        email: String,
+        code: String,
+        newPassword: String,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        apiCall {
+            request(
+                "reset_password",
+                mapOf(
+                    "email" to email,
+                    "code" to code,
+                    "new_password" to newPassword,
+                ),
+            )
+            Unit
+        }
+    }
+
     /** 登录 (account 可填用户名或邮箱) */
     suspend fun loginAccount(account: String, password: String): Result<Pair<String, User>> =
         withContext(Dispatchers.IO) {
