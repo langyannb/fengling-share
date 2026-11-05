@@ -53,8 +53,12 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 原来收/开用的是 spring (先冲一下再停), 加上收起最后一帧高度突变 → 用户反馈「卡一下再收起」。
  */
 internal const val CHAT_PANEL_ANIM_MS = 220
-/** 「+」面板里一行功能格的高度 (图标 52dp + 文字 + 上下留白) */
-private val PANEL_ROW_HEIGHT = 84.dp
+/**
+ * 「+」面板里一行功能格的高度。
+ * 图标 52dp + 间距 5dp + 文字行高约 17dp + 上下留白各 6dp = 86dp, 84dp 会顶满把文字裁掉
+ * (用户说的「加号里面的东西字体少了三分之一」)。留 8dp 余量, 顺带兼容系统大字号。
+ */
+private val PANEL_ROW_HEIGHT = 94.dp
 
 /**
  * 面板「从下往上滑出 / 向下收起」的布局变换 (v1.1.14)。
@@ -272,10 +276,13 @@ private fun GridCell(item: ChatPanelItem) {
                 modifier = Modifier.size(24.dp),
             )
         }
-        Spacer(Modifier.height(5.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = item.label,
-            fontSize = 11.sp,
+            // 11sp 在 94dp 的行高里也放得下, 但删掉顶部图标行之后这里就是唯一的名字来源,
+            // 提到 13sp 才和其它面板的字号观感一致 (用户说「字体少了三分之一」)
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MiuixTheme.colorScheme.onBackgroundVariant,

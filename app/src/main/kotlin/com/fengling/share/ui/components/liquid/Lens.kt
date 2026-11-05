@@ -96,11 +96,20 @@ float sdRoundedRect(float2 coord, float2 halfSize, float radius) {
 
 float2 gradSdRoundedRect(float2 coord, float2 halfSize, float radius) {
     float2 cornerCoord = abs(coord) - (halfSize - float2(radius));
+    // 这里有两个 GLSL 坑, 一起造成「玻璃正中一条黑线」:
+    //   1. sign(0.0) == 0.0, 正好落在中轴线上会让梯度塌成零向量;
+    //   2. normalize(float2(0.0)) 是 NaN。
+    // 胶囊形轨道 (高 132px, radius 66px = 半高) 时 cornerCoord.y 恒等于 |y|,
+    // 整条水平中线都会走进第一个分支, 且 max(cornerCoord, 0.0) 恰为 float2(0.0) → NaN。
+    float2 sgn = float2(coord.x < 0.0 ? -1.0 : 1.0, coord.y < 0.0 ? -1.0 : 1.0);
     if (cornerCoord.x >= 0.0 || cornerCoord.y >= 0.0) {
-        return sign(coord) * normalize(max(cornerCoord, 0.0));
+        float2 outside = max(cornerCoord, 0.0);
+        float len = length(outside);
+        // 退化时兜底成竖直方向, 保证永远是单位向量, 绝不产出 NaN
+        return sgn * (len > 0.0 ? outside / len : float2(0.0, 1.0));
     } else {
         float gradX = step(cornerCoord.y, cornerCoord.x);
-        return sign(coord) * float2(gradX, 1.0 - gradX);
+        return sgn * float2(gradX, 1.0 - gradX);
     }
 }
 """
