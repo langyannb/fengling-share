@@ -789,9 +789,23 @@ object ApiClient {
     // ===================== 社交 / 消息中心 / 邮箱验证 (接口契约 v1 第一~四节) =====================
 
     /** 图形验证码 (公开): 返回 token + base64 data URI 图片, 可直接交给 Coil 渲染 */
+    /**
+     * 图形验证码。
+     *
+     * 走 ServerConfig.CAPTCHA_URL (captcha.php) 而不是 action=captcha ——
+     * 后者的出图逻辑在 Go 网关里写死 280x100, 3x 屏上只有 93dp 宽, 字符看不清。
+     * 两边 token 都写同一张 captcha_codes 表, 所以后续 send_code 校验不受影响。
+     */
     suspend fun getCaptcha(): Result<Captcha> = withContext(Dispatchers.IO) {
         apiCall {
-            val d = request("captcha").optJSONObject("data") ?: JSONObject()
+            val obj = JSONObject(
+                client.newCall(Request.Builder().url(ServerConfig.CAPTCHA_URL).build())
+                    .execute().use { it.body?.string() ?: "{}" },
+            )
+            if (obj.optInt("code", -1) != 0) {
+                throw ApiException(obj.optString("msg", "验证码加载失败"), obj.optInt("code", -1))
+            }
+            val d = obj.optJSONObject("data") ?: JSONObject()
             Captcha(token = d.optString("token", ""), image = d.optString("image", ""))
         }
     }
