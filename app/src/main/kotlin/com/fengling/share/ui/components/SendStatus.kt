@@ -25,10 +25,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * v1.1.12 乐观发送的状态
  *
  * Sending = 本地临时消息正在等服务端返回 (转圈)
+ * Queued  = v1.1.16: 前面还有消息在发, 这条在本地闸门里排队 (转圈 + 「排队中」)
  * Failed  = 发送失败 (含服务端 2 秒 1 条的限流错误); 点一下重发, 不弹 toast 打断
  * Done    = 已经有服务端真实消息了, 本地占位该被移除
  */
-enum class SendState { Sending, Failed, Done }
+enum class SendState { Sending, Queued, Failed, Done }
 
 /** 失败提示用的红 (和 AccountScreen 的 DangerRed / UserTagChips 同一色值) */
 private val SendFailRed = Color(0xFFE5484D)
@@ -45,6 +46,25 @@ fun SendStatusIndicator(
 ) {
     when (state) {
         SendState.Done -> Unit
+
+        // v1.1.16: 排队的消息也转圈, 但文案是「排队中」——
+        // 同群发送有 2 秒窗口, 连发几条时最后一条可能要等十几秒, 得让用户看得懂在等什么
+        SendState.Queued -> Row(
+            modifier = modifier.padding(top = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(11.dp),
+                strokeWidth = 1.5.dp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "排队中",
+                fontSize = 10.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+            )
+        }
 
         SendState.Sending -> Row(
             modifier = modifier.padding(top = 2.dp),

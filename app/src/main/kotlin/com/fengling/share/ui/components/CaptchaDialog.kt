@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -123,9 +124,13 @@ fun CaptchaDialog(
                 }
 
                 // 图形验证码图片: 点一下换一张
+                // 服务端出图只有 280x100 像素, 而 Compose 的 Image(bitmap) 按 1:1 像素渲染
+                // (280px / 3.0 = 93dp), 在 dialog 里只占左边一小半, 字符小到看不清。
+                // 所以这里不写死宽度, 直接撑满整行并放大显示。
                 Box(
                     modifier = Modifier
-                        .size(width = 260.dp, height = 94.dp)  // 服务端出图 280x100, 放大到接近 1:1 才看得清
+                        .fillMaxWidth()
+                        .height(112.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                         .clickable { loadCaptcha() },
@@ -135,7 +140,7 @@ fun CaptchaDialog(
                         Image(
                             bitmap = captchaBitmap,
                             contentDescription = "图形验证码",
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit,
                         )
                     } else if (image.isNotBlank() && !loading) {
@@ -157,7 +162,7 @@ fun CaptchaDialog(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = if (loading) "正在刷新…" else "看不清? 点击图片换一张",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
                 Spacer(Modifier.height(12.dp))
@@ -166,7 +171,7 @@ fun CaptchaDialog(
                     value = code,
                     onValueChange = { if (it.length <= 8) code = it },
                     label = {
-                        Text(text = "图形验证码", fontSize = 13.sp)
+                        Text(text = "图形验证码", fontSize = 14.sp)
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),

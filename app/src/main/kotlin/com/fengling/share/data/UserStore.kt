@@ -173,7 +173,15 @@ object UserStore {
     /** 当前用户 (等价于 [current], 便于非 Compose 代码调用) */
     val user: User? get() = current
 
-    fun isLoggedIn(): Boolean = cachedToken.isNotBlank()
+    /**
+     * 是否已登录。
+     *
+     * 必须读 [hasToken] (mutableStateOf) 而不是 [cachedToken] —— 后者是普通变量,
+     * Compose 观察不到。以前这里读 cachedToken, 于是「登录成功后群组页还要求登录,
+     * 必须重启 App 才生效」: SocialScreen / PmScreen / GroupInfoScreen 顶部的
+     * `if (!isLoggedIn()) return LoginRequiredView()` 不会因为登录而重组。
+     */
+    fun isLoggedIn(): Boolean = hasToken
 
     /** 登录/注册成功后保存 token + user (同时写进账号保险箱, 供下次免密切换) */
     fun save(token: String, user: User?) {

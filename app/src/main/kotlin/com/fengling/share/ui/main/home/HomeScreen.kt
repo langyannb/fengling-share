@@ -1,14 +1,19 @@
 package com.fengling.share.ui.main.home
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -69,6 +75,7 @@ import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.appGradientBackground
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.pressScaleEffect
+import com.fengling.share.ui.theme.isAppInDarkTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
@@ -79,6 +86,16 @@ import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/**
+ * 首页列表缓存有效期。
+ * 太短 → 每次切分类都打接口; 太长 → 后台改了软件信息, 首页迟迟看不到。
+ * 30 秒足够滤掉「来回点分类」的重复请求, 又不会让用户觉得数据卡住。
+ */
+private const val APPS_CACHE_TTL_MS = 30_000L
+
+/** 首页静默保活间隔: 每 25 秒悄悄拉一次轮播 + 当前分类, 最多滞后这么久 */
+private const val HOME_REFRESH_INTERVAL_MS = 25_000L
 
 /**
  * HomeScreen - 首页
@@ -97,7 +114,10 @@ fun HomeScreen(
     var apps by remember { mutableStateOf<List<AppItem>>(emptyList()) }
     var banners by remember { mutableStateOf<List<Banner>>(emptyList()) }
     // 分类缓存: 每个分类的 apps 缓存, 切换不重新加载
+    // v1.1.20: 加了 TTL。原来是永久缓存 + 回到首页直接 return, 于是「后台改了软件信息,
+    // 首页死活不刷新, 必须杀掉 App 重进」—— 用户反馈的正是这个。
     val appsCache = remember { mutableStateMapOf<Int, List<AppItem>>() }
+    val appsCacheAt = remember { mutableStateMapOf<Int, Long>() }
     // ⚠️ rememberSaveable: 进入详情页时 HomeScreen 离开组合, 返回后要恢复
     // 所选分类/子分类/搜索词, 否则会重置回"全部" (用户反馈 bug)
     var selectedCategory by rememberSaveable { mutableStateOf(0) }
@@ -118,11 +138,12 @@ fun HomeScreen(
     val effectiveCategoryId = if (selectedSubCategory > 0) selectedSubCategory else selectedCategory
 
     fun loadApps(catId: Int, kw: String) {
-        // 命中缓存直接返回 (不重新加载)
-        val cacheKey = "$catId|$kw"
+        // 命中缓存直接返回 (不重新加载); 但超过 APPS_CACHE_TTL_MS 就当作过期
         if (kw.isEmpty()) {
-            appsCache[catId]?.let {
-                apps = it
+            val hit = appsCache[catId]
+            val at = appsCacheAt[catId] ?: 0L
+            if (hit != null && System.currentTimeMillis() - at < APPS_CACHE_TTL_MS) {
+                apps = hit
                 return
             }
         }
@@ -132,7 +153,10 @@ fun HomeScreen(
             try {
                 val result = ApiClient.getApps(catId, kw)
                 apps = result
-                if (kw.isEmpty()) appsCache[catId] = result
+                if (kw.isEmpty()) {
+                    appsCache[catId] = result
+                    appsCacheAt[catId] = System.currentTimeMillis()
+                }
             } catch (e: Exception) {
                 error = e.userFriendlyMessage()
             }
@@ -164,8 +188,12 @@ fun HomeScreen(
             try {
                 categories = ApiClient.getCategories()
                 appsCache.clear() // 下拉刷新: 清缓存强制重新加载
+                appsCacheAt.clear()
                 apps = ApiClient.getApps(effectiveCategoryId, query)
-                if (query.isEmpty()) appsCache[effectiveCategoryId] = apps
+                if (query.isEmpty()) {
+                    appsCache[effectiveCategoryId] = apps
+                    appsCacheAt[effectiveCategoryId] = System.currentTimeMillis()
+                }
             } catch (_: Exception) { }
             refreshing = false
         }
@@ -186,9 +214,6 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         // 首次进入: 加载分类 + 轮播; 应用列表按当前选中分类加载
         // (rememberSaveable 恢复后 selectedCategory 可能是非 0, 不能硬编码 0)
-        if (appsCache[effectiveCategoryId]?.isNotEmpty() == true || banners.isNotEmpty()) {
-            return@LaunchedEffect
-        }
         try {
             categories = ApiClient.getCategories()
             banners = ApiClient.getBanners()
@@ -196,7 +221,35 @@ fun HomeScreen(
         loadApps(effectiveCategoryId, query)
     }
 
-    val isDark = isSystemInDarkTheme()
+    // 静默保活刷新。
+    // 首页常驻在 HorizontalPager 里 (beyondViewportPageCount = 2), 进详情页再返回不会重建,
+    // 上面那个 LaunchedEffect(Unit) 也就只跑一次 —— 于是后台改了软件信息, 首页一直显示旧数据,
+    // 必须杀掉 App 重进才刷新 (用户反馈的正是这个)。
+    // 这里每 25 秒悄悄拉一次轮播 + 当前分类, 用户没有感知, 数据最多滞后 25 秒。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(HOME_REFRESH_INTERVAL_MS)
+            if (refreshing || loading) continue
+            // 用实时值, 不能用合成时捕获的 effectiveCategoryId (那是个固定 val)
+            val catNow = if (selectedSubCategory > 0) selectedSubCategory else selectedCategory
+            val kwNow = query
+            runCatching { ApiClient.getBanners() }
+                .onSuccess { if (kwNow.isEmpty()) banners = it }
+            runCatching { ApiClient.getApps(catNow, kwNow) }
+                .onSuccess { fresh ->
+                    if (kwNow.isEmpty()) {
+                        appsCache[catNow] = fresh
+                        appsCacheAt[catNow] = System.currentTimeMillis()
+                    }
+                    // 只在用户还停在同一个分类/搜索词时套用, 免得把别的分类内容盖上来
+                    val stillHere = (if (selectedSubCategory > 0) selectedSubCategory else selectedCategory) == catNow &&
+                        query == kwNow
+                    if (stillHere) apps = fresh
+                }
+        }
+    }
+
+    val isDark = isAppInDarkTheme()
     Scaffold(
         topBar = {
             // 极简顶部占位: 只保留状态栏高度 + 6dp 间距
@@ -331,26 +384,43 @@ fun HomeScreen(
                 }
             }
 
-            // 列表区 (只做短淡入淡出, 不做左右滑动)
+            // 列表区: 只在「切换分类」时做一次短促的上浮淡入, 加载完成不再二次淡入。
+            //
+            // 旧实现把 loading/apps 一起塞进 targetState —— 于是切一次分类会连播两次转场
+            // (旧列表 → 转圈 → 新列表), 观感就是「卡一下再闪一下」。现在 targetState 只认
+            // 分类 id: 加载中只叠一层细进度条, 列表本身留在原位, 数据到了直接换内容不转场。
             AnimatedContent(
-                targetState = HomeListState(effectiveCategoryId, apps, loading, error),
+                targetState = effectiveCategoryId,
                 transitionSpec = {
-                    fadeIn(tween(160)) togetherWith fadeOut(tween(120))
+                    // 用位置判断方向: 往下切分类列表从下方浮上来, 往上切从上方向下压。
+                    val forward = targetState > initialState
+                    val enter = fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
+                        slideInVertically(
+                            animationSpec = tween(260, easing = FastOutSlowInEasing),
+                            initialOffsetY = { h -> if (forward) h / 14 else -h / 14 },
+                        )
+                    val exit = fadeOut(tween(130, easing = FastOutSlowInEasing)) +
+                        slideOutVertically(
+                            animationSpec = tween(130, easing = FastOutSlowInEasing),
+                            targetOffsetY = { h -> if (forward) -h / 20 else h / 20 },
+                        )
+                    enter togetherWith exit
                 },
                 label = "homeList",
-            ) { state ->
-                when {
-                    state.loading && state.apps.isEmpty() -> {
-                        LoadingBox(Modifier.fillMaxSize())
-                    }
-                    state.error.isNotEmpty() && state.apps.isEmpty() -> {
-                        EmptyMessage(text = state.error)
-                    }
-                    state.apps.isEmpty() -> {
-                        EmptyMessage(text = "暂无软件")
-                    }
-                    else -> {
-                        LazyColumn(
+            ) { catId ->
+                val state = HomeListState(catId, apps, loading, error)
+                Box(Modifier.fillMaxSize()) {
+                    when {
+                        state.apps.isEmpty() && state.error.isNotEmpty() ->
+                            EmptyMessage(text = state.error)
+
+                        state.apps.isEmpty() && state.loading ->
+                            LoadingBox(Modifier.fillMaxSize())
+
+                        state.apps.isEmpty() ->
+                            EmptyMessage(text = "暂无软件")
+
+                        else -> LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(
                                 start = GlassSpacing.page, end = GlassSpacing.page, top = 4.dp,
@@ -369,6 +439,17 @@ fun HomeScreen(
                             }
                         }
                     }
+                    // 已有内容时换分类: 顶部压一条 2dp 的线性进度, 不打断列表
+                    if (state.loading && state.apps.isNotEmpty()) {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .align(Alignment.TopCenter)
+                                .padding(horizontal = GlassSpacing.page),
+                            color = MiuixTheme.colorScheme.primary,
+                            trackColor = Color.Transparent,
+                        )
+                    }
                 }
             }
         }
@@ -383,13 +464,28 @@ private fun CategoryChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    // 选中态的颜色/字重/内边距都走动画: 原来三项全是硬切, 点一下就是「啪」地跳变。
+    val bg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.primary
+        else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "chipBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onBackgroundVariant,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "chipFg",
+    )
+    val emphasis by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 700f),
+        label = "chipEmphasis",
+    )
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(18.dp))
-            .background(
-                if (selected) MiuixTheme.colorScheme.primary
-                else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            )
+            .background(bg)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -405,9 +501,8 @@ private fun CategoryChip(
         Text(
             text = name,
             fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MiuixTheme.colorScheme.onPrimary
-            else MiuixTheme.colorScheme.onBackgroundVariant,
+            fontWeight = FontWeight(400 + (200 * emphasis).toInt()), // 400 → 600
+            color = fg,
             maxLines = 1,
         )
     }

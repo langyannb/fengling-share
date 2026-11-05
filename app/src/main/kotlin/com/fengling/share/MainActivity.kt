@@ -45,23 +45,30 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.AppState
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.CrashReporter
+import com.fengling.share.data.Downloads
 import com.fengling.share.data.Settings
-import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.PendingNav
+import com.fengling.share.data.ThemeMode
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.data.isNewerVersion
 import com.fengling.share.service.MessageService
 import com.fengling.share.ui.components.KeepAliveGuideHost
 import com.fengling.share.ui.components.PermissionGuideHost
-import com.fengling.share.ui.components.ProvideNavigationEventDispatcher
 import com.fengling.share.ui.main.MainScreen
 import com.fengling.share.ui.theme.AppTheme
+import com.fengling.share.ui.theme.ThemeState
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /** 点「下载进度」通知进来: 直接打开下载管理 */
+        const val EXTRA_OPEN_DOWNLOADS = "open_downloads"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // 崩溃日志: 最先注册处理器, 再上传上次崩溃的日志
         CrashReporter.init(applicationContext)
@@ -70,26 +77,27 @@ class MainActivity : ComponentActivity() {
         Settings.init(applicationContext)
         // 账号系统: 初始化本地 token/user 存储 (未登录时为空, 不联网)
         UserStore.init(applicationContext)
+        // 下载中心: 还原上次的任务列表 (没下完的回落成暂停, 用户点一下续传)
+        Downloads.init(applicationContext)
         // 点通知冷启动进来的跳转请求 (open_pm_conv / open_group) -> PendingNav -> MainScreen 导航
         handleNavIntent(intent)
         // 后台常驻消息服务: 已登录 + 开关打开时拉起 (退到后台/桌面连接也不断, 才能秒收)
         if (Settings.msgServiceOn) MessageService.start(applicationContext)
         // OShin 同款: 状态栏 + 导航栏全透明, 关闭导航栏对比度强制 (浅色主题下默认白色 scrim 会盖住玻璃底栏下方!)
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.auto(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT,
-            ) { true },
-            navigationBarStyle = SystemBarStyle.auto(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT,
-            ) { true },
-        )
-        window.isNavigationBarContrastEnforced = false
+        //
+        // 图标明暗必须跟着 App 自己的主题走, 不能用 enableEdgeToEdge() 的默认系统判断:
+        // 这里先按「设置里的明暗」算一次初值, 主题在设置页被改掉后由 setContent 里的
+        // LaunchedEffect、以及 onResume 再同步。
+        syncSystemBarStyle()
         setContent {
-            // 观察 themeMode + themeColor, 任一变化都触发重组换肤
-            var themeMode by remember { mutableStateOf(Settings.getThemeMode()) }
-            var themeColor by remember { mutableStateOf(Settings.getThemeColor()) }
+            // 观察整份主题快照 (明暗 / 主题色 / 色板风格 / 色彩规范 / 模糊 / 悬浮底栏 / 玻璃 / 预测性返回),
+            // 任一变化都触发重组换肤。设置页改完调用 refresh 生成新快照赋回来。
+            var themeState by remember { mutableStateOf(ThemeState.fromSettings()) }
+            val refreshTheme: () -> Unit = { themeState = ThemeState.fromSettings() }
+
+            // 设置页切换「浅色 / 深色 / 跟随系统」后, 状态栏图标明暗跟着一起改。
+            // 不同步的话会出现「白色顶栏配白色时间/信号图标」—— 用户截图里那种看不见的状态栏。
+            LaunchedEffect(themeState.mode) { syncSystemBarStyle() }
 
             // 启动自动检查更新 (仅强制更新才自动弹窗)
             var forceUpdateInfo by remember { mutableStateOf<VersionInfo?>(null) }
@@ -107,17 +115,22 @@ class MainActivity : ComponentActivity() {
             }
 
             AppTheme(
-                themeMode = themeMode,
-                seedColor = themeColor.seed,
+                themeMode = themeState.mode,
+                seedColor = themeState.seedColor,
+                paletteStyle = themeState.paletteStyle,
+                specVersion = themeState.specVersion,
+                enableBlur = themeState.enableBlur,
+                floatingBottomBar = themeState.floatingBottomBar,
+                glassBottomBar = themeState.glassBottomBar,
+                predictiveBack = themeState.predictiveBack,
             ) {
-                ProvideNavigationEventDispatcher {
-                    MainScreen(
-                        onThemeChanged = { newMode ->
-                            themeMode = newMode
-                            themeColor = Settings.getThemeColor()
-                        },
-                    )
-                }
+                // 不再自建 root NavigationEventDispatcher: activity 1.13.0 的 ComponentActivity
+                // 本身就是 NavigationEventDispatcherOwner, 并把系统返回事件 (OnBackInvokedInput)
+                // 接进了 onBackPressedDispatcher.eventDispatcher。这里再 provide 一个无 parent 的
+                // root 会把它整个遮住 —— 预测返回手势收不到事件, 只有程序化返回能用。
+                // LocalNavigationEventDispatcherOwner 是 compositionLocalWithHostDefaultOf,
+                // 不 provide 时自动走 view tree 找到 Activity 的那个。
+                MainScreen(onThemeChanged = refreshTheme)
                 // 启动自动权限引导 (v1.0.36): 通知系统框 -> 应用内一键允许 -> 厂商自启动提示
                 PermissionGuideHost()
                 // 一次性保活提示 (v1.1.2): 教用户在最近任务里锁定本应用, 弹过一次永不再弹
@@ -139,6 +152,47 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         AppState.foreground = true
+        // 跟随系统模式下, 用户可能在系统设置里切了深/浅色, 回来要重算状态栏图标明暗
+        syncSystemBarStyle()
+    }
+
+    /**
+     * 状态栏 / 导航栏: 全透明 + 图标明暗按 [dark] 决定。
+     *
+     * [dark] 传 **背景是不是深色**。SystemBarStyle.auto 的 detectDarkMode 参数含义是
+     * 「背景是否深色」—— 返回 true 时系统会画浅色(白)图标。这里必须传真实值,
+     * 恒 true 会让浅色主题顶栏上出现白色的时间/信号图标(等于看不见)。
+     */
+    private fun applySystemBarStyle(dark: Boolean) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ) { dark },
+            navigationBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ) { dark },
+        )
+        window.isNavigationBarContrastEnforced = false
+    }
+
+    /**
+     * 按「设置里的明暗 + 系统明暗」刷新状态栏/导航栏图标明暗。
+     *
+     * 用 Activity 的 resources 而不是 Resources.getSystem(): 后者读不到 App 级的夜间配置。
+     * 明暗算法与 AppTheme.kt:71-76 的 darkTheme 保持一致, 否则会出现顶栏和图标不同步。
+     */
+    private fun syncSystemBarStyle() {
+        val systemDark = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val dark = when (Settings.getThemeMode()) {
+            ThemeMode.SYSTEM -> systemDark
+            ThemeMode.LIGHT -> false
+            ThemeMode.DARK -> true
+        }
+        applySystemBarStyle(dark)
     }
 
     override fun onPause() {
@@ -165,10 +219,16 @@ class MainActivity : ComponentActivity() {
         val i = intent ?: return
         val pmConvId = i.getIntExtra(MessageService.EXTRA_OPEN_PM_CONV, 0)
         val groupId = i.getIntExtra(MessageService.EXTRA_OPEN_GROUP, 0)
-        if (pmConvId > 0 || groupId > 0) {
-            PendingNav.request(pmConvId = pmConvId, groupId = groupId)
+        val openDownloads = i.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)
+        if (pmConvId > 0 || groupId > 0 || openDownloads) {
+            PendingNav.request(
+                pmConvId = pmConvId,
+                groupId = groupId,
+                openDownloads = openDownloads,
+            )
             i.removeExtra(MessageService.EXTRA_OPEN_PM_CONV)
             i.removeExtra(MessageService.EXTRA_OPEN_GROUP)
+            i.removeExtra(EXTRA_OPEN_DOWNLOADS)
         }
     }
 }

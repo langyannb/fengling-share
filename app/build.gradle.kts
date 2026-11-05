@@ -4,6 +4,8 @@ plugins {
     // AGP 9.0+ 内置 Kotlin 支持, 无需 org.jetbrains.kotlin.android
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    // 返回栈持久化 (rememberNavBackStack 用 kotlinx.serialization 编 JSON)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // 签名密码不落库: 优先读 CI Secret 注入的环境变量, 其次读未跟踪的 local.properties
@@ -24,8 +26,8 @@ android {
         applicationId = "com.fengling.share"
         minSdk = 33
         targetSdk = 34
-        versionCode = 151
-        versionName = "1.1.14"
+        versionCode = 157
+        versionName = "1.1.19"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -63,8 +65,17 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        // miuix 0.9.4 的产物是按 JVM target 21 编译的; 这里低于 21 的话,
+        // 调用它的 inline 函数 (NavDisplay 的 entry<>, rememberNavController<>) 会直接编译失败:
+        // "Cannot inline bytecode built with JVM target 21 into bytecode that is being built with JVM target 17"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
     }
 }
 
@@ -79,18 +90,28 @@ dependencies {
     // Material 3 (标准 MD3 风格)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
-    // 导航 (返回栈 + 预测性返回动画)
-    implementation(libs.androidx.navigation.compose)
+    // 导航 (NavDisplay / NavBackStack / 预测性返回手势)
+    // 替换 navigation-compose: 后者只在栈深>1 时挂系统预测返回, 跟手/收尾曲线全由框架定,
+    // 无法与 App 的转场对齐; miuix-nav 用单一 float 驱动深度, 手势与转场共用同一套映射。
+    implementation(libs.miuix.nav)
+    // 返回栈持久化 (rememberNavBackStack 编 JSON)
+    implementation(libs.kotlinx.serialization.json)
     // Miuix (小米设计语言)
     implementation(libs.miuix.ui)
     implementation(libs.miuix.icons)
     // 液态玻璃 (miuix blur)
     implementation(libs.miuix.blur)
+    // 设置项组件 (SwitchPreference / ArrowPreference / OverlayDropdownPreference)
+    implementation(libs.miuix.preference)
+    // MD3 tonal 色板计算 (纯 Java, 无 Compose 层; 原本已由 miuix-ui 传递进来, 这里显式锁定版本)
+    implementation(libs.material.color.utilities)
     // Miuix SearchBar 需要 NavigationEventDispatcherOwner
     implementation(libs.navigationevent.compose)
     // 网络 + 图片
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    // v1.1.15: 视频封面抽帧 (coil-video 的 VideoFrameDecoder)
+    implementation(libs.coil.video)
     // 视频播放 (ExoPlayer) + 播放缓存 (SimpleCache 300MB LRU) + 上传前压缩
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.datasource)

@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older that API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   备份规则 (Android 11 / API 30 及以下，由 AndroidManifest 的
+   android:fullBackupContent="@xml/backup_rules" 引用才会生效)。
+   见 https://developer.android.com/guide/topics/data/autobackup
+   注意：API 31 起本文件被忽略，改用 data_extraction_rules.xml。
 -->
 <full-backup-content>
-  <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+  <!-- token / 账号保险箱等敏感数据以明文存在 SharedPreferences 里
+       (UserStore.kt、Settings.kt 均直接 getSharedPreferences)，
+       禁止云备份，否则等于把登录态明文上传。
+       注意：排除整个 sharedpref 域，主题等普通设置也不会被备份，属于有意取舍。 -->
+  <exclude domain="sharedpref" path="." />
 </full-backup-content>

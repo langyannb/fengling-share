@@ -20,6 +20,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -37,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
@@ -52,7 +54,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,12 +67,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.webkit.MimeTypeMap
-import android.app.DownloadManager
-import android.os.Environment
+import android.view.ViewGroup
 import android.widget.Toast
+import com.fengling.share.data.Downloads
 import com.fengling.share.ui.components.AppTopBar
-import com.fengling.share.ui.components.predictiveBackTransform
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import com.fengling.share.ui.components.ExternalJumpDialog
 import com.fengling.share.ui.components.ExternalJumpTarget
 import com.fengling.share.ui.components.resolveExternalJump
@@ -89,6 +91,8 @@ fun WebViewScreen(
     title: String,
     password: String = "",
     onBack: () -> Unit,
+    /** 下载任务已收进下载中心: 跳过去让用户看到进度 */
+    onOpenDownloads: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var pageTitle by remember { mutableStateOf(title) }
@@ -97,10 +101,33 @@ fun WebViewScreen(
     // 返回栈状态跟踪 (解决 BackHandler enabled 陈旧问题)
     // 每次进入都是全新 WebView 实例, 初始恒为 false
     var canGoBack by remember { mutableStateOf(false) }
+    // 主资源加载失败时的提示文案 (null = 正常)
+    var loadError by remember { mutableStateOf<String?>(null) }
 
     // 每次进入创建全新 WebView 实例, 离开销毁:
     // 复用实例会残留上一链接的内部历史栈 → 返回键 goBack 回到旧链接
-    val webView = remember { WebView(context) }
+    //
+    // ⚠️ 必须显式给 layoutParams (这是「DOM 有内容却整页空白」的总根因):
+    // Compose 的 AndroidView 只负责测量/放置, 不会替子 View 设 LayoutParams。
+    // WebView 内部的 AwLayoutSizer 在拿不到「有尺寸的容器」时, 会给渲染树一个高度为 0 的
+    // 初始包含块 —— 于是 CSS 里所有百分比高度链 (html{height:100%} body{height:100%}
+    // #app{height:100%}) 全部解析成 0px, position:fixed 的元素因为有视口做参照反而还能画出来。
+    // 这正好对上实测现象:
+    //   · link3.cc:     整页空白, 只剩底部那个固定定位的紫色按钮
+    //   · aceyun.cn:    页面能显示, 但 van-popup / van-overlay 是 fixed + 100% 高 → 弹窗看不见
+    //   · pd.qq.com:    频道头/标签正常, 内容列表整片空白
+    // 而且 window.innerHeight 一直是正确值(686), 只有 html/body 的
+    // getComputedStyle/getBoundingClientRect 高度是 0 —— 很容易误判成「站点自己的 CSS 有毛病」,
+    // 之前的 100vh 注入自愈脚本就是被这个假象带偏的 (logcat 里反复生效但页面仍然空白)。
+    // 参考: stackoverflow.com/questions/77867390 (同症状, 同一个解法)
+    val webView = remember {
+        WebView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+    }
 
     // 配置 WebView (同步执行, 确保先于 loadUrl; 不用 LaunchedEffect 避免时序竞争导致
     // WebViewClient 未设置 → 页面加载绕过 shouldOverrideUrlLoading 拦截)
@@ -147,7 +174,10 @@ fun WebViewScreen(
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         // 正常浏览器配置: 遵循页面 viewport meta
-        settings.loadWithOverviewMode = true
+        // via / Chrome 默认是 loadWithOverviewMode=false + useWideViewPort=true。
+        // 开着 overview 模式时 WebView 会「按整页宽度」缩放视口, 一旦页面宽度算成 0
+        // (SPA 首屏 #app 还没撑开时就是), 整页会被缩成一条线 → 表现为白屏。
+        settings.loadWithOverviewMode = false
         settings.useWideViewPort = true
         settings.databaseEnabled = true
         settings.javaScriptCanOpenWindowsAutomatically = true
@@ -174,6 +204,16 @@ fun WebViewScreen(
         settings.setSupportZoom(true)
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
+        // ===== 补齐真实浏览器行为 (v1.1.18, 用户对比 via / edge 后反馈) =====
+        // 缓存走默认策略: 之前没设, WebView 默认值虽然也是 LOAD_DEFAULT, 但显式写上避免
+        // 某些 ROM 定制成 LOAD_NO_CACHE(每次全量回源 → 慢且容易半截渲染)。
+        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // 定位: onGeolocationPermissionsShowPrompt 虽然放行了, 但不开这个开关不会去问它,
+        // 地图类页面会直接拿不到坐标 → 内容区域空着。(setGeolocationEnabled 已废弃但仍是唯一开关;
+        // 项目未开 allWarningsAsErrors, 只是编译告警)
+        settings.setGeolocationEnabled(true)
+        // 让页面能用「保存密码 / 表单自动填充」的语义, 部分登录页靠它判断是否真实浏览器
+        settings.saveFormData = true
         Log.i(
             "FLWebView",
             "WebView 内核: " + (
@@ -182,12 +222,16 @@ fun WebViewScreen(
                 )
         )
         // UA 伪装: 去掉 WebView 标识, 伪装成手机 Chrome (UC网盘等站点检测 WebView UA 会拦截)
-        settings.userAgentString =
-            WebSettings.getDefaultUserAgent(context)
-                .replace("; wv", "")
-                .replace("Version/4.0", "")
-                .replace("Version/4.0 Mobile", "")
-                .trim() + " Mobile"
+        // v1.1.18 修正: 原来无条件 `+ " Mobile"`, 而默认 UA 里本来就带 "Mobile Safari/537.36",
+        // 拼出来是 "...Safari/537.36 Mobile Mobile" —— 部分站点按 UA 做正则校验时直接判为
+        // 非浏览器 → 返回残缺页面/降级 DOM，这也是「有些内容不显示」的一种来源。
+        // 现在只做减法(去 wv / 去 Version/4.0), 并保证 Mobile 恰好一次。
+        settings.userAgentString = WebSettings.getDefaultUserAgent(context)
+            .replace("; wv", "")
+            .replace(" Version/4.0", "")
+            .replace("Version/4.0 ", "")
+            .trim()
+            .let { if (it.contains("Mobile")) it else "$it Mobile" }
 
         // ===== 布局高度塌陷修复 (2026-08-10, link3.cc 实测) =====
         // SPA 页面用 html/body height:100% 百分比高度链, WebView 在视口未就绪时
@@ -207,6 +251,43 @@ fun WebViewScreen(
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 // 页面跳转后更新返回栈状态
                 canGoBack = view?.canGoBack() ?: false
+                loadError = null
+            }
+
+            // v1.1.18: 主资源加载失败时给个明确提示。
+            // 之前 onReceivedError 完全没实现 —— 断网 / 域名被墙 / 证书错误时页面就是纯白,
+            // 用户无法区分「网站在加载」和「根本打不开」, 观感上正是「打开不全 / 什么都不显示」。
+            // 只处理主框架请求(isForMainFrame), 子资源失败不打扰用户。
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: android.webkit.WebResourceError?,
+            ) {
+                Log.w(
+                    "FLWebView",
+                    "加载失败 ${if (request?.isForMainFrame == true) "主资源" else "子资源"}: " +
+                        "${request?.url} code=${error?.errorCode} desc=${error?.description}",
+                )
+                if (request?.isForMainFrame == true) {
+                    loadError = "打不开这个页面（${error?.errorCode ?: -1}）"
+                    progress = 100
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: android.webkit.WebResourceResponse?,
+            ) {
+                Log.w(
+                    "FLWebView",
+                    "HTTP ${errorResponse?.statusCode} " +
+                        "${if (request?.isForMainFrame == true) "主资源" else "子资源"}: ${request?.url}",
+                )
+                if (request?.isForMainFrame == true) {
+                    loadError = "服务器返回 ${errorResponse?.statusCode ?: 0}"
+                    progress = 100
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -247,47 +328,27 @@ fun WebViewScreen(
                         }
                     }
                 }
-                // 修复 SPA 页面在 WebView 中「内容空白只剩 fixed 元素」的两大元凶:
-                // 1) html/body height:100% 百分比高度链在视口未就绪时解析为 0 → 内容 offsetHeight=0 不可见
-                // 2) 首屏 loading 遮罩 (#index_loading) 应用挂载后未移除 → 一直盖在白屏上
-                // vh 单位实时跟随视口, 不依赖百分比链; 多时延重试覆盖 SPA 晚挂载。
+                // ===== 只留一条诊断日志，不再注入任何布局修复 =====
+                // 废掉了「探测到高度塌陷就改 html/body 为 100vh」那套自愈脚本。
+                // 真机上它每次都「生效」了（logcat 里 fixed=yes 一路打出来），页面却依然空白 ——
+                // 因为塌陷不是站点 CSS 的问题，是 WebView 自己没拿到有尺寸的容器
+                // （见文件上方 layoutParams 的注释）。根因在外层修掉之后，这里再改页面样式
+                // 只会把正常站点也弄坏，所以整段删掉，只在 logcat 留一行尺寸，方便下次对照。
                 if (url?.startsWith("http") == true) {
                     runCatching {
                         view?.evaluateJavascript(
                             """
                             (function(){
-                              if (window.__flFixInstalled) return;
-                              window.__flFixInstalled = true;
-                              var log = function(m){ try { console.log('[FLfix] ' + m); } catch(e){} };
-                              var fix = function(tag){
-                                try {
-                                  var vh = window.innerHeight || document.documentElement.clientHeight;
-                                  var de = document.documentElement, b = document.body;
-                                  var app = document.getElementById('app');
-                                  var bh = b ? b.offsetHeight : -1;
-                                  var ah = app ? app.offsetHeight : -1;
-                                  log(tag + ' vh=' + vh + ' bodyH=' + bh + ' appH=' + ah + ' appKids=' + (app ? app.children.length : -1));
-                                  if (!vh || vh <= 0) return;
-                                  if (bh < vh * 0.5 || (app && ah < vh * 0.5)) {
-                                    de.style.minHeight = '100vh';
-                                    if (b) { b.style.minHeight = '100vh'; b.style.height = 'auto'; }
-                                    if (app) { app.style.minHeight = '100vh'; app.style.height = 'auto'; }
-                                    log(tag + ' 已修复高度塌陷');
-                                  }
-                                  var ld = document.getElementById('index_loading');
-                                  if (ld && app && app.children.length > 0) {
-                                    ld.parentNode.removeChild(ld);
-                                    log(tag + ' 已移除首屏 loading 遮罩');
-                                  }
-                                  window.dispatchEvent(new Event('resize'));
-                                  window.dispatchEvent(new Event('scroll'));
-                                } catch(e) { log(tag + ' ERR ' + e.message); }
-                              };
-                              fix('t0');
-                              setTimeout(function(){fix('t500')},500);
-                              setTimeout(function(){fix('t1500')},1500);
-                              setTimeout(function(){fix('t3000')},3000);
-                              setTimeout(function(){fix('t6000')},6000);
+                              if (window.__flProbe) return;
+                              window.__flProbe = true;
+                              try {
+                                var de=document.documentElement, b=document.body;
+                                console.log('[FLdom] vh='+window.innerHeight+' vw='+window.innerWidth+
+                                  ' deH='+Math.round(de.getBoundingClientRect().height)+
+                                  ' bodyH='+Math.round(b.getBoundingClientRect().height)+
+                                  ' textLen='+(b.innerText||'').length+
+                                  ' dpr='+window.devicePixelRatio);
+                              } catch(e) {}
                             })();
                             """.trimIndent()
                         ) { }
@@ -362,27 +423,22 @@ fun WebViewScreen(
             }
         }
 
-        // 下载处理: 交给系统下载管理器 (不拦截, 完整浏览器行为)
+        // 下载处理: 收进 App 自己的下载中心 (Downloads), 不再甩给系统 DownloadManager。
+        // 为什么换: 系统那个把任务丢给别的进程 —— App 拿不到实时进度、没法在列表里暂停/续传,
+        // 而且带不上 Referer, 蓝奏云这类网盘会直接 403。自己下就能带全请求头 + 断点续传。
         webView.setDownloadListener(
-            DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-                try {
-                    val request = DownloadManager.Request(Uri.parse(url)).apply {
-                        setMimeType(mimetype ?: "application/octet-stream")
-                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                        setDestinationInExternalPublicDir(
-                            Environment.DIRECTORY_DOWNLOADS,
-                            downloadFileName(url, contentDisposition, mimetype),
-                        )
-                    }
-                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-                    dm?.enqueue(request)
-                    Toast.makeText(context, "开始下载", Toast.LENGTH_SHORT).show()
-                } catch (_: Exception) {
-                    // DownloadManager 失败时回退: 系统浏览器打开
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    } catch (_: Exception) { }
-                }
+            DownloadListener { url, _userAgent, contentDisposition, mimetype, _contentLength ->
+                val name = downloadFileName(url, contentDisposition, mimetype)
+                Downloads.enqueue(
+                    url = url,
+                    fileName = name,
+                    mimeType = mimetype ?: "application/octet-stream",
+                    pageTitle = pageTitle,
+                    // 网盘防盗链要 Referer, 用当前页面地址
+                    referer = webView.url ?: url,
+                )
+                Toast.makeText(context, "已加入下载管理", Toast.LENGTH_SHORT).show()
+                onOpenDownloads()
             }
         )
     }
@@ -399,6 +455,12 @@ fun WebViewScreen(
         webView.loadUrl(url)
     }
 
+    // v1.1.15: WebView 自己的底色也跟 App 主题背景一致 ——
+    // 网页换页 / 重渲染的空档露出来的是 App 底色, 不再是刺眼的白闪。
+    // MiuixTheme 只能在组合里读, 所以先把颜色取出来, 再交给非组合的 SideEffect
+    val webBackgroundArgb = MiuixTheme.colorScheme.background.toArgb()
+    SideEffect { webView.setBackgroundColor(webBackgroundArgb) }
+
     // 页面离开时: 停加载 + 销毁 WebView 实例 (每次进入都是全新实例, 不残留历史/状态)
     DisposableEffect(Unit) {
         onDispose {
@@ -407,17 +469,20 @@ fun WebViewScreen(
         }
     }
 
-    // 契约 B: 预测性返回 —— 用 PredictiveBackHandler 取代旧式 BackHandler (抢返回、无任何动画)。
-    // enabled 由 canGoBack 这个 state 驱动 (不是直接读 webView.canGoBack() —— 那样不会触发重组,
-    // 就是上面注释里说的「enabled 陈旧」隐患):
-    //   有内部历史 -> 手势跟手把网页滑出去, 松手过半 commit 后 goBack() 回退网页, 未过半回弹;
-    //   没有历史   -> 本回调不接管, 返回交给 Navigation 播 pop 转场回上一页。
-    val backProgress = rememberPredictiveBackProgress(enabled = canGoBack) {
+    // v1.1.15: 这一页**不能**再注册自己的预测返回 (PredictiveBackHandler)。
+    // OnBackPressedDispatcher 是后注册者优先 —— 本页一注册, 就把 navigation-compose 的 NavHost
+    // 自己的预测返回回调顶掉了; NavHost 收不到手势进度, 上一级目的地从头到尾没被组合,
+    // 于是页面跟手右移让出来的左边那条缝没有任何东西可画, 正是用户看到的「返回过程背景一片空白」。
+    //
+    // 现在改成:
+    //   有网页历史 -> 非预测式 BackHandler 直接回退上一页 (页面不位移, 也就没有缝可露);
+    //   没有历史   -> 本页完全不注册, 返回交给 NavHost 框架自己 seek (上一级真实页面跟入)。
+    // 代价只是网页内部回退不再有跟手动画; 空白不可接受, 动画可以让。
+    BackHandler(enabled = canGoBack) {
         webView.goBack()
     }
 
     Scaffold(
-        modifier = Modifier.predictiveBackTransform(backProgress),
         topBar = {
             AppTopBar(
                 title = pageTitle,
@@ -474,6 +539,14 @@ fun WebViewScreen(
                                     webView.reload()
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("下载管理") },
+                                leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenDownloads()
+                                },
+                            )
                         }
                     }
                 },
@@ -483,7 +556,9 @@ fun WebViewScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                // v1.1.15: 内容层铺一层 App 底色 —— 网页还没画出来 / 换页的空档不露窗口底色
+                .background(MiuixTheme.colorScheme.background),
         ) {
             AndroidView(
                 factory = { webView },
@@ -494,6 +569,11 @@ fun WebViewScreen(
                         if (size.width > 0 && size.height > 0) webViewReady = true
                     },
             )
+            // v1.1.18: 之前这里没有任何「网页自己滚不动」的兜底。
+            // 页面内容比视口长、但页面自身没开滚动(或滚动容器被注入脚本改塌)时,
+            // 用户看到的就是「下面一段内容不显示」。所以外层再包一层可滚动的 Column?
+            // —— 不行: 包滚动容器会让页面内部的 position:fixed / 惯性滚动全失效。
+            // 正确做法是保持 WebView 全尺寸、由页面自己滚; 这里只保证不额外裁剪。
             // 加载进度条 (顶部细条, 平滑动画)
             val animatedProgress by animateFloatAsState(
                 targetValue = progress / 100f,
@@ -545,6 +625,25 @@ fun WebViewScreen(
                 }
             }
 
+            // 加载失败提示 (v1.1.18): 白屏时给出可操作信息, 而不是让用户盯着一片空白
+            loadError?.let { msg ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MiuixTheme.colorScheme.background),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TopLevelErrorRetry(
+                        message = msg,
+                        onRetry = {
+                            loadError = null
+                            progress = 0
+                            webView.reload()
+                        },
+                    )
+                }
+            }
+
             // 外部应用跳转确认框 (点击非 http(s) 链接时弹出)
             pendingExternal?.let { target ->
                 ExternalJumpDialog(
@@ -567,7 +666,7 @@ fun WebViewScreen(
     }
 }
 
-/** 从下载 URL / Content-Disposition / MIME 推断文件名 (DownloadManager 落盘用) */
+/** 从下载 URL / Content-Disposition / MIME 推断文件名 (下载中心落盘用) */
 private fun downloadFileName(url: String, contentDisposition: String?, mimeType: String?): String {
     // Content-Disposition 里的 filename 优先 (支持 RFC 5987 filename*)
     contentDisposition?.let { cd ->
@@ -585,4 +684,29 @@ private fun downloadFileName(url: String, contentDisposition: String?, mimeType:
     // 兜底: 按时间戳 + MIME 扩展名
     val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
     return "download_${System.currentTimeMillis()}.$ext"
+}
+
+/** 加载失败时的居中提示 + 重试按钮（内置浏览器白屏兜底，v1.1.18） */
+@Composable
+private fun TopLevelErrorRetry(message: String, onRetry: () -> Unit) {
+    androidx.compose.foundation.layout.Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+    ) {
+        Text(
+            text = message,
+            fontSize = 15.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+        )
+        Box(modifier = Modifier.height(12.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(MiuixTheme.colorScheme.primary)
+                .clickable(onClick = onRetry)
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+        ) {
+            Text(text = "重试", fontSize = 15.sp, color = MiuixTheme.colorScheme.onPrimary)
+        }
+    }
 }

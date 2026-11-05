@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import com.fengling.share.ui.components.chat.ChatRefreshBar
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -186,7 +187,14 @@ fun PmScreen(
             }
         }
 
-        else -> LazyColumn(
+        else -> Box(modifier = Modifier.fillMaxSize()) {
+            // v1.1.20: 静默刷新也给出一点可见反馈 (以前 refreshing 只改状态没人看)
+            ChatRefreshBar(
+                visible = refreshing,
+                text = "正在刷新…",
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+            )
+            LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
         ) {
@@ -212,6 +220,7 @@ fun PmScreen(
                         }
                     },
                 )
+            }
             }
         }
     }

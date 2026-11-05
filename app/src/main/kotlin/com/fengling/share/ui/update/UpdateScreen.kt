@@ -48,8 +48,6 @@ import com.fengling.share.data.ApkDownloader
 import com.fengling.share.data.AppVersion
 import com.fengling.share.data.VersionInfo
 import com.fengling.share.ui.components.AppTopBar
-import com.fengling.share.ui.components.predictiveBackTransform
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme

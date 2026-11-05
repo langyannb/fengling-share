@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +53,12 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 原来收/开用的是 spring (先冲一下再停), 加上收起最后一帧高度突变 → 用户反馈「卡一下再收起」。
  */
 internal const val CHAT_PANEL_ANIM_MS = 220
+/**
+ * 「+」面板里一行功能格的高度。
+ * 图标 52dp + 间距 5dp + 文字行高约 17dp + 上下留白各 6dp = 86dp, 84dp 会顶满把文字裁掉
+ * (用户说的「加号里面的东西字体少了三分之一」)。留 8dp 余量, 顺带兼容系统大字号。
+ */
+private val PANEL_ROW_HEIGHT = 94.dp
 
 /**
  * 面板「从下往上滑出 / 向下收起」的布局变换 (v1.1.14)。
@@ -133,8 +137,7 @@ data class ChatPanelItem(
 /**
  * 「+」面板: 从输入框下方 spring 弹出, 圆角上沿 + 液体玻璃底, 高度约屏高 45%。
  *
- * 布局照 QQ 截图:
- *  顶部一行图标 (横向可滑, 末尾固定「关闭」) + 下面 4 列网格 (每页最多 8 个) + 分页圆点。
+ * 布局: 4 列网格 (每页最多 8 个 = 2 行) + 分页圆点, 面板高按实际行数贴合内容。
  * 超过一页时才会出现圆点与左右滑动翻页; 只有一页就不画圆点 (避免多余的 UI)。
  */
 @Composable
@@ -145,7 +148,21 @@ fun ChatPlusPanel(
     modifier: Modifier = Modifier,
     heightFraction: Float = 0.45f,
 ) {
-    val panelHeight = LocalConfiguration.current.screenHeightDp.dp * heightFraction
+    // 高度按内容的实际行数算, 不再固定占屏高 45% —— 只有 7 个功能时固定高度会把
+    // 两行网格拉到各占一半面板高, 行间留出一大片空白 (真机 q3.png 那样)。
+    val perRow = 4
+    val maxRows = 2
+    // 每页 8 个 (2 行 x 4 列); 实际画几行由该页的功能数决定, 一页放得下就不留空行
+    val pages = if (items.isEmpty()) 1 else (items.size + perRow * maxRows - 1) / (perRow * maxRows)
+    fun rowsOf(page: Int): Int {
+        val count = (items.size - page * perRow * maxRows).coerceIn(0, perRow * maxRows)
+        return if (count == 0) 1 else (count + perRow - 1) / perRow
+    }
+    // 多页时高度按满页算, 保证翻页时面板不跳高; 只有一页就直接贴合内容
+    val heightRows = if (pages > 1) maxRows else rowsOf(0)
+    val panelHeight = (
+        8.dp + PANEL_ROW_HEIGHT * heightRows + (if (pages > 1) 18.dp else 0.dp) + 8.dp
+        ).coerceAtMost(LocalConfiguration.current.screenHeightDp.dp * heightFraction)
     // 先起「摘除时机」(收起动画播完才整块移除), 再起进度动画 —— 两个 effect 的执行顺序
     // 就是这里的书写顺序, 这样展开的首帧进度仍停在 0, 面板不会先闪一下再滑上来。
     val panelInTree = panelMounted(visible)
@@ -157,57 +174,19 @@ fun ChatPlusPanel(
             .chatPanelSlide(progress, with(LocalDensity.current) { panelHeight.roundToPx() })
             .height(panelHeight)
             .glassSurface(
-                // 面板在捕获层内部, 不能自引用 backdrop → 退化为半透明玻璃底
+                // 面板排在输入栏下面, 背后没有内容可糊 —— 硬采样只会取到捕获层边界外的
+                // 透明像素, 模糊后算出脏灰色。这里只做玻璃质感 (高光 + 内阴影)。
                 backdrop = null,
                 shape = RoundedCornerShape(
                     topStart = GlassRadius.panel,
                     topEnd = GlassRadius.panel,
                 ),
-                fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.95f),
+                fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
             ),
     ) {
-        Spacer(Modifier.height(10.dp))
-        // ===== 顶部一行图标 (与截图排布一致: 图标在上、小字在下, 最右是关闭) =====
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            items.forEach { item ->
-                TopIconButton(item)
-            }
-            Spacer(Modifier.width(6.dp))
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
-                    .border(1.dp, glassStroke(), CircleShape)
-                    .clickable { onClose() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = "关闭面板",
-                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
         Spacer(Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp)
-                .height(1.dp)
-                .background(MiuixTheme.colorScheme.onBackground.copy(alpha = 0.06f)),
-        )
-        Spacer(Modifier.height(6.dp))
         // ===== 4 列网格 + 分页 (每页最多 8 个 = 2 行) =====
-        val perPage = 8
-        val pages = if (items.isEmpty()) 1 else (items.size + perPage - 1) / perPage
+        val perPage = perRow * maxRows
         val pagerState = rememberPagerState(pageCount = { pages })
         HorizontalPager(
             state = pagerState,
@@ -220,14 +199,15 @@ fun ChatPlusPanel(
                     .fillMaxSize()
                     .padding(horizontal = 12.dp),
             ) {
-                for (row in 0 until 2) {
+                val pageRows = rowsOf(page)
+                for (row in 0 until pageRows) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f),
+                            .height(PANEL_ROW_HEIGHT),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        for (col in 0 until 4) {
+                        for (col in 0 until perRow) {
                             val index = page * perPage + row * 4 + col
                             val item = items.getOrNull(index)
                             Box(
@@ -271,44 +251,6 @@ fun ChatPlusPanel(
     }
 }
 
-/** 顶部一行里的小图标 + 文字 */
-@Composable
-private fun TopIconButton(item: ChatPanelItem) {
-    Column(
-        modifier = Modifier
-            .padding(horizontal = 4.dp)
-            .width(56.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .clickable { item.onClick() }
-            .padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f))
-                .border(1.dp, glassStroke(), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = item.icon,
-                contentDescription = item.label,
-                tint = MiuixTheme.colorScheme.primary,
-                modifier = Modifier.size(21.dp),
-            )
-        }
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = item.label,
-            fontSize = 10.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            color = MiuixTheme.colorScheme.onBackgroundVariant,
-        )
-    }
-}
-
 /** 网格里的一个大方块 (图标 + 名字) */
 @Composable
 private fun GridCell(item: ChatPanelItem) {
@@ -334,10 +276,13 @@ private fun GridCell(item: ChatPanelItem) {
                 modifier = Modifier.size(24.dp),
             )
         }
-        Spacer(Modifier.height(5.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = item.label,
-            fontSize = 11.sp,
+            // 11sp 在 94dp 的行高里也放得下, 但删掉顶部图标行之后这里就是唯一的名字来源,
+            // 提到 13sp 才和其它面板的字号观感一致 (用户说「字体少了三分之一」)
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MiuixTheme.colorScheme.onBackgroundVariant,
@@ -382,12 +327,14 @@ fun ChatEmojiPanel(
             .chatPanelSlide(progress, with(LocalDensity.current) { panelHeight.roundToPx() })
             .height(panelHeight)
             .glassSurface(
+                // 面板排在输入栏下面, 背后没有内容可糊 —— 硬采样只会取到捕获层边界外的
+                // 透明像素, 模糊后算出脏灰色。这里只做玻璃质感 (高光 + 内阴影)。
                 backdrop = null,
                 shape = RoundedCornerShape(
                     topStart = GlassRadius.panel,
                     topEnd = GlassRadius.panel,
                 ),
-                fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.95f),
+                fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
             ),
     ) {
         Row(

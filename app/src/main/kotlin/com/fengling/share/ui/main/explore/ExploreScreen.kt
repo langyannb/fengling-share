@@ -1,7 +1,16 @@
 package com.fengling.share.ui.main.explore
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -41,7 +50,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,7 +71,6 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -171,6 +178,17 @@ fun ExploreScreen(
         }
     }
 
+    // 当前分类名 (右上角大标题用)
+    val currentCategoryName = remember(categories, selectedCategory, selectedSubCategory) {
+        when {
+            selectedSubCategory > 0 ->
+                categories.firstOrNull { it.id == selectedSubCategory }?.name ?: "全部"
+            selectedCategory > 0 ->
+                categories.firstOrNull { it.id == selectedCategory }?.name ?: "全部"
+            else -> "全部"
+        }
+    }
+
     Scaffold(
         topBar = { AppTopBar(title = "分类") },
     ) { innerPadding ->
@@ -193,19 +211,28 @@ fun ExploreScreen(
                         .appGradientBackground(),
                 ) {
                     // ── 左侧: 一级分类栏 ──
+                    // 不再铺一整块灰底: 用一层很淡的竖向渐变把栏位和内容区分开,
+                    // 选中态靠主色淡底胶囊表达, 视觉更干净。
                     LazyColumn(
                         modifier = Modifier
-                            .width(100.dp)
+                            .width(88.dp)
                             .fillMaxHeight()
-                            .background(MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)),
-                        contentPadding = PaddingValues(top = 6.dp, bottom = 110.dp),
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+                                        MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f),
+                                        Color.Transparent,
+                                    ),
+                                ),
+                            ),
+                        contentPadding = PaddingValues(top = 10.dp, bottom = 110.dp),
                     ) {
                         item(key = "cat_all") {
                             SideCategoryItem(
                                 name = "全部",
                                 count = allApps.size,
-                                selected = selectedCategory == 0,
-                                accent = MiuixTheme.colorScheme.primary,
+                                selected = selectedCategory == 0 && selectedSubCategory == 0,
                                 onClick = {
                                     if (selectedCategory != 0 || selectedSubCategory != 0) {
                                         selectedCategory = 0
@@ -219,7 +246,6 @@ fun ExploreScreen(
                                 name = cat.name,
                                 count = topCounts[cat.id] ?: 0,
                                 selected = selectedCategory == cat.id,
-                                accent = parseColor(cat.color),
                                 onClick = {
                                     if (selectedCategory != cat.id) {
                                         selectedCategory = cat.id
@@ -230,17 +256,42 @@ fun ExploreScreen(
                         }
                     }
 
-                    // ── 右侧: 子分类 chips + 软件列表 ──
+                    // ── 右侧: 标题 + 子分类 chips + 软件列表 ──
                     Column(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight(),
                     ) {
+                        // 当前分类大标题: 让右侧有一个明确的「我在看什么」的锚点
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 14.dp, end = 14.dp, top = 10.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            Text(
+                                text = currentCategoryName,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MiuixTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "${apps.size} 款",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                modifier = Modifier.padding(bottom = 3.dp),
+                            )
+                        }
+
                         if (subCategories.isNotEmpty()) {
                             LazyRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                             ) {
                                 item(key = "sub_all") {
                                     CategoryChip(
@@ -259,40 +310,58 @@ fun ExploreScreen(
                             }
                         }
 
-                        when {
-                            appsLoading && apps.isEmpty() -> {
-                                LoadingBox(Modifier.fillMaxSize())
-                            }
-
-                            appsError.isNotEmpty() && apps.isEmpty() -> {
-                                Box(Modifier.fillMaxSize()) {
-                                    EmptyMessage(text = appsError)
+                        // 列表: 切分类时上浮淡入 (与首页同一套节奏, 不左右滑)
+                        AnimatedContent(
+                            targetState = currentKey,
+                            transitionSpec = {
+                                fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
+                                    slideInVertically(
+                                        animationSpec = tween(260, easing = FastOutSlowInEasing),
+                                        initialOffsetY = { h -> h / 14 },
+                                    ) togetherWith
+                                    fadeOut(tween(130, easing = FastOutSlowInEasing)) +
+                                    slideOutVertically(
+                                        animationSpec = tween(130, easing = FastOutSlowInEasing),
+                                        targetOffsetY = { h -> -h / 20 },
+                                    )
+                            },
+                            label = "exploreList",
+                        ) { key ->
+                            // 转场期间上一层要显示它自己的数据 (而不是新的), 否则会「先看到新列表再淡出」
+                            val shown = ExploreCache.appsByKey[key]
+                                ?: if (key == currentKey) apps else emptyList()
+                            when {
+                                appsLoading && shown.isEmpty() -> {
+                                    LoadingBox(Modifier.fillMaxSize())
                                 }
-                            }
 
-                            apps.isEmpty() -> {
-                                Box(Modifier.fillMaxSize()) {
-                                    EmptyMessage(text = "该分类暂无软件")
-                                }
-                            }
-
-                            else -> {
-                                LazyColumn(
-                                    state = listState,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(
-                                        start = 12.dp,
-                                        end = 12.dp,
-                                        top = 4.dp,
-                                        bottom = 100.dp, // 留出悬浮胶囊空间
-                                    ),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                                ) {
-                                    item(key = "count_title") {
-                                        SmallTitle(text = "共 ${apps.size} 款软件")
+                                appsError.isNotEmpty() && shown.isEmpty() -> {
+                                    Box(Modifier.fillMaxSize()) {
+                                        EmptyMessage(text = appsError)
                                     }
-                                    items(apps, key = { it.id }) { app ->
-                                        CategoryAppItem(app = app, onClick = { onAppClick(app.id) })
+                                }
+
+                                shown.isEmpty() -> {
+                                    Box(Modifier.fillMaxSize()) {
+                                        EmptyMessage(text = "该分类暂无软件")
+                                    }
+                                }
+
+                                else -> {
+                                    LazyColumn(
+                                        state = listState,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(
+                                            start = 14.dp,
+                                            end = 14.dp,
+                                            top = 2.dp,
+                                            bottom = 100.dp, // 留出悬浮胶囊空间
+                                        ),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        items(shown, key = { it.id }) { app ->
+                                            CategoryAppItem(app = app, onClick = { onAppClick(app.id) })
+                                        }
                                     }
                                 }
                             }
@@ -305,73 +374,93 @@ fun ExploreScreen(
 }
 
 /**
- * 左侧一级分类项: 选中时白底圆角卡片 + 左侧主色竖条 + 主色粗体文字
+ * 左侧一级分类项。
+ *
+ * 选中态: 主色淡底胶囊 + 主色粗体字 + 主色竖条。
+ * ⚠️ 不再接受服务端下发的自定义颜色 —— 一级分类颜色必须统一走主题色,
+ * 否则换主题时左边栏还是各分类的老颜色, 跟整体割裂 (用户 2026-11-04 要求)。
  */
 @Composable
 private fun SideCategoryItem(
     name: String,
     count: Int,
     selected: Boolean,
-    accent: Color,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isPressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.96f else 1f,
-        animationSpec = spring(
-            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
-            stiffness = androidx.compose.animation.core.Spring.StiffnessLow,
-        ),
+        targetValue = if (isPressed) 0.95f else 1f,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 700f),
         label = "sideCat",
     )
-    Box(
+    // 选中/未选中的底色与文字色都插值过渡, 点击不再硬跳
+    val bg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.primary.copy(alpha = 0.13f)
+        else Color.Transparent,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "sideCatBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.primary
+        else MiuixTheme.colorScheme.onBackgroundVariant,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "sideCatFg",
+    )
+    // 竖条从 0 高度长出来 / 缩回去
+    val barHeight by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 900f),
+        label = "sideCatBar",
+    )
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 7.dp, vertical = 3.dp)
+            .padding(horizontal = 8.dp, vertical = 2.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(11.dp))
-            .background(
-                if (selected) MiuixTheme.colorScheme.surface else Color.Transparent
-            )
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 8.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center,
+            .padding(horizontal = 6.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (selected) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 3.dp, height = 15.dp)
-                        .clip(CircleShape)
-                        .background(accent),
-                )
-                Spacer(Modifier.width(6.dp))
-            }
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+        // 竖条占位固定, 只改高度: 文字不会因为选中与否左右抖动
+        Box(
+            modifier = Modifier
+                .size(width = 3.dp, height = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height((16 * barHeight).dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.primary),
+            )
+        }
+        Spacer(Modifier.width(7.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                fontSize = 13.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = fg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (count > 0) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = name,
-                    fontSize = 13.sp,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (selected) accent else MiuixTheme.colorScheme.onBackgroundVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
+                    text = "$count",
+                    fontSize = 10.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.65f),
                 )
-                if (count > 0) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = "$count",
-                        fontSize = 10.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.65f),
-                    )
-                }
             }
-            if (selected) Spacer(Modifier.width(9.dp)) // 与左侧竖条对齐, 文字不偏移
         }
     }
 }
@@ -389,25 +478,30 @@ private fun CategoryChip(
     val isPressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.92f else 1f,
-        animationSpec = spring(
-            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
-            stiffness = androidx.compose.animation.core.Spring.StiffnessLow,
-        ),
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 700f),
         label = "exploreChip",
+    )
+    val bg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.primary
+        else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "chipBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onBackgroundVariant,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "chipFg",
     )
     Text(
         text = name,
         fontSize = 13.sp,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        color = if (selected) MiuixTheme.colorScheme.onPrimary
-        else MiuixTheme.colorScheme.onBackgroundVariant,
+        color = fg,
         modifier = Modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(20.dp))
-            .background(
-                if (selected) MiuixTheme.colorScheme.primary
-                else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            )
+            .background(bg)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -415,15 +509,6 @@ private fun CategoryChip(
             )
             .padding(horizontal = 14.dp, vertical = 7.dp),
     )
-}
-
-/** 解析 #RRGGBB 颜色 */
-private fun parseColor(hex: String): Color {
-    return try {
-        Color(android.graphics.Color.parseColor(hex))
-    } catch (e: Exception) {
-        Color(0xFF4C6FFF)
-    }
 }
 
 /** 分类内软件项 (图标 + 名称 + 元信息 + 查看按钮) */

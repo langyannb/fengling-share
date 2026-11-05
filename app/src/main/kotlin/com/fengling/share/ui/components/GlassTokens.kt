@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,13 +25,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.blur.blur
+import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
+import com.fengling.share.ui.components.liquid.GlassSpecularHighlight
+import com.fengling.share.ui.components.liquid.InnerShadow
+import com.fengling.share.ui.components.liquid.innerShadow
+import com.fengling.share.ui.components.liquid.vibrancy
+
+import com.fengling.share.ui.theme.isAppInDarkTheme
 
 /**
  * 全局观感 token (v1.1.5 UI 精修)
@@ -74,22 +76,22 @@ val SegmentBarHeight: Dp = 44.dp
 
 /** 玻璃描边 (细高光) */
 @Composable
-fun glassStroke(dark: Boolean = isSystemInDarkTheme()): Color =
+fun glassStroke(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.62f)
 
 /** 玻璃底色 (固定层用) */
 @Composable
-fun glassFill(dark: Boolean = isSystemInDarkTheme()): Color =
+fun glassFill(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.46f)
 
 /** 列表卡片玻璃底 (半透明, 不模糊) */
 @Composable
-fun cardGlassFill(dark: Boolean = isSystemInDarkTheme()): Color =
+fun cardGlassFill(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.66f)
 
 /** 列表卡片描边 */
 @Composable
-fun cardStroke(dark: Boolean = isSystemInDarkTheme()): Color =
+fun cardStroke(dark: Boolean = isAppInDarkTheme()): Color =
     if (dark) Color.White.copy(alpha = 0.09f) else Color.White.copy(alpha = 0.55f)
 
 /** 半透明玻璃卡片修饰符 (列表 item 专用: 只有底色 + 描边, 不逐项模糊) */
@@ -110,8 +112,12 @@ fun Modifier.glassCard(
 /**
  * 固定层玻璃修饰符 (顶栏 / 输入栏 / 分段控件这类不随列表滚动的层专用)
  *
- * backdrop 为 null (页面级捕获层拿不到, 例如走 NavHost 全屏路由的群聊页) 时,
- * 自动退化为「半透明底 + 细描边」, 不崩、观感一致。
+ * v1.1.19: 换成和悬浮底栏 (FloatingBottomBar) **同一条**渲染管线 —— miuix-blur 的
+ * `drawBackdrop`, 高光用同一份 [GlassSpecularHighlight], 内阴影走 liquid 的 innerShadow。
+ * 以前这里是 kyant/backdrop 版本, 两套库的效果参数不一样, 同样是「玻璃」却看不出是一套 UI。
+ *
+ * backdrop 为 null (页面级捕获层拿不到 / 用户关了模糊) 时, 自动退化为「半透明底 + 细描边」,
+ * 不崩、观感一致。
  * 性能红线: 绝不把这个修饰符用在 LazyColumn 的 item 上。
  */
 @Composable
@@ -125,18 +131,24 @@ fun Modifier.glassSurface(
 ): Modifier {
     val stroke = glassStroke()
     return if (backdrop != null) {
-        this.drawBackdrop(
-            backdrop = backdrop,
-            shape = { shape },
-            highlight = { Highlight.Default.copy(alpha = highlightAlpha) },
-            shadow = { null },
-            innerShadow = { InnerShadow(radius = innerShadowRadius, alpha = 0.28f) },
-            effects = {
-                vibrancy()
-                blur(blurRadius.toPx())
-            },
-            onDrawSurface = { drawRect(fill) },
-        )
+        this
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { shape },
+                effects = {
+                    vibrancy()
+                    blur(blurRadius.toPx(), blurRadius.toPx())
+                },
+                highlight = { GlassSpecularHighlight.copy(alpha = highlightAlpha) },
+                onDrawSurface = { drawRect(fill) },
+            )
+            .innerShadow(shape = shape) {
+                InnerShadow(
+                    radius = innerShadowRadius,
+                    color = Color.Black.copy(alpha = 0.15f),
+                    alpha = 0.55f,
+                )
+            }
     } else {
         this
             .clip(shape)
@@ -197,10 +209,11 @@ fun Modifier.pressScaleEffect(
  */
 @Composable
 fun Modifier.appGradientBackground(glow: Color = MiuixTheme.colorScheme.primary): Modifier {
-    val dark = isSystemInDarkTheme()
+    val dark = isAppInDarkTheme()
     val base = MiuixTheme.colorScheme.background
-    val a1 = if (dark) 0.20f else 0.11f
-    val a2 = if (dark) 0.14f else 0.07f
+    // 与 AppGradientBackground 保持同一套参数 (见那里的说明)
+    val a1 = if (dark) 0.30f else 0.18f
+    val a2 = if (dark) 0.22f else 0.13f
     val second = Color(0xFF4C6FFF)
     return this
         .background(base)
@@ -208,14 +221,14 @@ fun Modifier.appGradientBackground(glow: Color = MiuixTheme.colorScheme.primary)
             drawRect(
                 brush = Brush.radialGradient(
                     colors = listOf(glow.copy(alpha = a1), Color.Transparent),
-                    center = Offset(size.width * 0.10f, -size.height * 0.02f),
-                    radius = size.width * 0.95f,
+                    center = Offset(size.width * 0.15f, size.height * 0.04f),
+                    radius = size.width * 1.05f,
                 ),
             )
             drawRect(
                 brush = Brush.radialGradient(
                     colors = listOf(second.copy(alpha = a2), Color.Transparent),
-                    center = Offset(size.width * 1.02f, size.height * 0.30f),
+                    center = Offset(size.width * 0.95f, size.height * 0.26f),
                     radius = size.width * 0.85f,
                 ),
             )
@@ -234,10 +247,13 @@ fun AppGradientBackground(
     modifier: Modifier = Modifier,
     glow: Color = MiuixTheme.colorScheme.primary,
 ) {
-    val dark = isSystemInDarkTheme()
+    val dark = isAppInDarkTheme()
     val base = MiuixTheme.colorScheme.background
-    val a1 = if (dark) 0.20f else 0.11f
-    val a2 = if (dark) 0.14f else 0.07f
+    // v1.1.20: 原来的 0.11/0.07 太淡, 而且第一个光斑中心落在屏幕上方外面 (-0.02h),
+    // 实际能看见的只有很淡的一角 —— 用户说「感觉没变化 / 背景界面等」就是它。
+    // 现在把两个光斑都挪进可视区并提高不透明度, 底色才有可辨认的层次。
+    val a1 = if (dark) 0.30f else 0.18f
+    val a2 = if (dark) 0.22f else 0.13f
     val second = Color(0xFF4C6FFF)
     Box(
         modifier = modifier
@@ -247,14 +263,14 @@ fun AppGradientBackground(
                 drawRect(
                     brush = Brush.radialGradient(
                         colors = listOf(glow.copy(alpha = a1), Color.Transparent),
-                        center = Offset(size.width * 0.10f, -size.height * 0.02f),
-                        radius = size.width * 0.95f,
+                        center = Offset(size.width * 0.15f, size.height * 0.04f),
+                        radius = size.width * 1.05f,
                     ),
                 )
                 drawRect(
                     brush = Brush.radialGradient(
                         colors = listOf(second.copy(alpha = a2), Color.Transparent),
-                        center = Offset(size.width * 1.02f, size.height * 0.30f),
+                        center = Offset(size.width * 0.95f, size.height * 0.26f),
                         radius = size.width * 0.85f,
                     ),
                 )

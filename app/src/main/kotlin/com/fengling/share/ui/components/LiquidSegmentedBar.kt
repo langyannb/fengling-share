@@ -1,3 +1,7 @@
+// 液体玻璃分段控件 —— 与底部悬浮导航栏 (ui/components/navigation/FloatingBottomBar.kt)
+// 走**同一条**渲染管线: miuix-blur 的 Backdrop + drawBackdrop (vibrancy / blur / lens),
+// 镜面高光用同一份 GlassSpecularHighlight (双峰 BloomStroke, 跟着重力方向转)。
+
 package com.fengling.share.ui.components
 
 import androidx.compose.animation.animateColorAsState
@@ -10,7 +14,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -33,44 +36,49 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
-import com.kyant.backdrop.shadow.Shadow
+import com.fengling.share.ui.components.liquid.GlassSpecularHighlight
+import com.fengling.share.ui.components.liquid.InnerShadow
+import com.fengling.share.ui.components.liquid.innerShadow
+import com.fengling.share.ui.components.liquid.lens
+import com.fengling.share.ui.components.liquid.rememberCombinedBackdrop
+import com.fengling.share.ui.components.liquid.rememberGravityRotatedHighlight
+import com.fengling.share.ui.components.liquid.vibrancy
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.blur.blur
+import top.yukonga.miuix.kmp.blur.drawBackdrop
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
+import com.fengling.share.ui.theme.isAppInDarkTheme
+
 /**
- * 液体玻璃分段控件 (v1.1.5 · 真玻璃版)
+ * 液体玻璃分段控件 (v1.1.19 · 与悬浮底栏同源)
  *
- * 和底部导航栏 (`ui/components/navigation/LiquidBottomBar.kt`) 用**同一套** kyant backdrop 做法:
- *  - 底板: 页面捕获层毛玻璃 (vibrancy + blur + lens 折射) + 高光描边 + 内阴影 + 外阴影
+ * 和底部悬浮胶囊 (`ui/components/navigation/FloatingBottomBar.kt`) 用**同一套**做法:
+ *  - 底板: 页面捕获层毛玻璃 (vibrancy + blur(4dp) + lens(24dp)) + 棱上镜面高光 + 外阴影
  *  - 滑块: 采样「页面层 + 文字幽灵层」的合并 backdrop, 用 lens + 色散把底下的文字放大折射出来
  *          —— 液体玻璃真正的「放大镜」观感, 而不是一块半透明色块
  *  - 手感: 过冲 spring (dampingRatio 0.55 / stiffness 400) 平移; 位移途中按速度横向拉伸、纵向压扁;
  *          按下时高光 / 内阴影 / 折射强度一起抬起来再回落
- *  - 文字: animateColorAsState 补间 + 选中加粗/微放大
+ *  - 高光: 和底栏同一份 [GlassSpecularHighlight], 跟着设备倾斜滑过去 (容器 -45°, 滑块 +90°)
  *
  * 性能红线: 只在**固定层**用 backdrop (分段控件不随列表滚动), 绝不在 LazyColumn item 上逐个模糊。
- * 退化: backdrop == null (拿不到捕获层) 时退化成半透明白底 + 描边, 不崩、观感一致。
+ * 退化: backdrop == null (拿不到捕获层 / 用户关了模糊) 时退化成半透明纯色底 + 描边, 不崩、观感一致。
  *
  * ⚠️ backdrop 必须是「不包含本控件自身」的捕获层。把包含自己的层传进来会让 hwui 的 RenderNode 树
  *    无限递归, 真机直接 SIGSEGV (stack overflow) —— 真机踩过一次, 别再传页面级整层。
@@ -81,7 +89,7 @@ fun LiquidSegmentedBar(
     selected: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    /** 页面捕获层 (拿不到就传 null, 自动退化) */
+    /** 捕获层 (miuix-blur; 拿不到就传 null, 自动退化) */
     backdrop: Backdrop? = null,
     /** 每个分段上的未读红点数量 (0 不显示), 长度不足按 0 处理 */
     unread: List<Int> = emptyList(),
@@ -89,13 +97,19 @@ fun LiquidSegmentedBar(
 ) {
     if (tabs.isEmpty()) return
 
-    val dark = isSystemInDarkTheme()
+    val dark = isAppInDarkTheme()
     val scheme = MiuixTheme.colorScheme
     val trackShape = RoundedCornerShape(percent = 50)
     val thumbShape = RoundedCornerShape(percent = 50)
-    val trackFill = glassFill(dark)
+    // 和底栏一个底色: 40% surfaceContainer + 真模糊。底栏关掉模糊时是纯色, 这里同理。
+    val containerColor = if (backdrop != null) {
+        scheme.surfaceContainer.copy(alpha = 0.4f)
+    } else {
+        scheme.surfaceContainer
+    }
     val trackStroke = glassStroke(dark)
-    val thumbFill = if (dark) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.82f)
+    // 选中滑块: 玻璃上的一层淡淡高光, 不遮住折射出来的内容
+    val thumbFill = if (dark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.55f)
     val selText = scheme.primary
     val normText = scheme.onBackgroundVariant
 
@@ -117,6 +131,18 @@ fun LiquidSegmentedBar(
         label = "segPress",
     )
 
+    // 镜面高光: 和底栏同一份参数, 只是朝向不同 (不转开两道光会叠成一块白斑)
+    val trackHighlight = if (backdrop != null) {
+        rememberGravityRotatedHighlight(GlassSpecularHighlight, extraDegrees = -45f)
+    } else {
+        GlassSpecularHighlight
+    }
+    val thumbHighlight = if (backdrop != null) {
+        rememberGravityRotatedHighlight(GlassSpecularHighlight, extraDegrees = 90f)
+    } else {
+        GlassSpecularHighlight
+    }
+
     // 「文字幽灵层」: 和底部导航栏同一个套路 —— 把标签文字录进一层 backdrop,
     // 选中滑块采样时用 lens + 色散放大折射出来 (液体玻璃的放大镜观感)。
     val labelsBackdrop = rememberLayerBackdrop()
@@ -129,50 +155,74 @@ fun LiquidSegmentedBar(
         val stepPx = usablePx / tabs.size
 
         val track = if (backdrop != null) {
-            Modifier.drawBackdrop(
-                backdrop = backdrop,
-                shape = { trackShape },
-                highlight = { Highlight.Default.copy(alpha = 0.45f + 0.35f * press) },
-                shadow = { Shadow(radius = 14.dp, alpha = 0.16f) },
-                innerShadow = { InnerShadow(radius = 10.dp, alpha = 0.28f + 0.20f * press) },
-                effects = {
-                    vibrancy()
-                    blur(10f.dp.toPx())
-                    lens(10f.dp.toPx(), 16f.dp.toPx())
-                },
-                onDrawSurface = { drawRect(trackFill) },
-            )
+            Modifier
+                // 和底栏一样的外投影: 玻璃是浮在内容上的一块, 没有影子就贴成一片
+                .dropShadow(
+                    shape = trackShape,
+                    shadow = Shadow(
+                        radius = 10.dp,
+                        color = Color.Black,
+                        alpha = if (dark) 0.20f else 0.10f,
+                    ),
+                )
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { trackShape },
+                    effects = {
+                        vibrancy()
+                        blur(4.dp.toPx(), 4.dp.toPx())
+                        lens(refractionHeight = 24.dp.toPx(), refractionAmount = 24.dp.toPx())
+                    },
+                    highlight = { trackHighlight.copy(alpha = 0.75f) },
+                    onDrawSurface = { drawRect(containerColor) },
+                )
         } else {
             Modifier
-                .background(trackFill, trackShape)
+                .background(containerColor, trackShape)
                 .border(1.dp, trackStroke, trackShape)
         }
 
         val thumbGlass = if (backdrop != null) {
-            Modifier.drawBackdrop(
-                // 文字幽灵层排第二 → 滑块里能看到被折射放大的标签文字
-                backdrop = rememberCombinedBackdrop(backdrop, labelsBackdrop),
-                shape = { thumbShape },
-                highlight = { Highlight.Default.copy(alpha = 0.40f + 0.60f * press) },
-                shadow = { Shadow(radius = 12.dp, alpha = 0.18f + 0.12f * press) },
-                innerShadow = { InnerShadow(radius = 8.dp, alpha = 0.22f + 0.25f * press) },
-                effects = {
-                    vibrancy()
-                    // 按下去折射更强 (玻璃被按出来的感觉)
-                    lens(
-                        refractionHeight = 10f.dp.toPx() * (0.7f + 0.5f * press),
-                        refractionAmount = 16f.dp.toPx(),
-                        chromaticAberration = true,
+            Modifier
+                .dropShadow(
+                    shape = thumbShape,
+                    shadow = Shadow(
+                        radius = 12.dp,
+                        color = Color.Black,
+                        alpha = 0.18f + 0.12f * press,
+                    ),
+                )
+                .drawBackdrop(
+                    // 文字幽灵层排第二 → 滑块里能看到被折射放大的标签文字
+                    backdrop = rememberCombinedBackdrop(backdrop, labelsBackdrop),
+                    shape = { thumbShape },
+                    effects = {
+                        vibrancy()
+                        // 按下去折射更强 (玻璃被按出来的感觉)
+                        val k = 0.7f + 0.5f * press
+                        lens(
+                            refractionHeight = 10.dp.toPx() * k,
+                            refractionAmount = 14.dp.toPx() * k,
+                            depthEffect = true,
+                            chromaticAberration = 0.5f,
+                        )
+                    },
+                    highlight = { thumbHighlight.copy(alpha = 0.35f + 0.55f * press) },
+                    layerBlock = {
+                        // 采样内容跟着速度拉伸: 位移越快, 折射拖影越明显
+                        val stretch = (abs(thumb.velocity) / 90f).coerceIn(0f, 0.18f)
+                        scaleX = 1f + stretch
+                        scaleY = 1f - stretch * 0.30f
+                    },
+                    onDrawSurface = { drawRect(thumbFill) },
+                )
+                .innerShadow(shape = thumbShape) {
+                    InnerShadow(
+                        radius = 8.dp * press,
+                        color = Color.Black.copy(alpha = 0.15f),
+                        alpha = press,
                     )
-                },
-                layerBlock = {
-                    // 采样内容跟着速度拉伸: 位移越快, 折射拖影越明显
-                    val stretch = (abs(thumb.velocity) / 90f).coerceIn(0f, 0.18f)
-                    scaleX = 1f + stretch
-                    scaleY = 1f - stretch * 0.30f
-                },
-                onDrawSurface = { drawRect(thumbFill) },
-            )
+                }
         } else {
             Modifier
                 .background(thumbFill, thumbShape)

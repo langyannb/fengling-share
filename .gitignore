@@ -26,3 +26,6 @@ local.properties
 
 # 开发规则备份 (不入库)
 .rules.zip
+
+# 后端目录 (三个 worktree 的 .git 指向已不存在的 termux 路径，跑 git 会 fatal；不入本仓库)
+/后端/

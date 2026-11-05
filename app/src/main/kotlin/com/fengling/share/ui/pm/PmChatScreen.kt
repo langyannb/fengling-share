@@ -48,6 +48,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -103,11 +108,21 @@ import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VideoProbe
+import com.fengling.share.data.VideoThumbCache
 import com.fengling.share.data.compressVideoForUpload
 import com.fengling.share.data.shouldCompressVideo
 import com.fengling.share.data.userFriendlyMessage
+import com.fengling.share.ui.components.chat.ChatActionSheet
+import com.fengling.share.ui.components.chat.ChatAvatar
+import com.fengling.share.ui.components.chat.ChatCenterHint
+import com.fengling.share.ui.components.chat.ChatRefreshBar
+import com.fengling.share.ui.components.chat.ChatSheetAction
+import com.fengling.share.ui.components.chat.RECALL_SHATTER_MS
+import com.fengling.share.ui.components.chat.RecallShatter
+import com.fengling.share.ui.components.chat.chatMenuSummary
 import com.fengling.share.ui.components.AppGradientBackground
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.SendState
 import com.fengling.share.ui.components.SendStatusIndicator
@@ -117,6 +132,7 @@ import com.fengling.share.ui.components.VideoBubble
 import com.fengling.share.ui.components.VideoFullscreenDialog
 import com.fengling.share.ui.components.VideoSendingBubble
 import com.fengling.share.ui.components.glassStroke
+import com.fengling.share.ui.components.glassSurface
 import com.fengling.share.ui.components.ChatEmojiPanel
 import com.fengling.share.ui.components.ChatPanelItem
 import com.fengling.share.ui.components.ChatPlusPanel
@@ -124,8 +140,6 @@ import com.fengling.share.ui.components.bitmapToJpeg
 import com.fengling.share.ui.components.linkify
 import com.fengling.share.ui.components.normalizeUrl
 import com.fengling.share.ui.lottery.LotteryScreen
-import com.fengling.share.ui.components.predictiveBackTransform
-import com.fengling.share.ui.components.rememberPredictiveBackProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -133,6 +147,8 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -178,6 +194,11 @@ fun PmChatScreen(
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
+    // v1.1.20: 只录「消息区」这一层 —— 输入栏 / 面板 / 长按菜单都采样它做真模糊。
+    // 绝不能传包含这些控件自身的捕获层: hwui 的 RenderNode 树会自引用无限递归 (真机 SIGSEGV 过)。
+    val pmBackdrop = rememberLayerBackdrop()
+    /** 正在播撤回破碎动画的消息 id */
+    var shatteringId by remember { mutableStateOf(0) }
     var sending by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
     // v1.1.12 乐观发送: 本地临时消息 (发送中转圈 / 失败可点重发), 服务端返回后用真实消息替换
@@ -189,6 +210,16 @@ fun PmChatScreen(
     var atBottom by remember { mutableStateOf(true) }
     var newWhileAway by remember { mutableStateOf(0) }
     var autoScrollPending by remember { mutableStateOf(false) }
+    /**
+     * v1.1.15: 用户自己刚发出一条 (文字 / 图片 / 视频)。
+     * 乐观气泡挂在 messages 之后的 items(outgoing) 段里, 上面那个 effect 只看 messages.size,
+     * 所以气泡会落在屏幕下方没人管 —— 用户说的「发完我还在原地, 消息就在底下」就是它。
+     * 发消息是用户主动行为, 这里不受「是否贴底 / 是否在上翻历史」限制, 总是滚到自己那条。
+     *
+     * 用自增 token 当 key, 而不是「置位再复位」的布尔量: 布尔量一复位就会改变 LaunchedEffect 的
+     * key, 协程立刻被取消, 滚动动画刚起步就被掐断 (上面那个老 effect 正是这个写法, 不要照抄)。
+     */
+    var ownSendToken by remember { mutableStateOf(0) }
     var settleWithoutAnimation by remember { mutableStateOf(false) }
     /** 负值 = 没有待补偿的前插滚动 */
     var pendingScrollTo by remember { mutableStateOf(-1) }
@@ -232,10 +263,24 @@ fun PmChatScreen(
     /** 已读上报去重: 记住最近一次上报的 last_id, 避免重复请求 */
     var lastReadReported by remember { mutableStateOf(0) }
 
+    fun headerCount(): Int = if (hasMoreBefore) 1 else 0
+
+    /**
+     * LazyColumn 里真实的条目总数 = 顶部加载行 (可能有) + 已收到的消息 + 本地乐观气泡。
+     * v1.1.17 修复: 与群聊同一处 bug —— 以前滚动一直用 messages.lastIndex, 漏掉上面两段,
+     * 自己发完消息后「跟到最新」会停在倒数第二行附近 (表现: 先定到自己那条、成功后又被弹回去)。
+     */
+    fun listCount(): Int = headerCount() + messages.size + outgoing.size
+
+    /** 已有消息在发 / 在排队时, 新气泡的初始状态用「排队中」 */
+    fun sendBusy(): Boolean = outgoing.any {
+        it.state == SendState.Sending || it.state == SendState.Queued
+    }
+
     fun isStuckToBottom(): Boolean {
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return true
-        if (lastVisible < messages.size - 1) return false
-        return lastVisible >= messages.lastIndex - 1
+        if (listCount() <= 0) return true
+        return lastVisible >= listCount() - 2
     }
 
     LaunchedEffect(listState) {
@@ -247,7 +292,7 @@ fun PmChatScreen(
 
     /** 回到最新消息: 滚到底部 + 清掉上翻期间累积的新消息角标 */
     fun jumpToLatest() {
-        val last = messages.lastIndex
+        val last = listCount() - 1
         if (last >= 0) scope.launch { runCatching { listState.animateScrollToItem(last) } }
         newWhileAway = 0
     }
@@ -409,8 +454,8 @@ fun PmChatScreen(
             return@LaunchedEffect
         }
         autoScrollPending = false
-        if (messages.isEmpty()) return@LaunchedEffect
-        val target = messages.lastIndex
+        val target = listCount() - 1
+        if (target < 0) return@LaunchedEffect
         runCatching {
             if (settleWithoutAnimation) {
                 settleWithoutAnimation = false
@@ -421,6 +466,15 @@ fun PmChatScreen(
         }
     }
 
+    // v1.1.15: 自己发消息后立刻定位到自己那条 (顶部加载行 + messages + outgoing 的最后一项)。
+    // token 只在「确实发出了一条」时 +1, 动画过程中不会再变 key, 所以能滚完整。
+    LaunchedEffect(ownSendToken) {
+        if (ownSendToken <= 0) return@LaunchedEffect
+        val total = (if (hasMoreBefore) 1 else 0) + messages.size + outgoing.size
+        if (total <= 0) return@LaunchedEffect
+        runCatching { listState.animateScrollToItem(total - 1) }
+    }
+
     // 定位到未读 / 通知带来的那条消息并高亮一下
     LaunchedEffect(messages.size, locateId) {
         val target = locateId
@@ -428,7 +482,7 @@ fun PmChatScreen(
         val idx = messages.indexOfFirst { it.id == target }
         if (idx < 0) return@LaunchedEffect
         highlightId = target
-        runCatching { listState.scrollToItem(idx) }
+        runCatching { listState.scrollToItem(headerCount() + idx) }
         delay(2800)
         if (highlightId == target) highlightId = 0
     }
@@ -447,6 +501,25 @@ fun PmChatScreen(
      * 与群聊同一套逻辑: 上传用专用长超时 client (100MB 要 50~70 秒), 失败/取消只标失败态可重发,
      * 重发时已经拿到直链 (uploadedUrl 非空) 就不再重传一遍。
      */
+    /** 门控等待结束、真正开始发送时: 把「排队中」翻成「发送中」 */
+    fun markSending(localId: String) {
+        scope.launch {
+            outgoing = outgoing.map {
+                if (it.localId == localId && it.state == SendState.Queued) {
+                    it.copy(state = SendState.Sending)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    /** 发送成功收尾: 摘掉本地占位 + 明确滚到真底部 (轮询可能已先拿到, 这里兜底) */
+    fun finishLocalSend(localId: String) {
+        outgoing = outgoing.filterNot { it.localId == localId }
+        autoScrollPending = true
+    }
+
     suspend fun performSendVideo(localId: String) {
         val item = outgoing.firstOrNull { it.localId == localId } ?: return
         val originalUri = item.videoUri ?: return
@@ -563,6 +636,9 @@ fun PmChatScreen(
                 return
             }
             url = uploaded.url
+            // v1.1.15: 把发送前抽好的本地首帧按远端直链存进封面缓存 ——
+            // 自己发的视频气泡立刻有画面, 不必为了封面再把整段视频从服务器拉一遍
+            VideoThumbCache.put(url, item.thumbnail)
             outgoing = outgoing.map {
                 if (it.localId == localId) it.copy(uploadedUrl = url, progress = 100) else it
             }
@@ -578,13 +654,14 @@ fun PmChatScreen(
             videoH = uploadH,
             videoDuration = uploadDuration,
             videoSize = uploadSize,
+            onStart = { markSending(localId) },
         )
             .onSuccess { res ->
                 if (res.convId > 0) convId = res.convId
-                outgoing = outgoing.filterNot { it.localId == localId }
                 val after = messages.maxOfOrNull { it.id } ?: 0
                 ApiClient.pmMessages(convId = convId, afterId = after)
                     .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+                finishLocalSend(localId)
             }
             .onFailure {
                 outgoing = outgoing.map {
@@ -609,13 +686,14 @@ fun PmChatScreen(
             toUser = if (convId <= 0) peerUserId else 0,
             convId = convId,
             content = item.text,
+            onStart = { markSending(localId) },
         )
             .onSuccess { res ->
                 if (res.convId > 0) convId = res.convId
-                outgoing = outgoing.filterNot { it.localId == localId }
                 val after = messages.maxOfOrNull { it.id } ?: 0
                 ApiClient.pmMessages(convId = convId, afterId = after)
                     .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+                finishLocalSend(localId)
             }
             .onFailure {
                 // 失败不打断 (不弹 toast): 只把这一条标成失败, 用户点红色感叹号重发
@@ -628,8 +706,13 @@ fun PmChatScreen(
     /** 点失败消息上的红色感叹号: 重发同一条 */
     fun retrySend(localId: String) {
         if (outgoing.none { it.localId == localId }) return
+        val queued = sendBusy()
         outgoing = outgoing.map {
-            if (it.localId == localId) it.copy(state = SendState.Sending) else it
+            if (it.localId == localId) {
+                it.copy(state = if (queued) SendState.Queued else SendState.Sending)
+            } else {
+                it
+            }
         }
         scope.launch { performSend(localId) }
     }
@@ -655,7 +738,7 @@ fun PmChatScreen(
         outgoing = outgoing + OutgoingPmMsg(
             localId = localId,
             text = text,
-            state = SendState.Sending,
+            state = if (sendBusy()) SendState.Queued else SendState.Sending,
             message = PmMessage(
                 // 本地临时消息用负 id: 永远不会和服务端 id 撞上 (拉新消息也是按 afterId > 0 拉)
                 id = -seq,
@@ -670,6 +753,8 @@ fun PmChatScreen(
                 ).format(java.util.Date()),
             ),
         )
+        // v1.1.15: 本地气泡已挂到列表尾部, 立刻滚过去
+        ownSendToken++
         scope.launch { performSend(localId) }
     }
 
@@ -786,7 +871,7 @@ fun PmChatScreen(
             outgoing = outgoing + OutgoingPmMsg(
                 localId = localId,
                 text = "",
-                state = SendState.Sending,
+                state = if (sendBusy()) SendState.Queued else SendState.Sending,
                 message = PmMessage(
                     // 本地占位: 负 id + msgType=video, 真正的 video 直链要等上传完才有
                     id = -seq,
@@ -816,6 +901,8 @@ fun PmChatScreen(
                 mime = context.contentResolver.getType(uri) ?: "video/mp4",
             )
             panelOpen = false
+            // v1.1.15: 视频气泡也要立刻滚进视野
+            ownSendToken++
             // 上传要走 50~70 秒: 丢到自己的协程里
             scope.launch { performSendVideo(localId) }
         }
@@ -1010,14 +1097,33 @@ fun PmChatScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            Box(Modifier.weight(1f)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .layerBackdrop(pmBackdrop),
+            ) {
                 // 契约 C: 页面级柔和渐变底 (静态绘制, 零模糊开销), 给气泡/图片垫层次
                 AppGradientBackground()
+                // 刷新浮层: 以前 refreshing 只是置位/复位, 界面上一点变化都没有
+                ChatRefreshBar(
+                    visible = refreshing,
+                    backdrop = pmBackdrop,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp),
+                )
                 when {
-                    loading && messages.isEmpty() -> PmCenterHint("加载中…")
-                    messages.isEmpty() -> PmCenterHint(
-                        if (loadError.isNotBlank()) loadError
+                    // 私聊原本没有 textAlign (多行靠左), 这里显式传 null 保持不变
+                    loading && messages.isEmpty() -> ChatCenterHint(
+                        text = "加载中…",
+                        horizontalPadding = 32.dp,
+                        textAlign = null,
+                    )
+                    messages.isEmpty() -> ChatCenterHint(
+                        text = if (loadError.isNotBlank()) loadError
                         else "还没有聊过, 发条消息打个招呼吧",
+                        horizontalPadding = 32.dp,
+                        textAlign = null,
                     )
 
                     else -> LazyColumn(
@@ -1053,6 +1159,8 @@ fun PmChatScreen(
                             PmMessageRow(
                                 modifier = pmMessageItemEnter(),
                                 compact = compact,
+                                // 撤回破碎: 正在碎的这条把气泡切块飞散, 碎完才改数据
+                                shattering = msg.id == shatteringId,
                                 msg = msg,
                                 mine = mine,
                                 peerName = peer?.displayName.orEmpty(),
@@ -1198,7 +1306,18 @@ fun PmChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.94f))
+                    // v1.1.20: 接上真模糊, 采样消息区那一层
+                    .glassSurface(
+                        // 捕获层只框消息区, 输入栏整条落在层下方 —— 采样全是越界内容,
+                        // 模糊后会在右侧糊出一道深灰(真机截图可见, 高不透明度也压不住)。
+                        // 所以这里不接 backdrop: 用玻璃高光 + 内阴影做质感, 保证干净。
+                        backdrop = null,
+                        shape = RoundedCornerShape(
+                            topStart = GlassRadius.panel,
+                            topEnd = GlassRadius.panel,
+                        ),
+                        fill = MiuixTheme.colorScheme.surface.copy(alpha = 0.90f),
+                    )
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1388,74 +1507,60 @@ fun PmChatScreen(
     }
 
     // ===== 长按消息: 复制 / 撤回 =====
+    // 长按菜单 (v1.1.20): 从 material3 AlertDialog 换成底部 ChatActionSheet ——
+    // 液体玻璃 + 弹簧进场 + 每行错开淡入, 和群聊、输入栏同一条模糊管线
     val acting = actionTarget
-    if (acting != null) {
-        AlertDialog(
-            onDismissRequest = { actionTarget = null },
-            title = {
-                Text(
-                    text = "消息操作",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.onBackground,
-                )
-            },
-            text = {
-                Column {
-                    // 菜单顶部先展示这条消息的摘要, 免得点错
-                    Text(
-                        text = if (acting.image.isNotBlank()) "[图片]"
-                        else if (VideoProbe.isVideoMessage(acting.msgType, acting.video)) "[视频]"
-                        else acting.content.replace('\n', ' ').take(60),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    // Wave 2: 视频消息才有 —— 全屏播放 (撤回等操作对视频一样可用, 不受影响)
-                    if (VideoProbe.isVideoMessage(acting.msgType, acting.video) &&
-                        !VideoProbe.isVideoCleaned(acting.video, acting.content)
-                    ) {
-                        PmActionRow(text = "全屏播放", danger = false, onClick = {
-                            val url = acting.video
-                            actionTarget = null
-                            fullscreenVideo = url
-                        })
-                    }
-                    // 图片消息才有: 全屏看大图 / 存进系统相册
-                    if (acting.image.isNotBlank()) {
-                        PmActionRow(text = "放大查看", danger = false, onClick = {
-                            actionTarget = null
-                            previewImage = acting.image
-                        })
-                        PmActionRow(text = "保存到相册", danger = false, onClick = {
-                            val img = acting.image
-                            actionTarget = null
-                            saveImageToGallery(img)
-                        })
-                    }
-                    // 纯图片消息没有文字, 不显示「复制」
-                    if (acting.content.isNotBlank()) {
-                        PmActionRow(text = "复制", danger = false, onClick = {
-                            actionTarget = null
-                            copyMessage(acting.content)
-                        })
-                    }
-                    if (!acting.isRecalled && acting.mine) {
-                        PmActionRow(text = "撤回", danger = true, onClick = {
-                            actionTarget = null
-                            recallTarget = acting
-                        })
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                M3TextButton(onClick = { actionTarget = null }) {
-                    Text("取消")
-                }
-            },
+    var lastActing by remember { mutableStateOf<PmMessage?>(null) }
+    LaunchedEffect(acting) { if (acting != null) lastActing = acting }
+    val sheetMsg = acting ?: lastActing
+    if (sheetMsg != null) {
+        val isVideoMsg = VideoProbe.isVideoMessage(sheetMsg.msgType, sheetMsg.video) &&
+            !VideoProbe.isVideoCleaned(sheetMsg.video, sheetMsg.content)
+        val isImage = sheetMsg.image.isNotBlank()
+        val sheetActions = remember(sheetMsg, isVideoMsg, isImage) {
+            listOfNotNull(
+                ChatSheetAction("fullscreen", "全屏播放", Icons.Filled.PlayArrow) {
+                    val url = sheetMsg.video
+                    actionTarget = null
+                    fullscreenVideo = url
+                }.takeIf { isVideoMsg },
+                ChatSheetAction("copy", "复制文字", Icons.Filled.ContentCopy) {
+                    actionTarget = null
+                    copyMessage(sheetMsg.content)
+                }.takeIf { sheetMsg.content.isNotBlank() },
+                ChatSheetAction("view", "放大查看", Icons.Filled.Visibility) {
+                    actionTarget = null
+                    previewImage = sheetMsg.image
+                }.takeIf { isImage },
+                ChatSheetAction("save", "保存到相册", Icons.Filled.Download) {
+                    val img = sheetMsg.image
+                    actionTarget = null
+                    saveImageToGallery(img)
+                }.takeIf { isImage },
+                ChatSheetAction(
+                    key = "recall",
+                    label = "撤回",
+                    icon = Icons.Filled.Delete,
+                    danger = true,
+                ) {
+                    actionTarget = null
+                    recallTarget = sheetMsg
+                }.takeIf { !sheetMsg.isRecalled && sheetMsg.mine },
+            )
+        }
+        ChatActionSheet(
+            visible = acting != null,
+            title = "消息操作",
+            summary = chatMenuSummary(
+                nickname = if (sheetMsg.mine) "我" else "对方",
+                content = sheetMsg.content,
+                isImage = isImage,
+                isVideo = isVideoMsg,
+            ),
+            actions = sheetActions,
+            onDismiss = { actionTarget = null },
+            // 菜单从底部弹起, 下沿整段落在捕获层之外 → 采样到透明, 会糊出脏色。不接。
+            backdrop = null,
         )
     }
 
@@ -1483,8 +1588,13 @@ fun PmChatScreen(
                 M3TextButton(onClick = {
                     val target = recalling
                     recallTarget = null
+                    // 先播破碎动画 (520ms), 碎完再真正改数据 ——
+                    // 顺序反了的话消息会先变成「该消息已撤回」, 那就没东西可碎了
+                    shatteringId = target.id
                     scope.launch {
-                        ApiClient.pmRecall(target.id)
+                        val result = ApiClient.pmRecall(target.id)
+                        delay(RECALL_SHATTER_MS.toLong())
+                        result
                             .onSuccess {
                                 messages = messages.map {
                                     if (it.id == target.id) {
@@ -1496,6 +1606,7 @@ fun PmChatScreen(
                                 onToast("已撤回")
                             }
                             .onFailure { e -> onToast(e.userFriendlyMessage()) }
+                        shatteringId = 0
                     }
                 }) {
                     Text("撤回", color = Color(0xFFE5484D))
@@ -1574,6 +1685,8 @@ fun PmChatScreen(
 private fun PmMessageRow(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    /** 正在播撤回破碎动画: 气泡切块飞散, 播完才会被改成「该消息已撤回」 */
+    shattering: Boolean = false,
     msg: PmMessage,
     mine: Boolean,
     peerName: String,
@@ -1635,12 +1748,20 @@ private fun PmMessageRow(
                         detectTapGestures(onTap = { onAvatarTap() })
                     },
                 ) {
-                    PmAvatar(name = peerName, url = peerAvatar)
+                    ChatAvatar(
+                        url = peerAvatar,
+                        name = peerName,
+                        placeholder = "铃",
+                        contentScale = ContentScale.Fit,
+                        contentDescription = "头像",
+                    )
                 }
                 Spacer(Modifier.width(8.dp))
             }
         }
 
+        // 撤回破碎: 只包纯 Compose 画的气泡 (不包 AndroidView / 视频硬件 surface), 安全
+        RecallShatter(playing = shattering) {
         Column(
             modifier = Modifier
                 .widthIn(max = 260.dp)
@@ -1716,14 +1837,20 @@ private fun PmMessageRow(
                         MiuixTheme.colorScheme.onBackground
                     },
                     onTextLayout = { textLayout = it },
+                    // v1.1.20 修 bug: 这里原来只有 onTap, detectTapGestures 会把长按也吃掉,
+                    // 结果是「文字气泡长按没反应」(图片气泡能长按, 因为它的手势里写了 onLongPress)。
+                    // 群聊那边一直是两个都写, 私聊漏了。
                     modifier = Modifier.pointerInput(msg.id) {
-                        detectTapGestures(onTap = { pos ->
-                            val lr = textLayout ?: return@detectTapGestures
-                            val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
-                            shown.getStringAnnotations("URL", off, off).firstOrNull()?.let { ann ->
-                                onOpenLink(ann.item)
-                            }
-                        })
+                        detectTapGestures(
+                            onLongPress = { onLongPress() },
+                            onTap = { pos ->
+                                val lr = textLayout ?: return@detectTapGestures
+                                val off = lr.getOffsetForPosition(pos).coerceIn(0, shown.length)
+                                shown.getStringAnnotations("URL", off, off).firstOrNull()?.let { ann ->
+                                    onOpenLink(ann.item)
+                                }
+                            },
+                        )
                     },
                 )
             }
@@ -1738,6 +1865,7 @@ private fun PmMessageRow(
                 },
             )
         }
+        }
 
         if (mine) {
             if (compact) {
@@ -1749,7 +1877,13 @@ private fun PmMessageRow(
                         detectTapGestures(onTap = { onAvatarTap() })
                     },
                 ) {
-                    PmAvatar(name = myName, url = myAvatar)
+                    ChatAvatar(
+                        url = myAvatar,
+                        name = myName,
+                        placeholder = "铃",
+                        contentScale = ContentScale.Fit,
+                        contentDescription = "头像",
+                    )
                 }
             }
         }
@@ -1776,66 +1910,6 @@ private fun pmMessageTime(raw: String): String {
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
     } catch (_: Exception) {
         ""
-    }
-}
-
-/** 私聊头像 (圆形, 没图用首字, 再没有用「铃」) */
-@Composable
-private fun PmAvatar(name: String, url: String) {
-    val initial = name.take(1).ifBlank { "铃" }
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (url.isNotBlank()) {
-            AsyncImage(
-                model = url,
-                contentDescription = "头像",
-                modifier = Modifier.size(34.dp).clip(CircleShape),
-            )
-        } else {
-            Text(
-                text = initial,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MiuixTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-/** 长按菜单里的一行 */
-@Composable
-private fun PmActionRow(text: String, danger: Boolean = false, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 10.dp),
-    ) {
-        Text(
-            text = text,
-            fontSize = 14.sp,
-            color = if (danger) Color(0xFFE5484D) else MiuixTheme.colorScheme.onBackground,
-        )
-    }
-}
-
-/** 空态 / 加载态提示 */
-@Composable
-private fun PmCenterHint(text: String) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            fontSize = 14.sp,
-            color = MiuixTheme.colorScheme.onBackgroundVariant,
-        )
     }
 }
 
