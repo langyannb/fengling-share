@@ -390,12 +390,14 @@ fun HomeScreen(
             // 旧实现把 loading/apps 一起塞进 targetState —— 于是切一次分类会连播两次转场
             // (旧列表 → 转圈 → 新列表), 观感就是「卡一下再闪一下」。现在 targetState 只认
             // 分类 id: 加载中只叠一层细进度条, 列表本身留在原位, 数据到了直接换内容不转场。
+            // transitionSpec 不是 @Composable: 开关值必须在这里读好再带进 lambda
+            val pageSwitchOn = LocalAnimPageSwitch.current
             AnimatedContent(
                 targetState = effectiveCategoryId,
                 transitionSpec = {
                     // 设置里关掉「页面转场」时压成 0 时长: 结构还是 AnimatedContent (子组合不销毁,
                     // 滚动位置与缓存都在), 视觉上就是直接换
-                    if (!LocalAnimPageSwitch.current) {
+                    if (!pageSwitchOn) {
                         fadeIn(tween(0)) togetherWith fadeOut(tween(0))
                     } else {
                         // 用位置判断方向: 往下切分类列表从下方浮上来, 往上切从上方向下压。

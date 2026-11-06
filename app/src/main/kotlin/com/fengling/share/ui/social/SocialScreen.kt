@@ -628,10 +628,12 @@ fun SocialScreen(
                     // v1.1.20: 群组/私聊切换加 Telegram 式的横向滑动 + 淡入淡出。
                     // 用 AnimatedContent 而不是 when 直切: 直切是硬闪一下, 观感很廉价;
                     // 这里切 tab 时旧列表淡出微缩, 新列表从对应方向滑进来。
+                    // transitionSpec 不是 @Composable: 开关值必须在这里读好再带进 lambda
+                    val pageSwitchOn = LocalAnimPageSwitch.current
                     AnimatedContent(
                         targetState = if (showTabs) tab else 0,
                         transitionSpec = {
-                            if (!LocalAnimPageSwitch.current) {
+                            if (!pageSwitchOn) {
                                 fadeIn(tween(0)) togetherWith fadeOut(tween(0))
                             } else {
                                 val dir = if (targetState > initialState) 1 else -1

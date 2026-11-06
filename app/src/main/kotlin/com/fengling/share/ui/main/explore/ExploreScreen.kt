@@ -309,6 +309,8 @@ fun ExploreScreen(
                     }
 
                     // ── 软件网格: 切分类时上浮淡入 (与首页同一套节奏) ──
+                    // 注意: transitionSpec 不是 @Composable, 局部变量必须在外面读好再带进去
+                    val pageSwitchOn = LocalAnimPageSwitch.current
                     AnimatedContent(
                         targetState = currentKey,
                         // 占满标题与 chip 之外的剩余高度: 不给 weight 的话子项按"整屏高"测量,
@@ -319,7 +321,7 @@ fun ExploreScreen(
                         transitionSpec = {
                             // 设置里关掉「页面转场」时: 保留 AnimatedContent 的结构 (子组合不销毁,
                             // 滚动位置与缓存都在), 只把时长压成 0 —— 视觉上就是直接换
-                            if (LocalAnimPageSwitch.current) {
+                            if (pageSwitchOn) {
                                 fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
                                     slideInVertically(
                                         animationSpec = tween(260, easing = FastOutSlowInEasing),

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import com.fengling.share.ui.theme.LocalAnimListEnter
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
