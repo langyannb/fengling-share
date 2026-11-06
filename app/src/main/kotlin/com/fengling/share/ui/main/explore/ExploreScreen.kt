@@ -21,17 +21,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -39,7 +40,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,16 +60,15 @@ import com.fengling.share.data.Category
 import com.fengling.share.data.categoryWithSubsIds
 import com.fengling.share.data.childrenOf
 import com.fengling.share.ui.components.AppTopBar
+import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.GlassSpacing
+import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.components.enterUp
+import com.fengling.share.ui.theme.LocalAnimPageSwitch
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.pressScaleEffect
-import com.fengling.share.ui.components.EmptyMessage
-import com.fengling.share.ui.components.LoadingBox
-import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -78,7 +77,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 进程级缓存: ExploreScreen 在 NavHost 的 MAIN destination 内,
  * 进详情页时组合被销毁, 返回后 remember 全部归零。
  * 用 object 缓存让返回时列表数据立即可用(配合 rememberSaveable 的选中项,
- * 滚动位置才能被 LazyListState 正确恢复)。
+ * 滚动位置才能被 LazyGridState 正确恢复)。
  */
 private object ExploreCache {
     var categories: List<Category> = emptyList()
@@ -87,22 +86,31 @@ private object ExploreCache {
 }
 
 /**
- * ExploreScreen - 分类页 (左侧一级分类栏 + 右侧软件列表, 双栏联动)
+ * ExploreScreen - 分类页 (v1.1.23 重构)
  *
- *   ┌────────┬──────────────────────────┐
- *   │ 全部   │  子分类 chips (横滑, 有才显示)│
- *   │ 分类1  │  ───────────────────────  │
- *   │ 分类2  │  软件列表 (图标+名称+元信息)│
- *   └────────┴──────────────────────────┘
- * 点左侧一级分类, 右侧立即切换, 不再进二级页面。
+ *   ┌──────────────────────────────────┐
+ *   │ 分类                              │
+ *   │ [全部] [游戏] [工具] [Root] …      │  ← 横向滚动胶囊, 选中填充主色
+ *   ├──────────────────────────────────┤
+ *   │ 游戏                    48 款      │
+ *   │ [全部] [王者荣耀] [和平精英] …      │  ← 子分类 chip (有才显示)
+ *   │ ┌────────┐ ┌────────┐             │
+ *   │ │ 图标    │ │ 图标    │             │  ← 两列卡片, 逐个淡入上浮
+ *   │ │ 名称    │ │ 名称    │             │
+ *   │ │ v1 · 10-21│ │ …     │             │
+ *   │ └────────┘ └────────┘             │
+ *   └──────────────────────────────────┘
+ *
+ * 为什么不再用左侧 88dp 竖栏: 中文分类名两三个字就要换行, 栏子窄得只能塞下
+ * 「王者荣耀」四个字的截断版, 一屏能看的分类也少。改成顶部横滑胶囊 + 两列网格,
+ * 分类名有整行宽度可用, 软件卡片也从「一行一条」变成「一屏四张」。
  */
 @Composable
 fun ExploreScreen(
     onAppClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
 
     var categories by remember { mutableStateOf(ExploreCache.categories) }
     var allApps by remember { mutableStateOf(ExploreCache.allApps) }
@@ -173,12 +181,12 @@ fun ExploreScreen(
         }
         // 主动切换分类才回到顶部; 从详情页返回(lastKey 已恢复)不滚动
         if (lastKey != currentKey) {
-            if (lastKey != -1) listState.scrollToItem(0)
+            if (lastKey != -1) gridState.scrollToItem(0)
             lastKey = currentKey
         }
     }
 
-    // 当前分类名 (右上角大标题用)
+    // 当前分类名 (右侧大标题用)
     val currentCategoryName = remember(categories, selectedCategory, selectedSubCategory) {
         when {
             selectedSubCategory > 0 ->
@@ -190,46 +198,37 @@ fun ExploreScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         topBar = { AppTopBar(title = "分类") },
     ) { innerPadding ->
         when {
             loading -> {
-                LoadingBox(Modifier.fillMaxSize().padding(innerPadding))
+                Box(Modifier.fillMaxSize().padding(innerPadding).appGradientBackground()) {
+                    LoadingBox(Modifier.fillMaxSize())
+                }
             }
 
             categories.isEmpty() -> {
-                Box(Modifier.fillMaxSize().padding(innerPadding)) {
+                Box(Modifier.fillMaxSize().padding(innerPadding).appGradientBackground()) {
                     EmptyMessage(text = "暂无分类")
                 }
             }
 
             else -> {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
                         .appGradientBackground(),
                 ) {
-                    // ── 左侧: 一级分类栏 ──
-                    // 不再铺一整块灰底: 用一层很淡的竖向渐变把栏位和内容区分开,
-                    // 选中态靠主色淡底胶囊表达, 视觉更干净。
-                    LazyColumn(
-                        modifier = Modifier
-                            .width(88.dp)
-                            .fillMaxHeight()
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
-                                        MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f),
-                                        Color.Transparent,
-                                    ),
-                                ),
-                            ),
-                        contentPadding = PaddingValues(top = 10.dp, bottom = 110.dp),
+                    // ── 一级分类: 横向滚动胶囊 ──
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(start = GlassSpacing.page, end = GlassSpacing.page, top = 4.dp, bottom = 2.dp),
                     ) {
-                        item(key = "cat_all") {
-                            SideCategoryItem(
+                        item(key = "top_all") {
+                            TopCategoryPill(
                                 name = "全部",
                                 count = allApps.size,
                                 selected = selectedCategory == 0 && selectedSubCategory == 0,
@@ -242,7 +241,7 @@ fun ExploreScreen(
                             )
                         }
                         items(topCategories, key = { it.id }) { cat ->
-                            SideCategoryItem(
+                            TopCategoryPill(
                                 name = cat.name,
                                 count = topCounts[cat.id] ?: 0,
                                 selected = selectedCategory == cat.id,
@@ -256,64 +255,71 @@ fun ExploreScreen(
                         }
                     }
 
-                    // ── 右侧: 标题 + 子分类 chips + 软件列表 ──
-                    Column(
+                    // ── 标题行: 当前分类 + 软件数 ──
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
+                            .fillMaxWidth()
+                            .padding(start = GlassSpacing.page, end = GlassSpacing.page, top = 10.dp),
+                        verticalAlignment = Alignment.Bottom,
                     ) {
-                        // 当前分类大标题: 让右侧有一个明确的「我在看什么」的锚点
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 14.dp, end = 14.dp, top = 10.dp),
-                            verticalAlignment = Alignment.Bottom,
-                        ) {
-                            Text(
-                                text = currentCategoryName,
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MiuixTheme.colorScheme.onBackground,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = "${apps.size} 款",
-                                fontSize = 12.sp,
-                                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                modifier = Modifier.padding(bottom = 3.dp),
-                            )
-                        }
+                        Text(
+                            text = currentCategoryName,
+                            fontSize = 23.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "${apps.size} 款",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                    }
 
-                        if (subCategories.isNotEmpty()) {
-                            LazyRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                            ) {
-                                item(key = "sub_all") {
-                                    CategoryChip(
-                                        name = "全部",
-                                        selected = selectedSubCategory == 0,
-                                        onClick = { selectedSubCategory = 0 },
-                                    )
-                                }
-                                items(subCategories, key = { it.id }) { sub ->
-                                    CategoryChip(
-                                        name = sub.name,
-                                        selected = selectedSubCategory == sub.id,
-                                        onClick = { selectedSubCategory = sub.id },
-                                    )
-                                }
+                    if (subCategories.isNotEmpty()) {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(
+                                start = GlassSpacing.page,
+                                end = GlassSpacing.page,
+                                top = 10.dp,
+                                bottom = 4.dp,
+                            ),
+                        ) {
+                            item(key = "sub_all") {
+                                SubCategoryChip(
+                                    name = "全部",
+                                    selected = selectedSubCategory == 0,
+                                    onClick = { selectedSubCategory = 0 },
+                                )
+                            }
+                            items(subCategories, key = { it.id }) { sub ->
+                                SubCategoryChip(
+                                    name = sub.name,
+                                    selected = selectedSubCategory == sub.id,
+                                    onClick = { selectedSubCategory = sub.id },
+                                )
                             }
                         }
+                    }
 
-                        // 列表: 切分类时上浮淡入 (与首页同一套节奏, 不左右滑)
-                        AnimatedContent(
-                            targetState = currentKey,
-                            transitionSpec = {
+                    // ── 软件网格: 切分类时上浮淡入 (与首页同一套节奏) ──
+                    AnimatedContent(
+                        targetState = currentKey,
+                        // 占满标题与 chip 之外的剩余高度: 不给 weight 的话子项按"整屏高"测量,
+                        // 列表底部会被挤出屏幕外 (底部 100dp 的留白就白留了)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        transitionSpec = {
+                            // 设置里关掉「页面转场」时: 保留 AnimatedContent 的结构 (子组合不销毁,
+                            // 滚动位置与缓存都在), 只把时长压成 0 —— 视觉上就是直接换
+                            if (LocalAnimPageSwitch.current) {
                                 fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
                                     slideInVertically(
                                         animationSpec = tween(260, easing = FastOutSlowInEasing),
@@ -324,44 +330,52 @@ fun ExploreScreen(
                                         animationSpec = tween(130, easing = FastOutSlowInEasing),
                                         targetOffsetY = { h -> -h / 20 },
                                     )
-                            },
-                            label = "exploreList",
-                        ) { key ->
-                            // 转场期间上一层要显示它自己的数据 (而不是新的), 否则会「先看到新列表再淡出」
-                            val shown = ExploreCache.appsByKey[key]
-                                ?: if (key == currentKey) apps else emptyList()
-                            when {
-                                appsLoading && shown.isEmpty() -> {
-                                    LoadingBox(Modifier.fillMaxSize())
-                                }
+                            } else {
+                                fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                            }
+                        },
+                        label = "exploreGrid",
+                    ) { key ->
+                        // 转场期间上一层要显示它自己的数据 (而不是新的), 否则会「先看到新列表再淡出」
+                        val shown = ExploreCache.appsByKey[key]
+                            ?: if (key == currentKey) apps else emptyList()
+                        when {
+                            appsLoading && shown.isEmpty() -> {
+                                LoadingBox(Modifier.fillMaxSize())
+                            }
 
-                                appsError.isNotEmpty() && shown.isEmpty() -> {
-                                    Box(Modifier.fillMaxSize()) {
-                                        EmptyMessage(text = appsError)
-                                    }
+                            appsError.isNotEmpty() && shown.isEmpty() -> {
+                                Box(Modifier.fillMaxSize()) {
+                                    EmptyMessage(text = appsError)
                                 }
+                            }
 
-                                shown.isEmpty() -> {
-                                    Box(Modifier.fillMaxSize()) {
-                                        EmptyMessage(text = "该分类暂无软件")
-                                    }
+                            shown.isEmpty() -> {
+                                Box(Modifier.fillMaxSize()) {
+                                    EmptyMessage(text = "该分类暂无软件")
                                 }
+                            }
 
-                                else -> {
-                                    LazyColumn(
-                                        state = listState,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentPadding = PaddingValues(
-                                            start = 14.dp,
-                                            end = 14.dp,
-                                            top = 2.dp,
-                                            bottom = 100.dp, // 留出悬浮胶囊空间
-                                        ),
-                                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                                    ) {
-                                        items(shown, key = { it.id }) { app ->
-                                            CategoryAppItem(app = app, onClick = { onAppClick(app.id) })
-                                        }
+                            else -> {
+                                LazyVerticalGrid(
+                                    columns = GridCells.Fixed(2),
+                                    state = gridState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(
+                                        start = GlassSpacing.page,
+                                        end = GlassSpacing.page,
+                                        top = 6.dp,
+                                        bottom = 110.dp, // 留出悬浮胶囊空间
+                                    ),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    itemsIndexed(shown, key = { _, app -> app.id }) { index, app ->
+                                        AppGridCard(
+                                            app = app,
+                                            modifier = Modifier.enterUp(index),
+                                            onClick = { onAppClick(app.id) },
+                                        )
                                     }
                                 }
                             }
@@ -374,14 +388,14 @@ fun ExploreScreen(
 }
 
 /**
- * 左侧一级分类项。
+ * 一级分类胶囊。
  *
- * 选中态: 主色淡底胶囊 + 主色粗体字 + 主色竖条。
- * ⚠️ 不再接受服务端下发的自定义颜色 —— 一级分类颜色必须统一走主题色,
- * 否则换主题时左边栏还是各分类的老颜色, 跟整体割裂 (用户 2026-11-04 要求)。
+ * 选中态: 主色实底 + 反色文字 + 轻微抬起的投影; 未选中: 很淡的玻璃底。
+ * ⚠️ 不读服务端下发的自定义颜色 —— 一级分类颜色统一走主题色, 换主题时整栏跟着变
+ * (用户 2026-11-04 要求)。
  */
 @Composable
-private fun SideCategoryItem(
+private fun TopCategoryPill(
     name: String,
     count: Int,
     selected: Boolean,
@@ -390,86 +404,53 @@ private fun SideCategoryItem(
     val interaction = remember { MutableInteractionSource() }
     val isPressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.95f else 1f,
-        animationSpec = spring(dampingRatio = 0.85f, stiffness = 700f),
-        label = "sideCat",
+        targetValue = if (isPressed) 0.94f else 1f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 700f),
+        label = "topCatPress",
     )
-    // 选中/未选中的底色与文字色都插值过渡, 点击不再硬跳
     val bg by animateColorAsState(
-        targetValue = if (selected) MiuixTheme.colorScheme.primary.copy(alpha = 0.13f)
-        else Color.Transparent,
+        targetValue = if (selected) MiuixTheme.colorScheme.primary
+        else MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
         animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "sideCatBg",
+        label = "topCatBg",
     )
     val fg by animateColorAsState(
-        targetValue = if (selected) MiuixTheme.colorScheme.primary
-        else MiuixTheme.colorScheme.onBackgroundVariant,
+        targetValue = if (selected) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onBackground,
         animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "sideCatFg",
+        label = "topCatFg",
     )
-    // 竖条从 0 高度长出来 / 缩回去
-    val barHeight by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 900f),
-        label = "sideCatBar",
-    )
-
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(bg)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = 6.dp, vertical = 11.dp),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 竖条占位固定, 只改高度: 文字不会因为选中与否左右抖动
-        Box(
-            modifier = Modifier
-                .size(width = 3.dp, height = 16.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height((16 * barHeight).dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.primary),
-            )
-        }
-        Spacer(Modifier.width(7.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Text(
+            text = name,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = fg,
+            maxLines = 1,
+        )
+        if (count > 0) {
+            Spacer(Modifier.width(5.dp))
             Text(
-                text = name,
-                fontSize = 13.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = fg,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                text = count.toString(),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = fg.copy(alpha = if (selected) 0.75f else 0.45f),
             )
-            if (count > 0) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "$count",
-                    fontSize = 10.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.65f),
-                )
-            }
         }
     }
 }
 
-/**
- * 子分类筛选 chip (胶囊形, 选中主色填充, 未选中浅底)
- */
+/** 子分类筛选 chip (胶囊形, 选中主色描边+淡底, 未选中透明) */
 @Composable
-private fun CategoryChip(
+private fun SubCategoryChip(
     name: String,
     selected: Boolean,
     onClick: () -> Unit,
@@ -477,147 +458,154 @@ private fun CategoryChip(
     val interaction = remember { MutableInteractionSource() }
     val isPressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.92f else 1f,
-        animationSpec = spring(dampingRatio = 0.85f, stiffness = 700f),
-        label = "exploreChip",
+        targetValue = if (isPressed) 0.93f else 1f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 700f),
+        label = "subChipPress",
     )
     val bg by animateColorAsState(
-        targetValue = if (selected) MiuixTheme.colorScheme.primary
-        else MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "chipBg",
+        targetValue = if (selected) MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+        else Color.Transparent,
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "subChipBg",
     )
     val fg by animateColorAsState(
-        targetValue = if (selected) MiuixTheme.colorScheme.onPrimary
+        targetValue = if (selected) MiuixTheme.colorScheme.primary
         else MiuixTheme.colorScheme.onBackgroundVariant,
-        animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "chipFg",
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "subChipFg",
     )
     Text(
         text = name,
         fontSize = 13.sp,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         color = fg,
+        maxLines = 1,
         modifier = Modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 6.dp),
     )
 }
 
-/** 分类内软件项 (图标 + 名称 + 元信息 + 查看按钮) */
+/**
+ * 网格里的软件卡片: 图标 + 名称 + 版本/更新日期 + 下载量。
+ * 两列布局让一屏能看到四张卡, 比原来一行一条的列表紧凑也更好看。
+ */
 @Composable
-private fun CategoryAppItem(app: AppItem, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.defaultColors(
-            color = Color.Transparent,
-            contentColor = MiuixTheme.colorScheme.onBackground,
-        ),
-        modifier = Modifier
+private fun AppGridCard(
+    app: AppItem,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp)
-            .pressScaleEffect(label = "exploreAppPress")
-            .glassCard(radius = GlassRadius.card),
-        cornerRadius = GlassRadius.card,
+            .pressScaleEffect(label = "exploreCardPress")
+            .glassCard(radius = GlassRadius.card)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(13.dp)),
-                contentAlignment = Alignment.Center,
+        Column(Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
             ) {
-                if (app.icon.isNotEmpty()) {
-                    AsyncImage(
-                        model = app.icon,
-                        contentDescription = app.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Text(
-                        text = app.name.take(1),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MiuixTheme.colorScheme.primary,
-                    )
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = app.name,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MiuixTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (app.isNew) {
-                        Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (app.icon.isNotEmpty()) {
+                        AsyncImage(
+                            model = app.icon,
+                            contentDescription = app.name,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
                         Text(
-                            text = "新",
-                            fontSize = 10.sp,
+                            text = app.name.take(1),
+                            fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(Color(0xFFFF8F1F), Color(0xFFFF4D6D)),
-                                    )
-                                )
-                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                            color = MiuixTheme.colorScheme.primary,
                         )
                     }
                 }
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = buildString {
-                        if (app.releaseDate.isNotEmpty() && app.releaseDate.length >= 10) {
-                            append("更新于 ")
-                            append(app.releaseDate.substring(5, 10))
-                            append(" · ")
-                        }
-                        if (app.version.isNotEmpty()) append("v${app.version}")
-                        if (app.downloadCount > 0) {
-                            if (isNotEmpty()) append(" · ")
-                            append("${formatCount(app.downloadCount)} 次下载")
-                        }
-                    },
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
+                Spacer(Modifier.weight(1f))
+                if (app.isNew) {
+                    Text(
+                        text = "新",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(Color(0xFFFF8F1F), Color(0xFFFF4D6D)),
+                                ),
+                            )
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                    )
+                }
             }
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-            ) {
-                Text(
-                    text = "查看",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.primary,
-                )
+
+            Spacer(Modifier.height(9.dp))
+            Text(
+                text = app.name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MiuixTheme.colorScheme.onBackground,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = gridMetaOf(app),
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            if (app.downloadCount > 0) {
+                Spacer(Modifier.height(7.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(3.dp)
+                            .clip(CircleShape)
+                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        text = "${formatCount(app.downloadCount)} 次下载",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.primary.copy(alpha = 0.85f),
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
+}
+
+/** 卡片第二行: "v1.2 · 更新于 10-21" (缺哪项就少哪项) */
+private fun gridMetaOf(app: AppItem): String = buildString {
+    if (app.version.isNotEmpty()) append("v${app.version}")
+    if (app.releaseDate.length >= 10) {
+        if (isNotEmpty()) append(" · ")
+        append(app.releaseDate.substring(5, 10))
+    }
+    if (isEmpty()) append("暂无版本信息")
 }
 
 /** 下载量格式化 */

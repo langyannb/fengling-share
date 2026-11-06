@@ -9,8 +9,9 @@ import com.fengling.share.ui.theme.colorScheme.SpecVersionOption
 /**
  * 主题设置的一次性快照。
  *
- * 为什么要有它: 换肤相关配置现在有 8 项 (明暗 / 主题色 / 色板风格 / 色彩规范 /
- * 模糊 / 悬浮底栏 / 玻璃 / 预测性返回)。全部从 SharedPreferences 读, 但 Compose
+ * 为什么要有它: 换肤与动效相关配置现在有 12 项 (明暗 / 主题色 / 色板风格 / 色彩规范 /
+ * 模糊 / 悬浮底栏 / 玻璃 / 预测性返回 / 列表进场 / 页面转场 / 弹层弹性 / 进度插值)。
+ * 全部从 SharedPreferences 读, 但 Compose
  * 不会自动观察 SharedPreferences —— 必须把它们收进一个 `mutableStateOf`, 设置页
  * 改完调用 [fromSettings] 生成新快照赋回去, 才会触发整棵树重组。
  *
@@ -25,6 +26,11 @@ data class ThemeState(
     val floatingBottomBar: Boolean,
     val glassBottomBar: Boolean,
     val predictiveBack: Boolean,
+    // ===== 动效开关 (v1.1.23) =====
+    val animListEnter: Boolean = true,
+    val animPageSwitch: Boolean = true,
+    val animSheetSpring: Boolean = true,
+    val animProgressSmooth: Boolean = true,
 ) {
     /** 当前种子色: 自定义色优先, 否则用预置色的 seed */
     val seedColor: Long
@@ -41,6 +47,10 @@ data class ThemeState(
             floatingBottomBar = Settings.floatingBottomBar,
             glassBottomBar = Settings.glassBottomBar,
             predictiveBack = Settings.predictiveBack,
+            animListEnter = Settings.animListEnter,
+            animPageSwitch = Settings.animPageSwitch,
+            animSheetSpring = Settings.animSheetSpring,
+            animProgressSmooth = Settings.animProgressSmooth,
         )
     }
 }

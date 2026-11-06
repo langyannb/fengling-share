@@ -9,8 +9,8 @@ package com.fengling.share.data
  */
 object AppVersion {
     /** 当前版本号 (语义化 x.y.z) */
-    const val CURRENT = "1.1.22"
+    const val CURRENT = "1.1.23"
 
     /** 版本代号 (build.gradle versionCode 对应值) */
-    const val CODE = 160
+    const val CODE = 161
 }

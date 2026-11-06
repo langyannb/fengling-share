@@ -37,7 +37,11 @@ import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.CallToAction
 import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.DesignServices
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Gesture
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.Icon
@@ -107,6 +111,11 @@ fun ThemeSettingsScreen(
     var floatingBar by remember { mutableStateOf(Settings.floatingBottomBar) }
     var glassBar by remember { mutableStateOf(Settings.glassBottomBar) }
     var predictiveOn by remember { mutableStateOf(Settings.predictiveBack) }
+    // ===== 动效开关 (v1.1.23, 默认全开) =====
+    var animListEnter by remember { mutableStateOf(Settings.animListEnter) }
+    var animPageSwitch by remember { mutableStateOf(Settings.animPageSwitch) }
+    var animSheetSpring by remember { mutableStateOf(Settings.animSheetSpring) }
+    var animProgressSmooth by remember { mutableStateOf(Settings.animProgressSmooth) }
 
     val isDark = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
@@ -348,6 +357,91 @@ fun ThemeSettingsScreen(
                             onCheckedChange = { checked ->
                                 predictiveOn = checked
                                 Settings.predictiveBack = checked
+                                onChanged()
+                            },
+                        )
+                    }
+                }
+
+                // ============ 动效 (v1.1.23) ============
+                //
+                // 四个开关都默认开 —— 装上就是最好看的状态, 想省电 / 老机器卡 / 看动画头晕的人
+                // 自己关。关掉不是「变难看」, 只是少了那一层过渡: 列表直出、页面直切、面板直弹。
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                    ) {
+                        SwitchPreference(
+                            title = "列表进场动画",
+                            summary = "列表逐项淡入上浮；关掉更省电",
+                            checked = animListEnter,
+                            startAction = {
+                                Icon(
+                                    imageVector = Icons.Filled.KeyboardDoubleArrowDown,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    modifier = Modifier.padding(end = 6.dp),
+                                )
+                            },
+                            onCheckedChange = { checked ->
+                                animListEnter = checked
+                                Settings.animListEnter = checked
+                                onChanged()
+                            },
+                        )
+                        SwitchPreference(
+                            title = "页面转场动画",
+                            summary = "切换分类、群组/私聊之间淡入滑动",
+                            checked = animPageSwitch,
+                            startAction = {
+                                Icon(
+                                    imageVector = Icons.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    modifier = Modifier.padding(end = 6.dp),
+                                )
+                            },
+                            onCheckedChange = { checked ->
+                                animPageSwitch = checked
+                                Settings.animPageSwitch = checked
+                                onChanged()
+                            },
+                        )
+                        SwitchPreference(
+                            title = "弹层弹性动画",
+                            summary = "长按菜单、公告编辑、功能面板的弹簧进出场",
+                            checked = animSheetSpring,
+                            startAction = {
+                                Icon(
+                                    imageVector = Icons.Filled.ExpandLess,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    modifier = Modifier.padding(end = 6.dp),
+                                )
+                            },
+                            onCheckedChange = { checked ->
+                                animSheetSpring = checked
+                                Settings.animSheetSpring = checked
+                                onChanged()
+                            },
+                        )
+                        SwitchPreference(
+                            title = "平滑进度",
+                            summary = "下载进度条插值推进；关掉按原始数据跳动",
+                            checked = animProgressSmooth,
+                            startAction = {
+                                Icon(
+                                    imageVector = Icons.Filled.Download,
+                                    contentDescription = null,
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    modifier = Modifier.padding(end = 6.dp),
+                                )
+                            },
+                            onCheckedChange = { checked ->
+                                animProgressSmooth = checked
+                                Settings.animProgressSmooth = checked
                                 onChanged()
                             },
                         )

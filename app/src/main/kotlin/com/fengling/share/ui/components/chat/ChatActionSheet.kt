@@ -41,6 +41,7 @@ import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.glassSurface
+import com.fengling.share.ui.theme.LocalAnimSheetSpring
 
 /**
  * 「消息操作」菜单里的一项 (v1.1.20)
@@ -95,17 +96,27 @@ fun ChatActionSheet(
     /** 标题下方那行小字 (通常是「谁: 说了什么」), 空串则不画 */
     title: String = "消息操作",
 ) {
+    // 设置里关掉「弹层弹性」时: 只保留 120ms 的淡入淡出, 不再有弹簧过冲
+    val springOn = LocalAnimSheetSpring.current
+
     // mounted: 收起动画播完才把节点摘掉, 否则最后 180ms 会「啪」地消失
     var mounted by remember { mutableStateOf(visible) }
     val progress = remember { Animatable(if (visible) 1f else 0f) }
 
-    LaunchedEffect(visible) {
+    LaunchedEffect(visible, springOn) {
         if (visible) {
             mounted = true
-            // 进场: 阻尼 0.78 + 刚度 620 —— 冲过头一点点再回弹, 是「弹出来」不是「滑出来」
-            progress.animateTo(1f, spring(dampingRatio = 0.78f, stiffness = 620f))
+            if (springOn) {
+                // 进场: 阻尼 0.78 + 刚度 620 —— 冲过头一点点再回弹, 是「弹出来」不是「滑出来」
+                progress.animateTo(1f, spring(dampingRatio = 0.78f, stiffness = 620f))
+            } else {
+                progress.animateTo(1f, tween(durationMillis = 120))
+            }
         } else if (mounted) {
-            progress.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing))
+            progress.animateTo(
+                0f,
+                tween(durationMillis = if (springOn) 180 else 90, easing = FastOutSlowInEasing),
+            )
             mounted = false
         }
     }

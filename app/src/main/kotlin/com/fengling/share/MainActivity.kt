@@ -123,6 +123,10 @@ class MainActivity : ComponentActivity() {
                 floatingBottomBar = themeState.floatingBottomBar,
                 glassBottomBar = themeState.glassBottomBar,
                 predictiveBack = themeState.predictiveBack,
+                animListEnter = themeState.animListEnter,
+                animPageSwitch = themeState.animPageSwitch,
+                animSheetSpring = themeState.animSheetSpring,
+                animProgressSmooth = themeState.animProgressSmooth,
             ) {
                 // 不再自建 root NavigationEventDispatcher: activity 1.13.0 的 ComponentActivity
                 // 本身就是 NavigationEventDispatcherOwner, 并把系统返回事件 (OnBackInvokedInput)

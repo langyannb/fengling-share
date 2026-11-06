@@ -34,6 +34,20 @@ val LocalGlassBottomBar = staticCompositionLocalOf { true }
 /** 预测性返回动画是否开启。 */
 val LocalPredictiveBack = staticCompositionLocalOf { true }
 
+// ===== 动效开关 (v1.1.23, 默认全开; 用户可在「主题设置 → 动效」里逐项关掉) =====
+
+/** 列表逐个淡入上浮。关掉 = 列表直接出现。 */
+val LocalAnimListEnter = staticCompositionLocalOf { true }
+
+/** 页面 / 分类切换转场。关掉 = 内容直接换, 不做淡入滑动。 */
+val LocalAnimPageSwitch = staticCompositionLocalOf { true }
+
+/** 弹层弹性进出场 (长按菜单 / 公告编辑 / 「+」面板)。关掉 = 直接出现与消失。 */
+val LocalAnimSheetSpring = staticCompositionLocalOf { true }
+
+/** 进度条插值。关掉 = 进度按数据原样跳。 */
+val LocalAnimProgressSmooth = staticCompositionLocalOf { true }
+
 /**
  * 当前是否深色主题。
  *
@@ -65,6 +79,10 @@ fun AppTheme(
     floatingBottomBar: Boolean = Settings.floatingBottomBar,
     glassBottomBar: Boolean = Settings.glassBottomBar,
     predictiveBack: Boolean = Settings.predictiveBack,
+    animListEnter: Boolean = Settings.animListEnter,
+    animPageSwitch: Boolean = Settings.animPageSwitch,
+    animSheetSpring: Boolean = Settings.animSheetSpring,
+    animProgressSmooth: Boolean = Settings.animProgressSmooth,
     content: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -224,6 +242,10 @@ fun AppTheme(
         LocalFloatingBottomBar provides floatingBottomBar,
         LocalGlassBottomBar provides glassBottomBar,
         LocalPredictiveBack provides predictiveBack,
+        LocalAnimListEnter provides animListEnter,
+        LocalAnimPageSwitch provides animPageSwitch,
+        LocalAnimSheetSpring provides animSheetSpring,
+        LocalAnimProgressSmooth provides animProgressSmooth,
     ) {
         MiuixTheme(
             colors = miuixColors,

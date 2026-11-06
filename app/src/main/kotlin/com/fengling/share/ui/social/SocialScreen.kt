@@ -47,6 +47,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -169,10 +170,15 @@ import com.fengling.share.ui.components.chat.ChatAvatar
 import com.fengling.share.ui.components.chat.ChatCenterHint
 import com.fengling.share.ui.components.chat.ChatRefreshBar
 import com.fengling.share.ui.components.chat.ChatSheetAction
+import com.fengling.share.ui.components.chat.ListStatStrip
+import com.fengling.share.ui.components.chat.NoticeEditorSheet
 import com.fengling.share.ui.components.chat.RECALL_SHATTER_MS
 import com.fengling.share.ui.components.chat.RecallShatter
 import com.fengling.share.ui.components.chat.SmallActionButton
 import com.fengling.share.ui.components.chat.chatMenuSummary
+import com.fengling.share.ui.components.enterUp
+import com.fengling.share.ui.theme.LocalAnimPageSwitch
+import com.fengling.share.ui.components.GradientAvatar
 import com.fengling.share.ui.components.ChatEmojiPanel
 import com.fengling.share.ui.components.ChatPanelItem
 import com.fengling.share.ui.components.ChatPlusPanel
@@ -625,17 +631,21 @@ fun SocialScreen(
                     AnimatedContent(
                         targetState = if (showTabs) tab else 0,
                         transitionSpec = {
-                            val dir = if (targetState > initialState) 1 else -1
-                            (fadeIn(tween(220, delayMillis = 60)) +
-                                slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) {
-                                    it * dir / 12
-                                })
-                                .togetherWith(
-                                    fadeOut(tween(150)) +
-                                        slideOutHorizontally(tween(200, easing = FastOutSlowInEasing)) {
-                                            -it * dir / 24
-                                        },
-                                )
+                            if (!LocalAnimPageSwitch.current) {
+                                fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                            } else {
+                                val dir = if (targetState > initialState) 1 else -1
+                                (fadeIn(tween(220, delayMillis = 60)) +
+                                    slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) {
+                                        it * dir / 12
+                                    })
+                                    .togetherWith(
+                                        fadeOut(tween(150)) +
+                                            slideOutHorizontally(tween(200, easing = FastOutSlowInEasing)) {
+                                                -it * dir / 24
+                                            },
+                                    )
+                            }
                         },
                         label = "social-tab",
                         modifier = Modifier.fillMaxSize(),
@@ -807,20 +817,18 @@ private fun GroupList(
                 contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
             ) {
             item {
-                // 顺手汇总一下未读总数 (免打扰的群也算在里面)
-                val totalUnread = groups.sumOf { it.unread }
-                val listHint = "点击群组进入聊天 · 群公告与消息实时同步" +
-                    (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
-                Text(
-                    text = listHint,
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                // 未读总数 (免打扰的群也算在里面)
+                ListStatStrip(
+                    count = groups.size,
+                    unit = "群组",
+                    unread = groups.sumOf { it.unread },
+                    hint = "点进群聊 · 公告与消息实时同步",
                 )
             }
-            items(groups, key = { it.id }) { g ->
+            itemsIndexed(groups, key = { _, g -> g.id }) { index, g ->
                 GroupCard(
                     group = g,
+                    index = index,
                     onClick = { onOpen(g) },
                     onOpenAt = { mid -> onOpenAt(g, mid) },
                 )
@@ -840,6 +848,7 @@ private fun GroupList(
 @Composable
 private fun GroupCard(
     group: SocialGroup,
+    index: Int = 0,
     onClick: () -> Unit,
     onOpenAt: (Int) -> Unit = {},
 ) {
@@ -863,6 +872,7 @@ private fun GroupCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .enterUp(index)
             .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
             .graphicsLayer {
                 scaleX = pressScale
@@ -881,37 +891,24 @@ private fun GroupCard(
                 .padding(GlassSpacing.cardInner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 群图标: 有图用图, 没有用群名首字占位
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (group.icon.isNotBlank()) {
-                    AsyncImage(
-                        model = group.icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Text(
-                        text = group.name.take(1).ifBlank { "群" },
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MiuixTheme.colorScheme.primary,
-                    )
-                }
-            }
+            // 群图标: 有图用图, 没有用「按群名取色的渐变 + 首字」——
+            // 一整列同一个灰块的时代过去了, 现在扫一眼就能认出是哪个群。
+            // 未读时套一圈主题色描边 (比只在右边挂个数字更容易被余光抓到)。
+            GradientAvatar(
+                imageUrl = group.icon,
+                fallbackText = group.name,
+                size = 50.dp,
+                seed = group.name + group.id,
+                ring = group.unread > 0 && !group.muted,
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = group.name,
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        // 有未读时加粗一档, 让眼睛先落到"要看的群"上
+                        fontWeight = if (group.unread > 0) FontWeight.Bold else FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onBackground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -2952,66 +2949,30 @@ private fun ChatView(
         )
     }
 
-    if (menu.showNoticeEditor) {
-        AlertDialog(
-            onDismissRequest = { menu.showNoticeEditor = false },
-            title = {
-                Text(text = "群公告", color = MiuixTheme.colorScheme.onBackground)
-            },
-            text = {
-                Column {
-                    Text(
-                        text = "发布后会显示在群聊顶部, 所有成员进群都能看到。留空则清空公告。",
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = menu.draft,
-                        onValueChange = { if (it.length <= 500) menu.draft = it },
-                        placeholder = { Text(text = "写点群规、活动或者通知…", fontSize = 13.sp) },
-                        textStyle = TextStyle(
-                            fontSize = 14.sp,
-                            color = MiuixTheme.colorScheme.onBackground,
-                        ),
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = menu.draft.length.toString() + " / 500",
-                        fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                }
-            },
-            confirmButton = {
-                M3TextButton(
-                    onClick = {
-                        if (noticeSaving) return@M3TextButton
-                        noticeSaving = true
-                        scope.launch {
-                            ApiClient.socialSetNotice(group.id, menu.draft.trim())
-                                .onSuccess {
-                                    noticeText = menu.draft.trim()
-                                    menu.showNoticeEditor = false
-                                    onToast("公告已更新")
-                                }
-                                .onFailure { e -> onToast(e.message ?: "公告保存失败") }
-                            noticeSaving = false
+    // v1.1.23: 从 AlertDialog 换成底部玻璃面板, 键盘弹出不再被顶出屏幕
+    NoticeEditorSheet(
+        visible = menu.showNoticeEditor,
+        title = "群公告",
+        value = menu.draft,
+        onValueChange = { menu.draft = it },
+        saving = noticeSaving,
+        onDismiss = { if (!noticeSaving) menu.showNoticeEditor = false },
+        onSave = {
+            if (!noticeSaving) {
+                noticeSaving = true
+                scope.launch {
+                    ApiClient.socialSetNotice(group.id, menu.draft.trim())
+                        .onSuccess {
+                            noticeText = menu.draft.trim()
+                            menu.showNoticeEditor = false
+                            onToast("公告已更新")
                         }
-                    },
-                ) {
-                    Text(text = if (noticeSaving) "保存中…" else "保存", color = MiuixTheme.colorScheme.primary)
+                        .onFailure { e -> onToast(e.message ?: "公告保存失败") }
+                    noticeSaving = false
                 }
-            },
-            dismissButton = {
-                M3TextButton(onClick = { menu.showNoticeEditor = false }) {
-                    Text(text = "取消", color = MiuixTheme.colorScheme.onBackgroundVariant)
-                }
-            },
-        )
-    }
+            }
+        },
+    )
 
     // ===== @ 成员选择 =====
     if (showMentionPicker) {
