@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import com.fengling.share.MainActivity
 import com.fengling.share.R
 import com.fengling.share.data.ApiClient
+import com.fengling.share.data.ApiException
 import com.fengling.share.data.AppState
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.Settings
@@ -36,16 +37,17 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 /**
- * 后台常驻消息服务 (v1.0.35) —— SSE 长连接的**唯一持有者**
+ * 后台常驻消息服务 (v1.0.35) —— WebSocket 长连接的**唯一持有者**
  *
- * 为什么要有它: 之前那条 SSE 连接由 MainScreen 按前后台启停, 退到桌面就断,
+ * 为什么要有它: 之前那条 WebSocket 连接由 MainScreen 按前后台启停, 退到桌面就断,
  * 于是「后台秒收消息」做不到。现在改成前台服务持有连接, 退到任何地方连接都不断,
  * 新消息到达时由服务弹系统通知 (QQ/微信同款 0 元方案: 一条常驻连接 + 一条常驻通知)。
  *
  * 职责边界:
- * - 连接: 复用 [ApiClient.streamMessages] (**绝不自己写第二套 SSE 解析**), 断了等 2 秒重连, 永不退出;
+ * - 连接: 复用 [ApiClient.streamMessagesWs]（绝不自己写第二套解析）, 断了按指数退避重连, 永不退出;
  * - 分发: 所有事件**先无条件转发给 [MessageStream] 事件总线**(各页面的订阅逻辑照旧), 再决定要不要弹通知;
  * - 通知: 只在 App 不在前台 ([AppState.foreground] == false) 时弹, 前台不弹 (前台由各页面自己响提示音);
  *   没有 POST_NOTIFICATIONS 权限时静默失败, 服务照跑不误。
@@ -62,7 +64,7 @@ class MessageService : Service() {
     private var lastGroupCount: Int = 0
     private var lastGroupAt: Long = 0L
 
-    /** 上一次 SSE 连接是不是「没连上」——没连上就说明中间有断线窗口, 下次连之前先 HTTP 补拉 (v1.1.2) */
+    /** 上一次 WS 连接是不是「没连上」——没连上就说明中间有断线窗口, 下次连之前先 HTTP 补拉 (v1.1.2) */
     private var lastConnectFailed: Boolean = false
 
     override fun onCreate() {
@@ -70,7 +72,7 @@ class MessageService : Service() {
         // 服务可能被系统在「全新进程」里重启 (START_STICKY), 这里两个 init 都是幂等的, 补一次最稳
         runCatching { Settings.init(applicationContext) }
         runCatching { UserStore.init(applicationContext) }
-        // SSE 游标 (已通知过的最大 pm/group id): 断线重连靠它补齐漏掉的事件 (v1.1.2)
+        // WS 游标 (已通知过的最大 pm/group id): 断线重连靠它补齐漏掉的事件 (v1.1.2)
         runCatching { StreamCursor.init(applicationContext) }
         instance = this
         // 闹钟守护心跳 (v1.1.2): 先排上 —— 就算下面 startForeground 失败、服务当场收摊,
@@ -122,7 +124,7 @@ class MessageService : Service() {
      * 用户在「最近任务」里把 App 划掉 (v1.1.1, 核心需求 ①)
      *
      * manifest 里给服务加了 `android:stopWithTask="false"`, 所以划掉任务时**只会走这里,
-     * 服务本身继续活着、SSE 长连接不断** —— 这是「被划掉也能收到消息」的主要机制。
+     * 服务本身继续活着、WebSocket 长连接不断** —— 这是「被划掉也能收到消息」的主要机制。
      * 少数 ROM (ColorOS 的"深度清理"、MIUI 的"结束进程"等) 会顺手把服务一起停掉,
      * 那时 running 已是 false, 就排一次重启兜底。
      */
@@ -149,9 +151,9 @@ class MessageService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** 掐断当前连接并立刻重连 (守护心跳专用): 先起新协程再取消旧的, 避免出现「一条连接都没有」的窗口 */
+    /** 掐断当前 WS 连接并立刻重连 (守护心跳专用): 先起新协程再取消旧的, 避免出现「一条连接都没有」的窗口 */
     private fun forceReconnectNow(reason: String) {
-        Log.i(TAG, "强制重连 SSE: " + reason)
+        Log.i(TAG, "强制重连 WS: " + reason)
         val old = job
         lastConnectFailed = true
         job = scope.launch { runStream() }
@@ -237,14 +239,15 @@ class MessageService : Service() {
         }
     }
 
-    // ==================== SSE 主循环 ====================
+    // ==================== WebSocket 主循环 ====================
 
     /**
-     * 连接主循环: 连 -> 断开 -> 等 2 秒 -> 再连, 永不退出。
+     * 连接主循环: 连 -> 断开 -> 指数退避 -> 再连, 永不退出。
      * 未登录时只空转等待 (3 秒一轮), 不浪费连接; 登录后下一次循环自然就连上了。
      */
     private suspend fun runStream() {
         var firstConnect = true
+        var attempt = 0
         while (true) {
             if (!UserStore.isLoggedIn()) {
                 Log.i(TAG, "未登录, 3 秒后再看")
@@ -256,9 +259,9 @@ class MessageService : Service() {
             // 把新账号的历史消息当「积压」补弹出来。每轮连接前都核对一次, 成本只是一次 SP 读。
             runCatching { StreamCursor.init(applicationContext) }
             // 兜底补拉 (v1.1.2): 服务刚起来 / 上一次压根没连上时, 先做一次轻量 HTTP 补拉, 把断线期间
-            // 漏掉的通知当场补弹。正常的 25 秒收尾重连**不做** (那 2 秒窗口由 SSE 游标在服务端补齐)。
+            // 漏掉的通知当场补弹。正常的短断线重连**不做**（漏掉的消息由 WS 游标在服务端补齐）。
             // 基线落盘 (v1.1.2): 首次安装 / 刚升级 / 刚换账号时, 游标是 0, 此刻若进程被划掉,
-            // 之后到达的消息既没有 SSE 推送、补拉也会因为「游标为 0」而跳过 -> 通知永久丢失。
+            // 之后到达的消息既没有 WS 推送、补拉也会因为「游标为 0」而跳过 -> 通知永久丢失。
             // 所以连接前先把服务端当前最大 id 记成基线 (幂等, 之后每轮都是纯本地读)。
             if (StreamCursor.lastPmId <= 0 || StreamCursor.lastGroupId <= 0) {
                 runCatching { MessageCatchUp.seedIfUnset(this, "连接前建立基线") }
@@ -276,19 +279,25 @@ class MessageService : Service() {
             lastStreamActivityAt = SystemClock.elapsedRealtime()
             Log.i(
                 TAG,
-                "发起 SSE 连接 (游标 pm=" + StreamCursor.lastPmId + " grp=" + StreamCursor.lastGroupId + ")",
+                "发起 WS 连接 (游标 pm=" + StreamCursor.lastPmId + " grp=" + StreamCursor.lastGroupId + ")",
             )
             val result = runCatching {
-                ApiClient.streamMessages(
+                ApiClient.streamMessagesWs(
                     pmId = StreamCursor.lastPmId,
                     groupId = StreamCursor.lastGroupId,
+                    onHello = { serverPm, serverGroup ->
+                        // 只在本地还没有基线时采用服务端 cursor。
+                        // 非零游标绝不能被覆盖，否则会跳过断线期间的消息。
+                        if (StreamCursor.lastPmId <= 0) StreamCursor.markPm(serverPm)
+                        if (StreamCursor.lastGroupId <= 0) StreamCursor.markGroup(serverGroup)
+                    },
                     onActivity = { lastStreamActivityAt = SystemClock.elapsedRealtime() },
                 ) { event -> onEvent(event) }
             }.getOrElse { Result.failure<Unit>(it) }
-            // 「连上了」= 服务端正常收尾 (isSuccess) 或这条连接活了够久 (中途断的)
+            // 「连上了」= 正常关闭 (isSuccess) 或这条连接活了够久 (中途断的)
             Log.i(
                 TAG,
-                "SSE 结束: success=" + result.isSuccess +
+                "WS 结束: success=" + result.isSuccess +
                     " 时长=" + (System.currentTimeMillis() - beganAt) + "ms" +
                     " err=" + result.exceptionOrNull(),
             )
@@ -296,10 +305,26 @@ class MessageService : Service() {
                 System.currentTimeMillis() - beganAt >= MessageStream.CONNECTED_MIN_MS
             // 没连上 = 中间有一段谁也没覆盖的窗口, 下次连之前先补拉
             lastConnectFailed = !connected
+            if (connected) {
+                attempt = 0
+            } else {
+                val err = result.exceptionOrNull()
+                attempt = if (err is ApiException && err.code == 401) {
+                    // token 失效：直接退到最长间隔，避免 1 秒一次打服务端
+                    6
+                } else {
+                    (attempt + 1).coerceAtMost(6)
+                }
+            }
             // 第一次连接不算「重连」, 不广播 —— 免得一进 App 所有页面就各刷一次
             if (!firstConnect && connected) MessageStream.emit(StreamEvent.Reconnected)
             firstConnect = false
-            delay(MessageStream.RECONNECT_DELAY_MS)
+            // 1s → 2s → 4s → 8s → 16s → 30s，带 0-500ms jitter
+            val exp = (attempt - 1).coerceIn(0, 5)
+            val waitMs = minOf(MAX_BACKOFF_MS, BASE_BACKOFF_MS shl exp) +
+                Random.nextLong(0, 500)
+            Log.i(TAG, "WS 重连等待 " + waitMs + "ms (attempt=" + attempt + ")")
+            delay(waitMs)
         }
     }
 
@@ -506,11 +531,14 @@ class MessageService : Service() {
         @Volatile
         private var instance: MessageService? = null
 
-        /** 最近一次收到任何 SSE 数据 (含 10 秒一次的心跳行) 的时刻, elapsedRealtime */
+        /** 最近一次收到任何 WS 帧 (含 15 秒一次的 ping) 的时刻, elapsedRealtime */
         @Volatile
         private var lastStreamActivityAt: Long = 0L
 
-        /** SSE 是不是卡死了 / 被冻结了: 超过 timeoutMs 一点数据都没有 (v1.1.2 守护心跳用) */
+        private const val MAX_BACKOFF_MS = 30_000L
+        private const val BASE_BACKOFF_MS = 1_000L
+
+        /** WS 是不是卡死了 / 被冻结了: 超过 timeoutMs 一点数据都没有 (v1.1.2 守护心跳用) */
         fun isStreamStale(timeoutMs: Long): Boolean {
             if (!running) return false
             val last = lastStreamActivityAt
@@ -519,7 +547,7 @@ class MessageService : Service() {
         }
 
         /**
-         * 强制掐断当前 SSE 并立刻重连 (守护心跳判断连接卡死时调)。
+         * 强制掐断当前 WS 并立刻重连 (守护心跳判断连接卡死时调)。
          * 必须重新 launch: job.cancel() 之后那条协程就退出了, 不补一条连接就永远断了。
          */
         fun requestReconnect(reason: String) {
@@ -549,7 +577,7 @@ class MessageService : Service() {
             }.isSuccess
             if (!ok) {
                 // Android 12+ 后台不允许启动前台服务 (ForegroundServiceStartNotAllowedException)。
-                // 退化成普通后台服务: 通知栏没有常驻通知、保活能力弱, 但只要进程活着 SSE 就不断,
+                // 退化成普通后台服务: 通知栏没有常驻通知、保活能力弱, 但只要进程活着 WS 就不断,
                 // 总比直接放弃强 (契约 C 允许的兜底, 会在报告里单独说明)。
                 degradeToPlainService = true
                 runCatching { context.startService(intent) }
