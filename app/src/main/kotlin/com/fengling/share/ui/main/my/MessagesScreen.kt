@@ -361,6 +361,7 @@ fun MessagesScreen(
                             } else {
                                 null
                             },
+                            modifier = Modifier.animateItem(),
                         )
                         // 滑到底部自动加载下一页
                         if (hasMore && item.id == items.last().id) {
@@ -508,9 +509,10 @@ private fun NotificationCard(
     onLongClick: () -> Unit,
     /** 非空时表示这是一条带卡密的通知: 正文全文显示 + 多一个「复制卡密」按钮 */
     onCopyCode: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 5.dp)
             // 短按已读/打开链接, 长按删除

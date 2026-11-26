@@ -375,7 +375,7 @@ fun ExploreScreen(
                                     itemsIndexed(shown, key = { _, app -> app.id }) { index, app ->
                                         AppGridCard(
                                             app = app,
-                                            modifier = Modifier.enterUp(index),
+                                            modifier = Modifier.animateItem().enterUp(index),
                                             onClick = { onAppClick(app.id) },
                                         )
                                     }

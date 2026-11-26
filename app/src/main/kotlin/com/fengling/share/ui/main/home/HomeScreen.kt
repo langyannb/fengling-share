@@ -444,7 +444,11 @@ fun HomeScreen(
                                 )
                             }
                             items(state.apps, key = { it.id }) { app ->
-                                AppListItem(app = app, onClick = { onAppClick(app.id) })
+                                AppListItem(
+                                    app = app,
+                                    onClick = { onAppClick(app.id) },
+                                    modifier = Modifier.animateItem(),
+                                )
                             }
                         }
                     }
@@ -539,14 +543,18 @@ private fun AppTag(text: String, highlight: Boolean = false) {
 
 /** 软件列表项 (Miuix 设置行风格: 图标 + 名称/元信息 + 右箭头, 整行可点, 无自绘按压缩放) */
 @Composable
-private fun AppListItem(app: AppItem, onClick: () -> Unit) {
+private fun AppListItem(
+    app: AppItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Card(
         onClick = onClick,
         colors = CardDefaults.defaultColors(
             color = Color.Transparent,
             contentColor = MiuixTheme.colorScheme.onBackground,
         ),
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp)
             .pressScaleEffect(label = "homeAppPress")

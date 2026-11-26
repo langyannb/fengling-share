@@ -245,6 +245,7 @@ private fun PmConversationCard(
     )
     Box(
         modifier = Modifier
+            .animateItem()
             .fillMaxWidth()
             .enterUp(index)
             .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
