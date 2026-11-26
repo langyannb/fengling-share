@@ -29,3 +29,6 @@ local.properties
 
 # 后端目录 (三个 worktree 的 .git 指向已不存在的 termux 路径，跑 git 会 fatal；不入本仓库)
 /后端/
+
+# 服务端独立 clone (不入本仓库)
+/fengling-server/

@@ -73,6 +73,7 @@ import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.GlassSpacing
 import com.fengling.share.ui.components.LoadingBox
 import com.fengling.share.ui.components.appGradientBackground
+import com.fengling.share.ui.theme.LocalAnimPageSwitch
 import com.fengling.share.ui.components.glassCard
 import com.fengling.share.ui.components.pressScaleEffect
 import com.fengling.share.ui.theme.isAppInDarkTheme
@@ -389,22 +390,30 @@ fun HomeScreen(
             // 旧实现把 loading/apps 一起塞进 targetState —— 于是切一次分类会连播两次转场
             // (旧列表 → 转圈 → 新列表), 观感就是「卡一下再闪一下」。现在 targetState 只认
             // 分类 id: 加载中只叠一层细进度条, 列表本身留在原位, 数据到了直接换内容不转场。
+            // transitionSpec 不是 @Composable: 开关值必须在这里读好再带进 lambda
+            val pageSwitchOn = LocalAnimPageSwitch.current
             AnimatedContent(
                 targetState = effectiveCategoryId,
                 transitionSpec = {
-                    // 用位置判断方向: 往下切分类列表从下方浮上来, 往上切从上方向下压。
-                    val forward = targetState > initialState
-                    val enter = fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
-                        slideInVertically(
-                            animationSpec = tween(260, easing = FastOutSlowInEasing),
-                            initialOffsetY = { h -> if (forward) h / 14 else -h / 14 },
-                        )
-                    val exit = fadeOut(tween(130, easing = FastOutSlowInEasing)) +
-                        slideOutVertically(
-                            animationSpec = tween(130, easing = FastOutSlowInEasing),
-                            targetOffsetY = { h -> if (forward) -h / 20 else h / 20 },
-                        )
-                    enter togetherWith exit
+                    // 设置里关掉「页面转场」时压成 0 时长: 结构还是 AnimatedContent (子组合不销毁,
+                    // 滚动位置与缓存都在), 视觉上就是直接换
+                    if (!pageSwitchOn) {
+                        fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                    } else {
+                        // 用位置判断方向: 往下切分类列表从下方浮上来, 往上切从上方向下压。
+                        val forward = targetState > initialState
+                        val enter = fadeIn(tween(200, delayMillis = 40, easing = FastOutSlowInEasing)) +
+                            slideInVertically(
+                                animationSpec = tween(260, easing = FastOutSlowInEasing),
+                                initialOffsetY = { h -> if (forward) h / 14 else -h / 14 },
+                            )
+                        val exit = fadeOut(tween(130, easing = FastOutSlowInEasing)) +
+                            slideOutVertically(
+                                animationSpec = tween(130, easing = FastOutSlowInEasing),
+                                targetOffsetY = { h -> if (forward) -h / 20 else h / 20 },
+                            )
+                        enter togetherWith exit
+                    }
                 },
                 label = "homeList",
             ) { catId ->
