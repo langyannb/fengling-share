@@ -68,6 +68,8 @@ import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.EmptyMessage
 import com.fengling.share.ui.components.LoadingBox
+import com.fengling.share.ui.components.enterUp
+import com.fengling.share.ui.motion.MotionTokens
 import com.fengling.share.ui.components.ScreenshotSaveDialog
 import com.fengling.share.ui.main.home.formatCount
 import com.fengling.share.ui.theme.isAppInDarkTheme
@@ -142,7 +144,14 @@ fun DetailScreen(
 
                         // 头部信息卡
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .enterUp(
+                                    index = 0,
+                                    stepMs = 0,
+                                    maxOrdered = 1,
+                                    durationMs = MotionTokens.PageEnterMs,
+                                ),
                             cornerRadius = 16.dp,
                         ) {
                             Row(
