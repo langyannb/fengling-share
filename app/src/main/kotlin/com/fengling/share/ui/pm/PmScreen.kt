@@ -18,9 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +35,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import com.fengling.share.ui.components.chat.ChatRefreshBar
+import com.fengling.share.ui.components.chat.ListStatStrip
+import com.fengling.share.ui.components.enterUp
+import com.fengling.share.ui.components.RoundAvatar
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -51,7 +53,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import coil.compose.AsyncImage
 import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PmConversation
@@ -199,18 +200,18 @@ fun PmScreen(
             contentPadding = PaddingValues(top = topPadding, bottom = 100.dp),
         ) {
             item {
-                val hint = "点击会话进入私聊 · 和群聊消息分开显示" +
-                    (if (totalUnread > 0) " · 未读 " + totalUnread + " 条" else "")
-                Text(
-                    text = hint,
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                // v1.1.23: 一行长灰字换成统计条 —— 左边说清多少个会话, 右边只在真有未读时出现
+                ListStatStrip(
+                    count = conversations.size,
+                    unit = "会话",
+                    unread = totalUnread,
+                    hint = "点进会话 · 与群聊消息分开显示",
                 )
             }
-            items(conversations, key = { it.convId }) { conv ->
+            itemsIndexed(conversations, key = { _, c -> c.convId }) { index, conv ->
                 PmConversationCard(
                     conversation = conv,
+                    index = index,
                     onClick = { onOpenChat(conv.userId, conv.convId) },
                     onAvatarClick = {
                         if (onOpenUser != null && conv.userId > 0) {
@@ -230,6 +231,7 @@ fun PmScreen(
 @Composable
 private fun PmConversationCard(
     conversation: PmConversation,
+    index: Int = 0,
     onClick: () -> Unit,
     onAvatarClick: () -> Unit,
 ) {
@@ -244,6 +246,7 @@ private fun PmConversationCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .enterUp(index)
             .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
             .graphicsLayer {
                 scaleX = pressScale
@@ -262,31 +265,20 @@ private fun PmConversationCard(
                 .padding(GlassSpacing.cardInner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 头像: 点一下看主页, 不让点击穿透到整行的「进会话」
+            // 头像: 点一下看主页, 不让点击穿透到整行的「进会话」。
+            // v1.1.23: 改成按昵称取色的渐变头像, 未读时套一圈主题色描边。
             Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                    .pointerInput(conversation.userId) {
-                        detectTapGestures { onAvatarClick() }
-                    },
-                contentAlignment = Alignment.Center,
+                modifier = Modifier.pointerInput(conversation.userId) {
+                    detectTapGestures { onAvatarClick() }
+                },
             ) {
-                if (conversation.avatar.isNotBlank()) {
-                    AsyncImage(
-                        model = conversation.avatar,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp).clip(CircleShape),
-                    )
-                } else {
-                    Text(
-                        text = conversation.displayName.take(1).ifBlank { "友" },
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MiuixTheme.colorScheme.primary,
-                    )
-                }
+                RoundAvatar(
+                    imageUrl = conversation.avatar,
+                    fallbackText = conversation.displayName,
+                    size = 48.dp,
+                    seed = conversation.displayName + conversation.userId,
+                    ring = conversation.unread > 0,
+                )
             }
 
             Spacer(Modifier.width(12.dp))
@@ -296,7 +288,7 @@ private fun PmConversationCard(
                     Text(
                         text = conversation.displayName,
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = if (conversation.unread > 0) FontWeight.Bold else FontWeight.SemiBold,
                         color = MiuixTheme.colorScheme.onBackground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

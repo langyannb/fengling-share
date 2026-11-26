@@ -66,6 +66,7 @@ import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.userFriendlyMessage
 import com.fengling.share.ui.components.AppGradientBackground
+import com.fengling.share.ui.components.chat.NoticeEditorSheet
 import com.fengling.share.ui.components.AppTopBar
 import com.fengling.share.ui.components.GlassRadius
 import com.fengling.share.ui.components.LinkText
@@ -407,44 +408,16 @@ fun GroupInfoScreen(
                     }
                 }
 
-                // ===== 群公告发布 / 编辑 =====
-                if (showNoticeEditor) {
-                    AlertDialog(
-                        onDismissRequest = { if (!noticeSaving) showNoticeEditor = false },
-                        title = { Text(text = if (g.notice.isBlank()) "发布群公告" else "编辑群公告") },
-                        text = {
-                            Column {
-                                OutlinedTextField(
-                                    value = noticeDraft,
-                                    onValueChange = { if (it.length <= 500) noticeDraft = it },
-                                    label = { Text("公告内容（留空表示清空公告）") },
-                                    minLines = 4,
-                                    maxLines = 8,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    text = noticeDraft.length.toString() + "/500",
-                                    fontSize = 11.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(
-                                enabled = !noticeSaving,
-                                onClick = { saveNotice() },
-                            ) {
-                                Text(text = if (noticeSaving) "保存中…" else "保存")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showNoticeEditor = false }) {
-                                Text(text = "取消")
-                            }
-                        },
-                    )
-                }
+                // ===== 群公告发布 / 编辑 (v1.1.23: 从 AlertDialog 换成底部玻璃面板) =====
+                NoticeEditorSheet(
+                    visible = showNoticeEditor,
+                    title = if (g.notice.isBlank()) "发布群公告" else "编辑群公告",
+                    value = noticeDraft,
+                    onValueChange = { noticeDraft = it },
+                    saving = noticeSaving,
+                    onDismiss = { if (!noticeSaving) showNoticeEditor = false },
+                    onSave = { saveNotice() },
+                )
 
                 // ===== 退出群聊二次确认 =====
                 if (showLeaveConfirm) {

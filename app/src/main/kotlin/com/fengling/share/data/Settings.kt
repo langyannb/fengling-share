@@ -139,6 +139,32 @@ object Settings {
         get() = prefs.getBoolean("predictive_back", true)
         set(value) = prefs.edit().putBoolean("predictive_back", value).apply()
 
+    // ===== 动效开关 (v1.1.23) =====
+    //
+    // 四个开关都默认 **true** —— 装上就是最好看的状态, 想省电/头晕/老机器卡的人自己去关。
+    // 关掉不是「变丑」, 而是退回没有动画的直给: 列表直接出现、页面直接切、弹层直接弹。
+    // 每一项在渲染处都会读到, 不留死开关 (v1.1.19 那个「关掉预测性返回还有」的教训)。
+
+    /** 列表逐个淡入上浮 (key = anim_list_enter) */
+    var animListEnter: Boolean
+        get() = prefs.getBoolean("anim_list_enter", true)
+        set(value) = prefs.edit().putBoolean("anim_list_enter", value).apply()
+
+    /** 页面 / 分类切换转场 (key = anim_page_switch) */
+    var animPageSwitch: Boolean
+        get() = prefs.getBoolean("anim_page_switch", true)
+        set(value) = prefs.edit().putBoolean("anim_page_switch", value).apply()
+
+    /** 弹层弹性进出场 (长按菜单 / 公告编辑 / 「+」面板, key = anim_sheet_spring) */
+    var animSheetSpring: Boolean
+        get() = prefs.getBoolean("anim_sheet_spring", true)
+        set(value) = prefs.edit().putBoolean("anim_sheet_spring", value).apply()
+
+    /** 进度条插值 (下载进度、总进度平滑推进, key = anim_progress_smooth) */
+    var animProgressSmooth: Boolean
+        get() = prefs.getBoolean("anim_progress_smooth", true)
+        set(value) = prefs.edit().putBoolean("anim_progress_smooth", value).apply()
+
     // ===== 版本检测 =====
     var latestVersion: String
         get() = prefs.getString("latest_version", "") ?: ""
