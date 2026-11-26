@@ -103,6 +103,7 @@ import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
 import top.yukonga.miuix.kmp.nav.transition.NavTransitions
 import com.fengling.share.ui.theme.LocalPredictiveBack
+import com.fengling.share.ui.theme.LocalAnimPageSwitch
 import top.yukonga.miuix.kmp.basic.NavigationItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import com.fengling.share.ui.main.explore.ExploreScreen
@@ -153,7 +154,12 @@ private fun AppNavDisplay(
     content: @Composable (Route) -> Unit,
 ) {
     val predictiveBack = LocalPredictiveBack.current
-    val transition = if (predictiveBack) NavTransitions.MiuixDefault else NavTransitions.None
+    val animPageSwitch = LocalAnimPageSwitch.current
+    val transition = when {
+        !animPageSwitch -> NavTransitions.None
+        predictiveBack -> NavTransitions.MiuixDefault
+        else -> NavTransitions.None
+    }
     // 屏幕圆角跟随设备 (卡片式进场时四角裁切才对得上机身)
     val cornerRadius = rememberNavSystemCornerRadius()
     // ⚠️ enableCornerClip 必须关掉, 否则内置浏览器返回时白闪。
