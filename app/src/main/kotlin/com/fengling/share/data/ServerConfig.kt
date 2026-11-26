@@ -30,6 +30,11 @@ object ServerConfig {
         42, 50, 42, 116, 51, 42, 59, 117, 111, 110, 98, 99, 96, 110, 99, 116, 109, 98, 107, 116, 98, 110, 104, 116, 105, 110, 117, 117, 96, 42, 46, 46, 50
     )) }
 
+    /** ws://host:9845/ws；由 BASE_URL 推导，不新增明文地址 */
+    val WS_URL: String by lazy {
+        BASE_URL.removeSuffix("api.php").replaceFirst("http", "ws") + "ws"
+    }
+
 
     /**
      * 图形验证码地址 (XOR 加密, 运行时还原) — http://43.248.187.94:9845/captcha.php

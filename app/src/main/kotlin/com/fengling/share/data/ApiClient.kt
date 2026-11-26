@@ -10,12 +10,17 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.json.JSONArray
@@ -103,6 +108,13 @@ object ApiClient {
         client.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    /** WebSocket 专用：复用连接池，只加业务需要的心跳间隔。 */
+    private val wsClient: OkHttpClient by lazy {
+        streamClient.newBuilder()
+            .pingInterval(15, TimeUnit.SECONDS)
             .build()
     }
 
@@ -201,9 +213,129 @@ object ApiClient {
             }
         }
 
+    /**
+     * WebSocket 实时消息流：服务端 `/ws` 已实现 hello / pm / group / ping。
+     *
+     * - token 走 `Authorization: Bearer`，不放 query（避免 nginx 访问日志泄露）。
+     * - `pm_id` / `group_id` 是客户端已见过的最大消息 id；0 = 服务端从当前 MAX(id) 开始。
+     * - `hello.data.cursor` 只是服务端基线，调用方只在本地游标为 0 时采用，不能覆盖已有游标。
+     * - 任意帧（含 `ping`）都回调 [onActivity]，让 MessageService 的 180 秒看门狗不误判。
+     * - `error` 帧以 [ApiException] 结束；正常关闭返回 success，外层决定是否重连。
+     */
+    suspend fun streamMessagesWs(
+        pmId: Int = 0,
+        groupId: Int = 0,
+        onHello: (serverPmId: Int, serverGroupId: Int) -> Unit = { _, _ -> },
+        onActivity: (() -> Unit)? = null,
+        onEvent: (StreamEvent) -> Unit,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        suspendCancellableCoroutine<Result<Unit>> { cont ->
+            val url = StringBuilder(ServerConfig.WS_URL)
+                .append("?pm_id=").append(pmId)
+                .append("&group_id=").append(groupId)
+                .toString()
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + UserStore.token)
+                .build()
+            // pingInterval 只负责传输层保活；业务心跳是服务端的 `ping` 文本帧。
+            val listener = object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.i("FLS_WS", "WS 已连接: HTTP " + response.code)
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    // 先记活动：解析失败也说明连接是活的
+                    onActivity?.invoke()
+                    runCatching {
+                        val obj = JSONObject(text)
+                        when (obj.optString("type")) {
+                            "hello" -> {
+                                val cursor = obj.optJSONObject("data")?.optJSONObject("cursor")
+                                if (cursor != null) {
+                                    onHello(
+                                        cursor.optInt("pm_id", 0),
+                                        cursor.optInt("group_id", 0),
+                                    )
+                                }
+                            }
+
+                            "pm" -> {
+                                val data = obj.optJSONObject("data")
+                                val ev = data?.let { parsePmStreamEvent(it) }
+                                if (ev == null) {
+                                    Log.w("FLS_WS", "WS 私聊事件解析失败 (已丢弃)")
+                                } else {
+                                    onEvent(ev)
+                                }
+                            }
+
+                            "group" -> {
+                                val data = obj.optJSONObject("data")
+                                val ev = data?.let { parseGroupStreamEvent(it) }
+                                if (ev == null) {
+                                    Log.w("FLS_WS", "WS 群事件解析失败 (已丢弃)")
+                                } else {
+                                    onEvent(ev)
+                                }
+                            }
+
+                            // 服务端业务心跳：只用来刷新活动时间
+                            "ping" -> Unit
+
+                            "error" -> {
+                                val data = obj.optJSONObject("data")
+                                val msg = data?.optString("msg")
+                                    ?: obj.optString("msg", "实时消息连接失败")
+                                val code = data?.optInt("code", -1)
+                                    ?: obj.optInt("code", -1)
+                                if (cont.isActive) {
+                                    cont.resume(Result.failure(ApiException(msg, code)))
+                                }
+                                runCatching { webSocket.cancel() }
+                            }
+
+                            else -> Log.w(
+                                "FLS_WS",
+                                "未知 WS 帧: " + obj.optString("type"),
+                            )
+                        }
+                    }.onFailure { Log.w("FLS_WS", "WS 帧解析失败 (已丢弃)", it) }
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    runCatching { webSocket.close(1000, null) }
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (cont.isActive) cont.resume(Result.success(Unit))
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (!cont.isActive) return
+                    val failure = if (response != null) {
+                        ApiException(
+                            "实时消息连接失败 (HTTP ${response.code})",
+                            httpStatus = response.code,
+                        )
+                    } else {
+                        t
+                    }
+                    cont.resume(Result.failure(failure))
+                }
+            }
+            val socket = wsClient.newWebSocket(request, listener)
+            cont.invokeOnCancellation {
+                runCatching { socket.cancel() }
+            }
+        }
+    }
+
     /** 解析 `event: pm` 的 data 行 (契约 A3) */
-    private fun parsePmStreamEvent(payload: String): StreamEvent.Pm? = runCatching {
-        val j = JSONObject(payload)
+    private fun parsePmStreamEvent(payload: String): StreamEvent.Pm? =
+        runCatching { JSONObject(payload) }.getOrNull()?.let { parsePmStreamEvent(it) }
+
+    private fun parsePmStreamEvent(j: JSONObject): StreamEvent.Pm? = runCatching {
         StreamEvent.Pm(
             msgId = j.optInt("id", 0),
             convId = j.optInt("conv_id", 0),
@@ -223,8 +355,10 @@ object ApiClient {
     }.getOrNull()
 
     /** 解析 `event: group` 的 data 行 (契约 A3) */
-    private fun parseGroupStreamEvent(payload: String): StreamEvent.Group? = runCatching {
-        val j = JSONObject(payload)
+    private fun parseGroupStreamEvent(payload: String): StreamEvent.Group? =
+        runCatching { JSONObject(payload) }.getOrNull()?.let { parseGroupStreamEvent(it) }
+
+    private fun parseGroupStreamEvent(j: JSONObject): StreamEvent.Group? = runCatching {
         StreamEvent.Group(
             msgId = j.optInt("id", 0),
             groupId = j.optInt("group_id", 0),
