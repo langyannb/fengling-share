@@ -105,6 +105,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PmMessage
 import com.fengling.share.data.StreamEvent
+import com.fengling.share.data.WsSocket
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
 import com.fengling.share.data.VideoProbe
@@ -686,6 +687,28 @@ fun PmChatScreen(
         // 视频走两段式 (先上传再发送); 文字 / 图片保持原来那条链路, 一个字节都不动
         if (item.videoUri != null) {
             performSendVideo(localId)
+            return
+        }
+        // 新 Go WS 支持 send/ack 时走 WS；旧 goapi 没有 send_ack feature，继续 HTTP。
+        if (WsSocket.supportsSendAck) {
+            markSending(localId)
+            val ack = WsSocket.sendText(
+                clientMsgId = localId,
+                content = item.text,
+                toUser = if (convId <= 0) peerUserId else 0,
+                convId = convId,
+            )
+            if (ack.isSuccess) {
+                ack.getOrNull()?.convId?.takeIf { it > 0 }?.let { convId = it }
+                val after = messages.maxOfOrNull { it.id } ?: 0
+                ApiClient.pmMessages(convId = convId, afterId = after)
+                    .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+                finishLocalSend(localId)
+            } else {
+                outgoing = outgoing.map {
+                    if (it.localId == localId) it.copy(state = SendState.Failed) else it
+                }
+            }
             return
         }
         ApiClient.pmSend(

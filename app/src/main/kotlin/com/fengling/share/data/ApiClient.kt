@@ -241,6 +241,7 @@ object ApiClient {
             // pingInterval 只负责传输层保活；业务心跳是服务端的 `ping` 文本帧。
             val listener = object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    WsSocket.attach(webSocket)
                     Log.i("FLS_WS", "WS 已连接: HTTP " + response.code)
                 }
 
@@ -251,13 +252,24 @@ object ApiClient {
                         val obj = JSONObject(text)
                         when (obj.optString("type")) {
                             "hello" -> {
-                                val cursor = obj.optJSONObject("data")?.optJSONObject("cursor")
+                                val hello = obj.optJSONObject("data")
+                                val cursor = hello?.optJSONObject("cursor")
                                 if (cursor != null) {
                                     onHello(
                                         cursor.optInt("pm_id", 0),
                                         cursor.optInt("group_id", 0),
                                     )
                                 }
+                                val features = hello?.optJSONArray("features")
+                                if (features != null) {
+                                    WsSocket.setFeatures(
+                                        (0 until features.length()).map { features.optString(it) }
+                                    )
+                                }
+                            }
+
+                            "ack" -> {
+                                obj.optJSONObject("data")?.let { WsSocket.onAck(it) }
                             }
 
                             "pm" -> {
@@ -308,10 +320,12 @@ object ApiClient {
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    WsSocket.detach(webSocket)
                     if (cont.isActive) cont.resume(Result.success(Unit))
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    WsSocket.detach(webSocket)
                     if (!cont.isActive) return
                     val failure = if (response != null) {
                         ApiException(
@@ -326,6 +340,7 @@ object ApiClient {
             }
             val socket = wsClient.newWebSocket(request, listener)
             cont.invokeOnCancellation {
+                WsSocket.detach(socket)
                 runCatching { socket.cancel() }
             }
         }
