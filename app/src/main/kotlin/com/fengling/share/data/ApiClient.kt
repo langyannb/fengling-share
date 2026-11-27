@@ -272,6 +272,14 @@ object ApiClient {
                                 obj.optJSONObject("data")?.let { WsSocket.onAck(it) }
                             }
 
+                            "read" -> {
+                                obj.optJSONObject("data")?.let { WsSocket.onRead(it) }
+                            }
+
+                            "typing" -> {
+                                obj.optJSONObject("data")?.let { WsSocket.onTyping(it) }
+                            }
+
                             "pm" -> {
                                 val data = obj.optJSONObject("data")
                                 val ev = data?.let { parsePmStreamEvent(it) }

@@ -1,6 +1,10 @@
 package com.fengling.share.data
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.WebSocket
 import org.json.JSONArray
@@ -15,6 +19,21 @@ data class WsAck(
     val groupId: Int,
     val createdAt: String,
 )
+
+sealed interface WsSignal {
+    data class Read(
+        val convId: Int,
+        val groupId: Int,
+        val userId: Int,
+        val lastReadId: Long,
+    ) : WsSignal
+
+    data class Typing(
+        val convId: Int,
+        val groupId: Int,
+        val userId: Int,
+    ) : WsSignal
+}
 
 /**
  * 当前 WebSocket 的发送侧。
@@ -34,6 +53,21 @@ object WsSocket {
     var supportsSendAck: Boolean = false
         private set
 
+    /** 新服务 hello.features 里有 read/typing；旧 goapi 没有。 */
+    @Volatile
+    var supportsRead: Boolean = false
+        private set
+
+    @Volatile
+    var supportsTyping: Boolean = false
+        private set
+
+    private val _signals = MutableSharedFlow<WsSignal>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val signals: SharedFlow<WsSignal> = _signals.asSharedFlow()
+
     private val pending = ConcurrentHashMap<String, CompletableDeferred<WsAck>>()
 
     fun attach(ws: WebSocket) {
@@ -51,6 +85,29 @@ object WsSocket {
 
     fun setFeatures(features: List<String>) {
         supportsSendAck = features.contains("send_ack")
+        supportsRead = features.contains("read")
+        supportsTyping = features.contains("typing")
+    }
+
+    fun onRead(data: JSONObject) {
+        _signals.tryEmit(
+            WsSignal.Read(
+                convId = data.optInt("conv_id", 0),
+                groupId = data.optInt("group_id", 0),
+                userId = data.optInt("user_id", 0),
+                lastReadId = data.optLong("last_read_id", 0L),
+            )
+        )
+    }
+
+    fun onTyping(data: JSONObject) {
+        _signals.tryEmit(
+            WsSignal.Typing(
+                convId = data.optInt("conv_id", 0),
+                groupId = data.optInt("group_id", 0),
+                userId = data.optInt("user_id", 0),
+            )
+        )
     }
 
     val isConnected: Boolean get() = socket != null

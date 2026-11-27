@@ -105,6 +105,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PmMessage
 import com.fengling.share.data.StreamEvent
+import com.fengling.share.data.WsSignal
 import com.fengling.share.data.WsSocket
 import com.fengling.share.data.PmPeer
 import com.fengling.share.data.UserStore
@@ -200,6 +201,23 @@ fun PmChatScreen(
     LaunchedEffect(initialConvId) {
         kotlinx.coroutines.delay(48)
         allowItemAnim = true
+    }
+    var typingUntil by remember { mutableStateOf(0L) }
+    var lastTypingSent by remember { mutableStateOf(0L) }
+    LaunchedEffect(convId) {
+        WsSocket.signals.collect { signal ->
+            if (signal is WsSignal.Typing && signal.convId == convId &&
+                (myId <= 0 || signal.userId != myId)
+            ) {
+                typingUntil = android.os.SystemClock.elapsedRealtime() + 3000L
+            }
+        }
+    }
+    LaunchedEffect(typingUntil) {
+        if (typingUntil > 0L) {
+            kotlinx.coroutines.delay(3000)
+            typingUntil = 0L
+        }
     }
     // v1.1.20: 只录「消息区」这一层 —— 输入栏 / 面板 / 长按菜单都采样它做真模糊。
     // 绝不能传包含这些控件自身的捕获层: hwui 的 RenderNode 树会自引用无限递归 (真机 SIGSEGV 过)。
@@ -500,7 +518,11 @@ fun PmChatScreen(
         val last = messages.lastOrNull()?.id ?: return@LaunchedEffect
         if (last <= 0 || last == lastReadReported) return@LaunchedEffect
         lastReadReported = last
-        ApiClient.pmRead(convId, last)
+        if (WsSocket.supportsRead) {
+            WsSocket.sendRead(convId = convId, lastReadId = last)
+        } else {
+            ApiClient.pmRead(convId, last)
+        }
     }
 
     /**
@@ -1332,6 +1354,14 @@ fun PmChatScreen(
             }
 
             // ===== 底部输入区: 左边「+」(发图片), 中间输入框, 右边发送 =====
+            if (typingUntil > android.os.SystemClock.elapsedRealtime()) {
+                Text(
+                    text = "对方正在输入…",
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.padding(start = 20.dp, bottom = 2.dp),
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1375,7 +1405,18 @@ fun PmChatScreen(
                 Box(Modifier.weight(1f)) {
                     OutlinedTextField(
                         value = input,
-                        onValueChange = { nv -> if (nv.text.length <= 500) input = nv },
+                        onValueChange = { nv ->
+                            if (nv.text.length <= 500) {
+                                input = nv
+                                if (nv.text.isNotEmpty() && WsSocket.supportsTyping) {
+                                    val now = android.os.SystemClock.elapsedRealtime()
+                                    if (now - lastTypingSent > 2000L) {
+                                        lastTypingSent = now
+                                        WsSocket.sendTyping(convId = convId)
+                                    }
+                                }
+                            }
+                        },
                         placeholder = {
                             Text(
                                 text = "说点什么…",
