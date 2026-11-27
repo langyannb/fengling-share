@@ -315,6 +315,7 @@ fun HomeScreen(
                 }
             }
 
+            if (!searchExpanded) {
             // 顶部轮播图
             if (banners.isNotEmpty()) {
                 BannerCarousel(
@@ -464,6 +465,7 @@ fun HomeScreen(
                         )
                     }
                 }
+            }
             }
         }
     }
