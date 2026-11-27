@@ -222,3 +222,11 @@ suspend fun streamMessagesWs(
 - 共享元素 spike 的结论（做/降级）。
 - miuix-nav 是否支持自定义 fade-through；不支持时的替代参数。
 - group 帧的最终字段核对方式（真机抓包/服务端日志）。
+
+## 12. 实施记录（2026-11-27）
+
+- `/ws` 已实测：`hello`（`cursor.pm_id/group_id`、`heartbeat_sec=15`）、`pm`、`ping`、`error 401`；`Authorization: Bearer` 可用，`pm_id/group_id` 游标沿用。服务端零改动。
+- 客户端：`streamMessagesWs` + `MessageService` 指数退避（1s→30s + jitter）已提交；`hello.cursor` 只在本地游标为 0 时采用。
+- 动效：`MotionTokens`、页面转场开关（`LocalAnimPageSwitch`）、详情头部 `enterUp`、Home/Explore/Messages/PmScreen 的 `animateItem` 已提交；聊天消息沿用 v1.1.23 的 `animateItem(fadeIn)`。
+- 共享元素降级：miuix-nav 的 entry 不暴露 `AnimatedVisibilityScope`，接入需要改所有页面签名；改为页面转场 + 头部进场，不碰 WebView。
+- 待验证：CI 编译（首次失败已修，待下一次 run）、真机后台消息/断网重连、低端机帧率、动效关闭。
