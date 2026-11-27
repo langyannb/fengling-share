@@ -1132,6 +1132,7 @@ private fun ChatView(
     }
     var typingUntil by remember(group.id) { mutableStateOf(0L) }
     var lastTypingSent by remember(group.id) { mutableStateOf(0L) }
+    var otherReadMax by remember(group.id) { mutableStateOf(0L) }
     var sending by remember { mutableStateOf(false) }
     // v1.1.12 乐观发送: 本地临时消息 (发送中转圈 / 失败可点重发), 服务端返回后用真实消息替换
     var outgoing by remember { mutableStateOf<List<OutgoingMsg>>(emptyList()) }
@@ -1740,7 +1741,11 @@ private fun ChatView(
                     }
                 }
 
-                is WsSignal.Read -> Unit
+                is WsSignal.Read -> {
+                    if (signal.groupId == group.id && signal.userId != me?.id) {
+                        otherReadMax = maxOf(otherReadMax, signal.lastReadId)
+                    }
+                }
             }
         }
     }
@@ -2508,6 +2513,7 @@ private fun ChatView(
                             canRecall = !msg.isRecalled && (mine || isAdmin),
                             onLongPress = { actionTarget = msg },
                             highlight = highlightId == msg.id || unreadAnchorId == msg.id,
+                            readByOthers = mine && msg.id.toLong() <= otherReadMax,
                             modifier = messageItemEnter(),
                             // 消息里的链接: 用内置浏览器打开
                             onOpenLink = { url ->
@@ -3574,6 +3580,8 @@ private fun MessageRow(
     onVideoTap: (String) -> Unit = {},
     /** 从通知定位过来的那条消息: 给个底色方便一眼看到 */
     highlight: Boolean = false,
+    /** 自己发的消息已被群里其他人读到 */
+    readByOthers: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     // Wave 2 视频消息判定: video 非空 或 msg_type == "video" 都算 (老图片消息 msg_type 是空串, 不受影响)。
@@ -3834,6 +3842,14 @@ private fun MessageRow(
                     }
                 }
             }
+            }
+            if (mine && readByOthers) {
+                Text(
+                    text = "已读",
+                    fontSize = 9.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.72f),
+                    modifier = Modifier.padding(top = 2.dp, end = 2.dp),
+                )
             }
         }
         if (mine) {
