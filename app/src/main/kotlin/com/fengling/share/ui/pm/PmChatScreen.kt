@@ -705,6 +705,7 @@ fun PmChatScreen(
             videoDuration = uploadDuration,
             videoSize = uploadSize,
             onStart = { markSending(localId) },
+            clientMsgId = localId,
         )
             .onSuccess { res ->
                 if (res.convId > 0) convId = res.convId

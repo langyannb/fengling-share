@@ -1294,7 +1294,30 @@ object ApiClient {
         videoSize: Long = 0L,
         /** 排队闸门轮到这条时回调: UI 把气泡从「排队中」切成「发送中」 */
         onStart: (() -> Unit)? = null,
-    ): Result<Int> = sendWithGate(groupSendGate(groupId), onStart) {
+        /** WS 幂等 id；旧 HTTP 路径忽略 */
+        clientMsgId: String = "",
+    ): Result<Int> = run {
+        if (WsSocket.supportsSendAck) {
+            onStart?.invoke()
+            val cid = clientMsgId.ifBlank { java.util.UUID.randomUUID().toString() }
+            return@run WsSocket.sendText(
+                clientMsgId = cid,
+                content = content,
+                groupId = groupId,
+                at = at,
+                atAll = atAll,
+                quoteId = quoteId,
+                image = image,
+                imageW = imageW,
+                imageH = imageH,
+                video = video,
+                videoW = videoW,
+                videoH = videoH,
+                videoDuration = videoDuration,
+                videoSize = videoSize,
+            ).map { it.id.toInt() }
+        }
+        sendWithGate(groupSendGate(groupId), onStart) {
         apiCall {
             val params = mutableMapOf<String, Any?>("group_id" to groupId, "content" to content)
             if (at.isNotEmpty()) {
@@ -1319,6 +1342,7 @@ object ApiClient {
             request("social_send", params, UserStore.token)
                 .optJSONObject("data")?.optInt("id", 0) ?: 0
         }
+    }
     }
 
     /** 撤回消息 (管理员可撤任何人, 普通用户只能撤自己 5 分钟内的) */
@@ -1448,7 +1472,28 @@ object ApiClient {
         videoDuration: Int = 0,
         videoSize: Long = 0L,
         onStart: (() -> Unit)? = null,
-    ): Result<PmSendResult> = sendWithGate(PM_SEND_GATE, onStart) {
+        /** WS 幂等 id；旧 HTTP 路径忽略 */
+        clientMsgId: String = "",
+    ): Result<PmSendResult> = run {
+        if (WsSocket.supportsSendAck) {
+            onStart?.invoke()
+            val cid = clientMsgId.ifBlank { java.util.UUID.randomUUID().toString() }
+            return@run WsSocket.sendText(
+                clientMsgId = cid,
+                content = content,
+                toUser = toUser,
+                convId = convId,
+                image = image,
+                imageW = imageW,
+                imageH = imageH,
+                video = video,
+                videoW = videoW,
+                videoH = videoH,
+                videoDuration = videoDuration,
+                videoSize = videoSize,
+            ).map { PmSendResult(id = it.id.toInt(), convId = it.convId, createdAt = it.createdAt) }
+        }
+        sendWithGate(PM_SEND_GATE, onStart) {
         apiCall {
             val params = mutableMapOf<String, Any?>("content" to content)
             if (toUser > 0) params["to_user"] = toUser
@@ -1470,6 +1515,7 @@ object ApiClient {
             val d = request("pm_send", params, UserStore.token).optJSONObject("data") ?: JSONObject()
             PmSendResult.fromJson(d)
         }
+    }
     }
 
     /**

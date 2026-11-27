@@ -1894,6 +1894,7 @@ private fun ChatView(
             videoDuration = uploadDuration,
             videoSize = uploadSize,
             onStart = { markSending(localId) },
+            clientMsgId = localId,
         )
             .onSuccess {
                 // 先合并真实消息, 再摘本地占位 (finishLocalSend) —— 见它的注释
