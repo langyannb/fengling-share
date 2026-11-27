@@ -206,12 +206,18 @@ fun PmChatScreen(
     }
     var typingUntil by remember { mutableStateOf(0L) }
     var lastTypingSent by remember { mutableStateOf(0L) }
+    var otherReadMax by remember(initialConvId) { mutableStateOf(0L) }
     LaunchedEffect(convId) {
         WsSocket.signals.collect { signal ->
             if (signal is WsSignal.Typing && signal.convId == convId &&
                 (myId <= 0 || signal.userId != myId)
             ) {
                 typingUntil = android.os.SystemClock.elapsedRealtime() + 3000L
+            }
+            if (signal is WsSignal.Read && signal.convId == convId &&
+                (myId <= 0 || signal.userId != myId)
+            ) {
+                otherReadMax = maxOf(otherReadMax, signal.lastReadId)
             }
         }
     }
@@ -1237,6 +1243,7 @@ fun PmChatScreen(
                                 shattering = msg.id == shatteringId,
                                 msg = msg,
                                 mine = mine,
+                                readByOthers = mine && msg.id.toLong() <= otherReadMax,
                                 peerName = peer?.displayName.orEmpty(),
                                 peerAvatar = peer?.avatar.orEmpty(),
                                 myName = UserStore.current?.displayName.orEmpty(),
@@ -1794,6 +1801,8 @@ private fun PmMessageRow(
     /** 点气泡里的链接: 走内置浏览器 (无协议链接调用方会补 https://) */
     onOpenLink: (String) -> Unit = {},
     highlight: Boolean = false,
+    /** 自己发的消息已被对方读到 */
+    readByOthers: Boolean = false,
 ) {
     // Wave 2 视频消息判定: video 非空 或 msg_type == "video" 都算 (老图片消息 msg_type 是空串, 不受影响)。
     // 被服务端清理后 video 置空、content 追加「[视频已清理]」→ 灰底占位不可播。
@@ -1957,6 +1966,14 @@ private fun PmMessageRow(
                     MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.88f)
                 },
             )
+            if (mine && readByOthers) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "已读",
+                    fontSize = 9.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.72f),
+                )
+            }
         }
         }
 
