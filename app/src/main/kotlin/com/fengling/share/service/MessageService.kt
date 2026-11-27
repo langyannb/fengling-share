@@ -23,6 +23,7 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.ApiException
 import com.fengling.share.data.AppState
 import com.fengling.share.data.MessageStream
+import com.fengling.share.data.Outbox
 import com.fengling.share.data.Settings
 import com.fengling.share.data.StreamCursor
 import com.fengling.share.data.StreamEvent
@@ -74,6 +75,7 @@ class MessageService : Service() {
         runCatching { UserStore.init(applicationContext) }
         // WS 游标 (已通知过的最大 pm/group id): 断线重连靠它补齐漏掉的事件 (v1.1.2)
         runCatching { StreamCursor.init(applicationContext) }
+        runCatching { Outbox.init(applicationContext) }
         instance = this
         // 闹钟守护心跳 (v1.1.2): 先排上 —— 就算下面 startForeground 失败、服务当场收摊,
         // 这条心跳也会继续把「服务该不该活着」和「有没有漏消息」接管过去
@@ -307,6 +309,9 @@ class MessageService : Service() {
             lastConnectFailed = !connected
             if (connected) {
                 attempt = 0
+                // 连接恢复后补发上次没确认的消息；服务端用 client_msg_id 幂等。
+                runCatching { Outbox.flush() }
+                    .onFailure { Log.w(TAG, "outbox 补发异常", it) }
             } else {
                 val err = result.exceptionOrNull()
                 attempt = if (err is ApiException && (err.code == 401 || err.httpStatus == 401)) {

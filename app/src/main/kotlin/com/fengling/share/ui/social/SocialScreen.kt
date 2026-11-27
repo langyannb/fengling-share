@@ -137,6 +137,8 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.SocialGroup
 import com.fengling.share.data.StreamEvent
+import com.fengling.share.data.Outbox
+import com.fengling.share.data.PendingSend
 import com.fengling.share.data.WsSocket
 import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
@@ -1898,6 +1900,16 @@ private fun ChatView(
                     .onSuccess { new -> mergeNew(new, forceScroll = true) }
                 finishLocalSend(localId)
             } else {
+                Outbox.add(
+                    PendingSend(
+                        clientMsgId = localId,
+                        groupId = group.id,
+                        content = item.text,
+                        at = item.mentionIds,
+                        atAll = item.atAll,
+                        quoteId = item.quoteId,
+                    )
+                )
                 outgoing = outgoing.map {
                     if (it.localId == localId) it.copy(state = SendState.Failed) else it
                 }

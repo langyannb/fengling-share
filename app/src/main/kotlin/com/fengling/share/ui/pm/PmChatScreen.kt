@@ -105,6 +105,8 @@ import com.fengling.share.data.ApiClient
 import com.fengling.share.data.MessageStream
 import com.fengling.share.data.PmMessage
 import com.fengling.share.data.StreamEvent
+import com.fengling.share.data.Outbox
+import com.fengling.share.data.PendingSend
 import com.fengling.share.data.WsSignal
 import com.fengling.share.data.WsSocket
 import com.fengling.share.data.PmPeer
@@ -727,6 +729,14 @@ fun PmChatScreen(
                     .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
                 finishLocalSend(localId)
             } else {
+                Outbox.add(
+                    PendingSend(
+                        clientMsgId = localId,
+                        toUser = if (convId <= 0) peerUserId else 0,
+                        convId = convId,
+                        content = item.text,
+                    )
+                )
                 outgoing = outgoing.map {
                     if (it.localId == localId) it.copy(state = SendState.Failed) else it
                 }
