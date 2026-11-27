@@ -1515,7 +1515,7 @@ private fun ChatView(
         if (otherMaxId <= readReported) return@LaunchedEffect
         readReported = otherMaxId
         if (WsSocket.supportsRead) {
-            WsSocket.sendRead(groupId = group.id, lastReadId = otherMaxId)
+            WsSocket.sendRead(groupId = group.id, lastReadId = otherMaxId.toLong())
             onMarkRead()
         } else {
             ApiClient.socialRead(group.id, otherMaxId).onSuccess { onMarkRead() }

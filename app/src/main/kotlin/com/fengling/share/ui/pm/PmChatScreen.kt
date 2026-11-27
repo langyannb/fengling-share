@@ -519,7 +519,7 @@ fun PmChatScreen(
         if (last <= 0 || last == lastReadReported) return@LaunchedEffect
         lastReadReported = last
         if (WsSocket.supportsRead) {
-            WsSocket.sendRead(convId = convId, lastReadId = last)
+            WsSocket.sendRead(convId = convId, lastReadId = last.toLong())
         } else {
             ApiClient.pmRead(convId, last)
         }
