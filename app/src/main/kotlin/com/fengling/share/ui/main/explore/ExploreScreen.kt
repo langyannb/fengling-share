@@ -162,7 +162,7 @@ fun ExploreScreen(
     // 分类切换 -> 加载对应软件 (命中缓存不重复请求)
     LaunchedEffect(currentKey, categories) {
         if (categories.isEmpty()) return@LaunchedEffect
-        val cached = ExploreCache.appsByKey[currentKey]
+        val cached = ExploreCache.appsByKey[currentKey]?.takeIf { it.isNotEmpty() }
         if (cached != null) {
             apps = cached
             appsLoading = false
@@ -339,7 +339,7 @@ fun ExploreScreen(
                         label = "exploreGrid",
                     ) { key ->
                         // 转场期间上一层要显示它自己的数据 (而不是新的), 否则会「先看到新列表再淡出」
-                        val shown = ExploreCache.appsByKey[key]
+                        val shown = ExploreCache.appsByKey[key]?.takeIf { it.isNotEmpty() }
                             ?: if (key == currentKey) apps else emptyList()
                         when {
                             appsLoading && shown.isEmpty() -> {
@@ -375,7 +375,7 @@ fun ExploreScreen(
                                     itemsIndexed(shown, key = { _, app -> app.id }) { index, app ->
                                         AppGridCard(
                                             app = app,
-                                            modifier = Modifier.animateItem().enterUp(index),
+                                            modifier = Modifier.enterUp(index),
                                             onClick = { onAppClick(app.id) },
                                         )
                                     }

@@ -194,6 +194,12 @@ fun PmChatScreen(
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
+    // 首屏消息整批组合时先不开进场动画，避免进会话瞬间 30 条同时跑 fade 造成掉帧
+    var allowItemAnim by remember(initialConvId) { mutableStateOf(false) }
+    LaunchedEffect(initialConvId) {
+        kotlinx.coroutines.delay(48)
+        allowItemAnim = true
+    }
     // v1.1.20: 只录「消息区」这一层 —— 输入栏 / 面板 / 长按菜单都采样它做真模糊。
     // 绝不能传包含这些控件自身的捕获层: hwui 的 RenderNode 树会自引用无限递归 (真机 SIGSEGV 过)。
     val pmBackdrop = rememberLayerBackdrop()
@@ -1157,7 +1163,7 @@ fun PmChatScreen(
                             val compact = prev != null && !prev.isRecalled && !msg.isRecalled &&
                                 prev.userId == msg.userId
                             PmMessageRow(
-                                modifier = pmMessageItemEnter(),
+                                modifier = pmMessageItemEnter(allowItemAnim),
                                 compact = compact,
                                 // 撤回破碎: 正在碎的这条把气泡切块飞散, 碎完才改数据
                                 shattering = msg.id == shatteringId,
@@ -1896,11 +1902,16 @@ private fun PmMessageRow(
  * 只保留淡入: placementSpec = null —— 否则「加载更早的消息」往列表顶部插数据时,
  * 整列消息会被动画推着走, 和顶部锚定逻辑打架 (与群聊 messageItemEnter 同一决定)。
  */
-private fun LazyItemScope.pmMessageItemEnter(): Modifier = Modifier.animateItem(
-    fadeInSpec = tween(durationMillis = 200),
-    placementSpec = null,
-    fadeOutSpec = null,
-)
+private fun LazyItemScope.pmMessageItemEnter(animate: Boolean = true): Modifier =
+    if (!animate) {
+        Modifier
+    } else {
+        Modifier.animateItem(
+            fadeInSpec = tween(durationMillis = 200),
+            placementSpec = null,
+            fadeOutSpec = null,
+        )
+    }
 
 /** 消息里的时间只显示 HH:mm */
 private fun pmMessageTime(raw: String): String {

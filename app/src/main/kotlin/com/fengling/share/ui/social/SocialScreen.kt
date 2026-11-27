@@ -1120,6 +1120,12 @@ private fun ChatView(
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
+    // 首屏消息整批组合时先不开进场动画，避免进群瞬间 30 条同时跑 fade 造成掉帧
+    var allowItemAnim by remember(group.id) { mutableStateOf(false) }
+    LaunchedEffect(group.id) {
+        kotlinx.coroutines.delay(48)
+        allowItemAnim = true
+    }
     var sending by remember { mutableStateOf(false) }
     // v1.1.12 乐观发送: 本地临时消息 (发送中转圈 / 失败可点重发), 服务端返回后用真实消息替换
     var outgoing by remember { mutableStateOf<List<OutgoingMsg>>(emptyList()) }
@@ -2415,7 +2421,7 @@ private fun ChatView(
                                 msg = msg,
                                 groupId = group.id,
                                 onOpenUser = onOpenUser,
-                                modifier = messageItemEnter(),
+                                modifier = messageItemEnter(allowItemAnim),
                             )
                         } else {
                         val mine = me != null && msg.userId == me.id
@@ -2511,7 +2517,7 @@ private fun ChatView(
                                 },
                                 onImageTap = { url -> previewImage = url },
                                 onVideoTap = { url -> fullscreenVideo = url },
-                                modifier = messageItemEnter(),
+                                modifier = messageItemEnter(allowItemAnim),
                             )
                             }
                             Row(
@@ -3450,11 +3456,16 @@ private fun ChatView(
  * 只保留淡入: 不启用 placement 动画 —— 否则「加载更早的消息」往列表顶部插数据时,
  * 整列消息会被动画推着走, 和顶部锚定逻辑打架。
  */
-private fun LazyItemScope.messageItemEnter(): Modifier = Modifier.animateItem(
-    fadeInSpec = tween(durationMillis = 200),
-    placementSpec = null,
-    fadeOutSpec = null,
-)
+private fun LazyItemScope.messageItemEnter(animate: Boolean = true): Modifier =
+    if (!animate) {
+        Modifier
+    } else {
+        Modifier.animateItem(
+            fadeInSpec = tween(durationMillis = 200),
+            placementSpec = null,
+            fadeOutSpec = null,
+        )
+    }
 
 /** 单条消息: 自己靠右 (主色气泡), 别人靠左 (灰色气泡 + 头像 + 昵称 + 时间) */
 @Composable
