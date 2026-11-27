@@ -212,6 +212,7 @@ fun PmScreen(
                 PmConversationCard(
                     conversation = conv,
                     index = index,
+                    modifier = Modifier.animateItem(),
                     onClick = { onOpenChat(conv.userId, conv.convId) },
                     onAvatarClick = {
                         if (onOpenUser != null && conv.userId > 0) {
@@ -234,6 +235,7 @@ private fun PmConversationCard(
     index: Int = 0,
     onClick: () -> Unit,
     onAvatarClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     // 契约 C: 私聊列表卡片玻璃化 + 按下缩到 0.97 松手弹回 (和群列表观感统一)
     val interaction = remember { MutableInteractionSource() }
@@ -244,8 +246,7 @@ private fun PmConversationCard(
         label = "pmCardPress",
     )
     Box(
-        modifier = Modifier
-            .animateItem()
+        modifier = modifier
             .fillMaxWidth()
             .enterUp(index)
             .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)
