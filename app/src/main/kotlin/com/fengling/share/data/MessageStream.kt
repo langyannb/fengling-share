@@ -62,15 +62,14 @@ sealed interface StreamEvent {
     /**
      * 断线重连成功 (客户端内部事件)
      *
-     * 服务端单条连接最长 25 秒就会 `event: bye` 收尾, 客户端立刻重连。
-     * 这个「断开 -> 重连」的窗口里到达的消息不会被推, 所以重连成功后广播一次,
-     * 让各页面补一次全量刷新, 把断线期间漏掉的消息补回来。
+     * WebSocket 连接断开（网络切换、服务端重启/升级）后会重连；这个窗口里
+     * 到达的消息不会推给客户端，所以重连成功后广播一次，让各页面补一次全量刷新。
      */
     object Reconnected : StreamEvent
 }
 
 /**
- * 实时消息事件总线 (SSE 长连接)
+ * 实时消息事件总线 (WebSocket 长连接)
  *
  * 设计要点 (v1.0.35 起):
  * - **连接的持有者搬到了 [com.fengling.share.service.MessageService]**(常驻前台服务),
@@ -82,12 +81,12 @@ sealed interface StreamEvent {
  */
 object MessageStream {
 
-    /** 断线重连间隔 (毫秒): 与服务端 `retry: 2000` 一致 (MessageService 主循环用) */
+    /** 旧 SSE 路径的重连间隔；WebSocket 路径已改用指数退避，保留常量给回滚 */
     const val RECONNECT_DELAY_MS = 2000L
 
     /**
      * 一次连接至少活过这么久才算「真的连上了」。
-     * 服务端认得 token 时连接会一直挂着 (最长 25 秒), 用它把「刚建连就失败」区分出来。
+     * WebSocket 正常情况下会一直挂着；用它把「刚建连就失败」和「曾经连上过」区分出来。
      */
     const val CONNECTED_MIN_MS = 3000L
 

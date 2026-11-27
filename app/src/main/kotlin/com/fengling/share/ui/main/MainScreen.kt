@@ -177,7 +177,7 @@ private fun AppNavDisplay(
     }
     // NavDisplay 内部 remember(content) 缓存了入口注册块, 所以开关变化时必须整体重建,
     // 否则 swipeDismiss / transition 改了也不生效。
-    key(predictiveBack) {
+    key(predictiveBack, animPageSwitch) {
         NavDisplay(
             backStack = navigator.backStack,
             modifier = modifier,

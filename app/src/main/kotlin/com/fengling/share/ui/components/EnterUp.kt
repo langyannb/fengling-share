@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import com.fengling.share.ui.theme.LocalAnimListEnter
+import com.fengling.share.ui.motion.MotionTokens
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -27,9 +28,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun Modifier.enterUp(
     index: Int,
-    stepMs: Int = 26,
+    stepMs: Int = MotionTokens.ListStepMs,
     maxOrdered: Int = 12,
-    durationMs: Int = 300,
+    durationMs: Int = MotionTokens.ListEnterMs,
     offsetDp: Int = 20,
 ): Modifier {
     // 设置里关掉「列表进场动画」时直接给出终态, 连 Animatable 都不建

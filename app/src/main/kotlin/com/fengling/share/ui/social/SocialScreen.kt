@@ -831,6 +831,7 @@ private fun GroupList(
                 GroupCard(
                     group = g,
                     index = index,
+                    modifier = Modifier.animateItem(),
                     onClick = { onOpen(g) },
                     onOpenAt = { mid -> onOpenAt(g, mid) },
                 )
@@ -853,6 +854,7 @@ private fun GroupCard(
     index: Int = 0,
     onClick: () -> Unit,
     onOpenAt: (Int) -> Unit = {},
+    modifier: Modifier = Modifier,
 ) {
     val last = group.lastMessage
     // 副标题: 别人发的显示「昵称: 内容」; 纯图片显示 [图片]; 撤回/空显示「暂无消息」
@@ -872,7 +874,7 @@ private fun GroupCard(
         label = "groupCardPress",
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .enterUp(index)
             .padding(horizontal = GlassSpacing.page, vertical = GlassSpacing.cardGap)

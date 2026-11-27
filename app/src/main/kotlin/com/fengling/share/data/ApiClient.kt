@@ -285,9 +285,9 @@ object ApiClient {
 
                             "error" -> {
                                 val data = obj.optJSONObject("data")
-                                val msg = data?.optString("msg")
+                                val msg = data?.optString("msg")?.takeIf { it.isNotBlank() }
                                     ?: obj.optString("msg", "实时消息连接失败")
-                                val code = data?.optInt("code", -1)
+                                val code = data?.optInt("code", 0)?.takeIf { it != 0 }
                                     ?: obj.optInt("code", -1)
                                 if (cont.isActive) {
                                     cont.resume(Result.failure(ApiException(msg, code)))

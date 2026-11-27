@@ -309,7 +309,7 @@ class MessageService : Service() {
                 attempt = 0
             } else {
                 val err = result.exceptionOrNull()
-                attempt = if (err is ApiException && err.code == 401) {
+                attempt = if (err is ApiException && (err.code == 401 || err.httpStatus == 401)) {
                     // token 失效：直接退到最长间隔，避免 1 秒一次打服务端
                     6
                 } else {
