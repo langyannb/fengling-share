@@ -139,6 +139,7 @@ import com.fengling.share.data.SocialGroup
 import com.fengling.share.data.StreamEvent
 import com.fengling.share.data.Outbox
 import com.fengling.share.data.PendingSend
+import com.fengling.share.data.WsSignal
 import com.fengling.share.data.WsSocket
 import com.fengling.share.data.SocialGroupMember
 import com.fengling.share.data.SocialMessage
@@ -1129,6 +1130,8 @@ private fun ChatView(
         kotlinx.coroutines.delay(48)
         allowItemAnim = true
     }
+    var typingUntil by remember(group.id) { mutableStateOf(0L) }
+    var lastTypingSent by remember(group.id) { mutableStateOf(0L) }
     var sending by remember { mutableStateOf(false) }
     // v1.1.12 乐观发送: 本地临时消息 (发送中转圈 / 失败可点重发), 服务端返回后用真实消息替换
     var outgoing by remember { mutableStateOf<List<OutgoingMsg>>(emptyList()) }
@@ -1716,6 +1719,36 @@ private fun ChatView(
         // mergeNew 可能因为轮询已经先拿到而「没有新增」(这时它不会置 autoScrollPending),
         // 这里兜底再明确滚一次真底部
         autoScrollPending = true
+    }
+
+    // outbox 补发/服务端 ack 成功后摘掉本地失败气泡；同时接收群输入中信号。
+    LaunchedEffect(Unit) {
+        WsSocket.signals.collect { signal ->
+            when (signal) {
+                is WsSignal.Typing -> {
+                    if (signal.groupId == group.id) {
+                        typingUntil = android.os.SystemClock.elapsedRealtime() + 3000L
+                    }
+                }
+
+                is WsSignal.Ack -> {
+                    if (outgoing.any { it.localId == signal.clientMsgId }) {
+                        val after = messages.maxOfOrNull { it.id } ?: 0
+                        ApiClient.socialMessages(group.id, afterId = after)
+                            .onSuccess { new -> mergeNew(new, forceScroll = true) }
+                        finishLocalSend(signal.clientMsgId)
+                    }
+                }
+
+                is WsSignal.Read -> Unit
+            }
+        }
+    }
+    LaunchedEffect(typingUntil) {
+        if (typingUntil > 0L) {
+            kotlinx.coroutines.delay(3000)
+            typingUntil = 0L
+        }
     }
 
     suspend fun performSendVideo(localId: String) {
@@ -2705,6 +2738,14 @@ private fun ChatView(
         }
         // 已加入: 正常输入区
         if (group.isMember) {
+        if (typingUntil > android.os.SystemClock.elapsedRealtime()) {
+            Text(
+                text = "有人正在输入…",
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                modifier = Modifier.padding(start = 20.dp, bottom = 2.dp),
+            )
+        }
         Row(
             modifier = Modifier
                 // 契约 C: 输入栏玻璃化 —— 固定层, 允许 backdrop 模糊, 拿不到就退化为半透明底
@@ -2760,6 +2801,13 @@ private fun ChatView(
                                 c <= nv.text.length && nv.text[c - 1] == '@'
                             input = nv
                             if (typedAt) openMentionPicker()
+                            if (nv.text.isNotEmpty() && WsSocket.supportsTyping) {
+                                val now = android.os.SystemClock.elapsedRealtime()
+                                if (now - lastTypingSent > 2000L) {
+                                    lastTypingSent = now
+                                    WsSocket.sendTyping(groupId = group.id)
+                                }
+                            }
                         }
                     },
                     placeholder = {

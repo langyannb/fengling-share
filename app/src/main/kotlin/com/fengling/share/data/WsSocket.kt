@@ -21,6 +21,14 @@ data class WsAck(
 )
 
 sealed interface WsSignal {
+    data class Ack(
+        val clientMsgId: String,
+        val id: Long,
+        val convId: Int,
+        val groupId: Int,
+        val createdAt: String,
+    ) : WsSignal
+
     data class Read(
         val convId: Int,
         val groupId: Int,
@@ -115,15 +123,15 @@ object WsSocket {
     fun onAck(data: JSONObject) {
         val id = data.optString("client_msg_id")
         if (id.isEmpty()) return
-        pending.remove(id)?.complete(
-            WsAck(
-                clientMsgId = id,
-                id = data.optLong("id", 0L),
-                convId = data.optInt("conv_id", 0),
-                groupId = data.optInt("group_id", 0),
-                createdAt = data.optString("created_at", ""),
-            )
+        val ack = WsAck(
+            clientMsgId = id,
+            id = data.optLong("id", 0L),
+            convId = data.optInt("conv_id", 0),
+            groupId = data.optInt("group_id", 0),
+            createdAt = data.optString("created_at", ""),
         )
+        _signals.tryEmit(WsSignal.Ack(id, ack.id, ack.convId, ack.groupId, ack.createdAt))
+        pending.remove(id)?.complete(ack)
     }
 
     /**

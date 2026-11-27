@@ -551,6 +551,19 @@ fun PmChatScreen(
         autoScrollPending = true
     }
 
+    // outbox 补发成功后也要把当前页面的失败气泡摘掉。
+    LaunchedEffect(Unit) {
+        WsSocket.signals.collect { signal ->
+            if (signal is WsSignal.Ack && outgoing.any { it.localId == signal.clientMsgId }) {
+                if (signal.convId > 0) convId = signal.convId
+                val after = messages.maxOfOrNull { it.id } ?: 0
+                ApiClient.pmMessages(convId = convId, afterId = after)
+                    .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
+                finishLocalSend(signal.clientMsgId)
+            }
+        }
+    }
+
     suspend fun performSendVideo(localId: String) {
         val item = outgoing.firstOrNull { it.localId == localId } ?: return
         val originalUri = item.videoUri ?: return
