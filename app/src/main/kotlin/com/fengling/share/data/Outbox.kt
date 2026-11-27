@@ -20,6 +20,15 @@ data class PendingSend(
     val at: List<Int> = emptyList(),
     val atAll: Boolean = false,
     val quoteId: Int = 0,
+    val image: String = "",
+    val imageW: Int = 0,
+    val imageH: Int = 0,
+    val video: String = "",
+    val videoW: Int = 0,
+    val videoH: Int = 0,
+    val videoDuration: Int = 0,
+    val videoSize: Long = 0L,
+    val msgType: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("client_msg_id", clientMsgId)
@@ -30,6 +39,15 @@ data class PendingSend(
         .put("at", JSONArray().apply { at.forEach { put(it) } })
         .put("at_all", if (atAll) 1 else 0)
         .put("quote_id", quoteId)
+        .put("image", image)
+        .put("image_w", imageW)
+        .put("image_h", imageH)
+        .put("video", video)
+        .put("video_w", videoW)
+        .put("video_h", videoH)
+        .put("video_duration", videoDuration)
+        .put("video_size", videoSize)
+        .put("msg_type", msgType)
 
     companion object {
         fun fromJson(j: JSONObject): PendingSend = PendingSend(
@@ -44,6 +62,15 @@ data class PendingSend(
             },
             atAll = j.optInt("at_all", 0) == 1,
             quoteId = j.optInt("quote_id", 0),
+            image = j.optString("image", ""),
+            imageW = j.optInt("image_w", 0),
+            imageH = j.optInt("image_h", 0),
+            video = j.optString("video", ""),
+            videoW = j.optInt("video_w", 0),
+            videoH = j.optInt("video_h", 0),
+            videoDuration = j.optInt("video_duration", 0),
+            videoSize = j.optLong("video_size", 0L),
+            msgType = j.optString("msg_type", ""),
         )
     }
 }
@@ -105,6 +132,15 @@ object Outbox {
                 at = send.at,
                 atAll = send.atAll,
                 quoteId = send.quoteId,
+                image = send.image,
+                imageW = send.imageW,
+                imageH = send.imageH,
+                video = send.video,
+                videoW = send.videoW,
+                videoH = send.videoH,
+                videoDuration = send.videoDuration,
+                videoSize = send.videoSize,
+                msgType = send.msgType,
             )
             if (result.isSuccess) {
                 remove(send.clientMsgId)

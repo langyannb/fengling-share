@@ -1904,6 +1904,19 @@ private fun ChatView(
                 finishLocalSend(localId)
             }
             .onFailure {
+                Outbox.add(
+                    PendingSend(
+                        clientMsgId = localId,
+                        groupId = group.id,
+                        content = item.text,
+                        video = url,
+                        videoW = uploadW,
+                        videoH = uploadH,
+                        videoDuration = uploadDuration,
+                        videoSize = uploadSize,
+                        msgType = "video",
+                    )
+                )
                 outgoing = outgoing.map {
                     if (it.localId == localId) {
                         it.copy(state = SendState.Failed, cancelRequested = false)
@@ -2135,7 +2148,19 @@ private fun ChatView(
                                     ApiClient.socialMessages(group.id, afterId = after)
                                         .onSuccess { new -> mergeNew(new) }
                                 }
-                                .onFailure { e -> onToast(e.message ?: "图片发送失败") }
+                                .onFailure { e ->
+                                    Outbox.add(
+                                        PendingSend(
+                                            clientMsgId = java.util.UUID.randomUUID().toString(),
+                                            groupId = group.id,
+                                            content = "",
+                                            image = img.url,
+                                            imageW = img.width,
+                                            imageH = img.height,
+                                        )
+                                    )
+                                    onToast(e.message ?: "图片发送失败")
+                                }
                         }
                         .onFailure { e -> onToast(e.message ?: "图片上传失败") }
                     uploading = false

@@ -715,6 +715,20 @@ fun PmChatScreen(
                 finishLocalSend(localId)
             }
             .onFailure {
+                Outbox.add(
+                    PendingSend(
+                        clientMsgId = localId,
+                        toUser = if (convId <= 0) peerUserId else 0,
+                        convId = convId,
+                        content = item.text,
+                        video = url,
+                        videoW = uploadW,
+                        videoH = uploadH,
+                        videoDuration = uploadDuration,
+                        videoSize = uploadSize,
+                        msgType = "video",
+                    )
+                )
                 outgoing = outgoing.map {
                     if (it.localId == localId) {
                         it.copy(state = SendState.Failed, cancelRequested = false)
@@ -875,7 +889,20 @@ fun PmChatScreen(
                                     ApiClient.pmMessages(convId = convId, afterId = after)
                                         .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
                                 }
-                                .onFailure { e -> onToast(e.userFriendlyMessage()) }
+                                .onFailure { e ->
+                                    Outbox.add(
+                                        PendingSend(
+                                            clientMsgId = java.util.UUID.randomUUID().toString(),
+                                            toUser = if (convId <= 0) peerUserId else 0,
+                                            convId = convId,
+                                            content = "",
+                                            image = img.url,
+                                            imageW = img.width,
+                                            imageH = img.height,
+                                        )
+                                    )
+                                    onToast(e.userFriendlyMessage())
+                                }
                         }
                         .onFailure { e -> onToast(e.userFriendlyMessage()) }
                     uploading = false
@@ -912,7 +939,20 @@ fun PmChatScreen(
                                     ApiClient.pmMessages(convId = convId, afterId = after)
                                         .onSuccess { page -> mergeNew(page.list, forceScroll = true) }
                                 }
-                                .onFailure { e -> onToast(e.userFriendlyMessage()) }
+                                .onFailure { e ->
+                                    Outbox.add(
+                                        PendingSend(
+                                            clientMsgId = java.util.UUID.randomUUID().toString(),
+                                            toUser = if (convId <= 0) peerUserId else 0,
+                                            convId = convId,
+                                            content = "",
+                                            image = img.url,
+                                            imageW = img.width,
+                                            imageH = img.height,
+                                        )
+                                    )
+                                    onToast(e.userFriendlyMessage())
+                                }
                         }
                         .onFailure { e -> onToast(e.userFriendlyMessage()) }
                     uploading = false
